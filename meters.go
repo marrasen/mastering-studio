@@ -243,8 +243,9 @@ func (m *meters) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids guni
 // takeInput reads what was fed into the chain for the moment heard
 // since the last frame, as the input's levels.
 func (m *meters) takeInput(dt time.Duration) {
-	at, _, id := m.r.d.position()
-	if id == 0 || !m.r.state.Playing {
+	// The frames given, as the chain is fed them: through a loop's jumps.
+	at, ok := m.r.d.heardFrames()
+	if !ok || !m.r.state.Playing {
 		m.in.quiet(dt)
 		return
 	}

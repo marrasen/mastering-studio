@@ -178,10 +178,15 @@ func (e *editor) handleMarks(ev input.Event, u *gunim.UI) bool {
 			e.hotMark = hot
 			u.Invalidate()
 		}
-		return hot >= 0 || e.noteButton().Contains(ev.Pos)
+		return hot >= 0 || e.noteButton().Contains(ev.Pos) || e.loopButton().Contains(ev.Pos)
 	case input.PointerDown:
 		if ev.Button != input.ButtonPrimary {
 			return false
+		}
+		if e.loopButton().Contains(ev.Pos) {
+			u.Cue(gunim.CueTick, e)
+			e.toggleLoop(u)
+			return true
 		}
 		if e.noteButton().Contains(ev.Pos) {
 			u.Cue(gunim.CueTick, e)

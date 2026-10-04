@@ -798,3 +798,39 @@ func TestBypassPlaysTheSoundAsFedInTimeWithTheChain(t *testing.T) {
 		t.Fatalf("bypassed, the click comes out at %d at %.3f, want at 20000 at 0.125", found, level)
 	}
 }
+
+func TestALoopPlaysOverAndOverAndSaysWhereItIs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mix := audio.NewMixer()
+	a := newApp(ctx, newDeck(mix), "")
+	for _, p := range writeAlbum(t) {
+		a.add(p, "", Edit{})
+	}
+	// The first track's file, from 1 s to 2 s: in the render, after the
+	// second of silence, from 2 s to 3 s.
+	a.handle(SetLoop{Track: a.Tracks[0].ID, Loop: &Loop{In: time.Second, Out: 2 * time.Second}})
+	a.handle(SetLooping{On: true})
+	a.handle(TogglePlay{})
+	a.applyLoop()
+	buf := make([]float32, 2*audio.SampleRate/100)
+	for k := range 600 {
+		mix.Mix(buf)
+		at, _, _ := a.d.position()
+		if k > 300 && (at < 2*time.Second-20*time.Millisecond || at > 3*time.Second+20*time.Millisecond) {
+			t.Fatalf("%d ms in, looping from 2 s to 3 s, the track is at %v", 10*k, at)
+		}
+	}
+	if a.d.done() == nil {
+		t.Fatal("looping, the track ended")
+	}
+	// Off, it plays on past the out.
+	a.handle(SetLooping{On: false})
+	a.applyLoop()
+	for range 200 {
+		mix.Mix(buf)
+	}
+	if at, _, _ := a.d.position(); at < 3*time.Second {
+		t.Fatalf("with the loop off, the track is still at %v", at)
+	}
+}

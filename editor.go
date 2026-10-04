@@ -30,6 +30,9 @@ const (
 	// gripSilence is the start of the silence before the cut, which a
 	// drag sets the track's own silence by.
 	gripSilence
+	// gripLoopIn and gripLoopOut are the loop's edges, on the ruler.
+	gripLoopIn
+	gripLoopOut
 )
 
 // editor is the track picked, laid out along its file's time: both
@@ -99,7 +102,10 @@ type editor struct {
 	writeAt   time.Duration
 	writeID   int
 	hotMark   int
-	size      geom.Size
+	// dragLoop is the loop as a drag sets it, ahead of the application's
+	// answer, or nil.
+	dragLoop *Loop
+	size     geom.Size
 }
 
 // rawSamples is a stretch of a file's samples, read in the background.
@@ -284,6 +290,9 @@ func (e *editor) gripAt(p geom.Point) grip {
 	}
 	start, end := e.span()
 	top, laneH := e.lanes()
+	if g := e.loopEdge(p); g != gripNone {
+		return g
+	}
 	switch {
 	case p.X > e.size.W-zoomW && p.Y > top && p.Y < top+2*laneH && e.r.state.View == ViewWave:
 		return gripZoom
@@ -362,6 +371,7 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 			u.Send(e, SeekTo{At: e.renderTime(e.tAt(ev.Pos.X))})
 		}
 	case input.PointerUp:
+		e.dragLoop = nil
 		// A ruler let go while it moves flings the view on.
 		if e.held == gripRuler && e.dragged && e.still < 80*time.Millisecond && math.Abs(e.dragV) > 0.05 {
 			e.fling = e.dragV
@@ -448,6 +458,9 @@ func (e *editor) drag(p geom.Point, mods input.Mods, u *gunim.UI) {
 		return
 	case gripZoom:
 		e.zoomTo(p.Y)
+		return
+	case gripLoopIn, gripLoopOut:
+		e.dragLoopEdge(t, u)
 		return
 	case gripSilence:
 		s := max(0, min(start-t, 10))
@@ -680,6 +693,7 @@ func (e *editor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 		e.paintZoom(p, box)
 	}
 	e.paintLegend(p)
+	e.paintLoop(p, f, box)
 	e.paintMarks(p, f, box)
 	if e.writing {
 		for k := range kids.All {
@@ -1055,7 +1069,7 @@ func (e *editor) Cursor(p geom.Point) input.Cursor {
 		g = e.gripAt(p)
 	}
 	switch g {
-	case gripRuler, gripStart, gripEnd, gripSilence:
+	case gripRuler, gripStart, gripEnd, gripSilence, gripLoopIn, gripLoopOut:
 		return input.CursorResizeH
 	case gripZoom:
 		return input.CursorResizeV

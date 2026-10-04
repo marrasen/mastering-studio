@@ -61,6 +61,8 @@ type (
 		Follow Follow
 		View   View
 		Curves uint8
+		// Looping plays the loop of the track picked over and over.
+		Looping bool
 		// Listen is how the sound is listened to: in stereo, mono, or
 		// its side alone; Bypass plays the tracks without their chains
 		// and gains, to compare.
@@ -99,6 +101,9 @@ type (
 		Silence *time.Duration
 		// Marks are notes at times of it, in their order.
 		Marks []Mark
+		// Loop, where set, is the stretch of its file played over and
+		// over while the album loops.
+		Loop *Loop
 		// Seq is the window's count of edits taken, so it can tell its
 		// own edit coming back from an older one.
 		Seq int
@@ -277,6 +282,7 @@ type project struct {
 	Current   int
 	AlbumPlay bool
 	Follow    Follow
+	Looping   bool   `json:",omitempty"`
 	View      View   `json:",omitempty"`
 	Curves    *uint8 `json:",omitempty"`
 }
@@ -286,6 +292,7 @@ type keptTrack struct {
 	Note        string         `json:",omitempty"`
 	Silence     *time.Duration `json:",omitempty"`
 	Marks       []Mark         `json:",omitempty"`
+	Loop        *Loop          `json:",omitempty"`
 	Edit        Edit
 	Chain       []keptSlot `json:",omitempty"`
 	// At is File whole, as it was last saved, where File is from the
@@ -370,8 +377,10 @@ type app struct {
 	releasing bool
 	// stopExport cancels the export running.
 	stopExport context.CancelFunc
-	// markIDs counts the notes at times made.
+	// markIDs counts the notes at times made, and looped what the deck
+	// loops, as told last.
 	markIDs int
+	looped  loopKey
 	// exportOpen says the export's dialog is open, and lame is where
 	// LAME was located, for MP3s.
 	exportOpen bool
@@ -442,7 +451,7 @@ func (a *app) load() {
 	if p.Volume > 0 {
 		a.Volume = p.Volume
 	}
-	a.Match, a.AlbumPlay, a.Follow, a.View = p.Match, p.AlbumPlay, p.Follow, p.View
+	a.Match, a.AlbumPlay, a.Follow, a.View, a.Looping = p.Match, p.AlbumPlay, p.Follow, p.View, p.Looping
 	if p.Curves != nil {
 		a.Curves = *p.Curves
 	}
@@ -453,7 +462,7 @@ func (a *app) load() {
 			a.Current = id
 		}
 		t := a.track(id)
-		t.Note, t.Silence, t.Marks = k.Note, k.Silence, k.Marks
+		t.Note, t.Silence, t.Marks, t.Loop = k.Note, k.Silence, k.Marks, k.Loop
 		for _, m := range k.Marks {
 			a.markIDs = max(a.markIDs, m.ID)
 		}
@@ -484,11 +493,11 @@ func (a *app) save() {
 		ExportDir: relative(a.file, a.ExportDir), ExportAt: a.ExportDir, ExportWAV: &a.ExportWAV, ExportMP3: a.ExportMP3,
 		MP3Rate: a.MP3Rate, Report: a.ExportReport,
 		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
-		Follow: a.Follow, View: a.View, Curves: &a.Curves}
+		Follow: a.Follow, View: a.View, Curves: &a.Curves, Looping: a.Looping}
 	for _, t := range a.Tracks {
 		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Silence: t.Silence,
-			Marks: t.Marks,
-			Edit:  t.Edit, Stale: t.Stale}
+			Marks: t.Marks, Loop: t.Loop,
+			Edit: t.Edit, Stale: t.Stale}
 		if t.Measured {
 			k.Measure = keep(t.File, t.Measure)
 		}
@@ -771,6 +780,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			a.handle(ev.Intent)
 		}
 		a.queueNext()
+		a.applyLoop()
 		_ = c.Publish(albumTopic, a.Album)
 	}
 }
@@ -1094,7 +1104,7 @@ func (a *app) handle(in gunim.Intent) {
 			a.dirty = true
 		}
 	default:
-		if a.handleMarks(in) {
+		if a.handleMarks(in) || a.handleLoop(in) {
 			return
 		}
 		a.handleChain(in)

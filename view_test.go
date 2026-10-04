@@ -936,3 +936,52 @@ func TestANoteIsWrittenAtATimeAndTakenAwayFromItsCard(t *testing.T) {
 		t.Fatalf("the card's button sent %v", rest)
 	}
 }
+
+func TestTheLoopChipMakesALoopAndTheEdgesDragIt(t *testing.T) {
+	w, r, run := stage(t, album())
+	ed := r.editor
+	ed.v0.Jump(2)
+	ed.v1.Jump(6)
+	b := boundsOf(t, w, run, ed)
+	at := b.Min.Add(ed.loopButton().Center())
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(1)
+	_, rest := edits(w)
+	want := []gunim.Intent{SetLoop{Track: 1, Loop: &Loop{In: 2 * time.Second, Out: 10 * time.Second}}, SetLooping{On: true}}
+	if !reflect.DeepEqual(rest, want) {
+		t.Fatalf("the loop's chip sent %v, want %v", rest, want)
+	}
+	// The application's answer: the loop, looping.
+	a := album()
+	a.Tracks[0].Loop = &Loop{In: 3 * time.Second, Out: 5 * time.Second}
+	a.Looping = true
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
+	run(2)
+	from := b.Min.Add(geom.Pt(ed.xOf(5), rulerH/2))
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	for i := 1; i <= 5; i++ {
+		w.Input(input.PointerMove{Pos: b.Min.Add(geom.Pt(ed.xOf(5+0.1*float64(i)), rulerH/2))})
+		run(1)
+		if l := ed.loopShown(); l == nil || math.Abs(l.Out.Seconds()-(5+0.1*float64(i))) > 0.01 {
+			t.Fatalf("step %d: the loop's out is at %v, want under the pointer", i, l)
+		}
+	}
+	w.Input(input.PointerUp{Pos: from, Button: input.ButtonPrimary})
+	run(1)
+	if v0 := ed.v0.Value(); v0 != 2 {
+		t.Fatalf("dragging the loop's edge scrolled the view to %.2f", v0)
+	}
+	// I sets the in where the view's middle is, as nothing plays.
+	_, _ = edits(w)
+	w.Input(input.KeyPress{Key: input.KeyI})
+	run(1)
+	_, rest = edits(w)
+	if len(rest) != 1 || !reflect.DeepEqual(rest[0], SetLoop{Track: 1, Loop: &Loop{In: 4 * time.Second, Out: 5 * time.Second}}) {
+		t.Fatalf("I sent %v", rest)
+	}
+}
