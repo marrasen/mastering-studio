@@ -734,3 +734,31 @@ func TestNotesAreKeptInTheOrderOfTheirTimes(t *testing.T) {
 		t.Fatalf("after writing one anew and taking one away the notes are %+v", ms)
 	}
 }
+
+func TestAnExportWritesItsReport(t *testing.T) {
+	a := measuredApp(t)
+	a.Release = Release{Artist: "The Oscillators", Title: "Night Drive", Year: "2026", Genre: "Synthwave"}
+	a.Tracks[1].Note = "Needs a new vocal"
+	a.Tracks[1].Marks = []Mark{{ID: 1, At: 1500 * time.Millisecond, Text: "Snare too loud"}}
+	s := 2 * time.Second
+	a.Tracks[1].Silence = &s
+	a.Tracks[1].Chain = nil
+	a.ExportDir = t.TempDir()
+	a.ExportReport = true
+	a.handle(Export{IDs: []int{a.Tracks[1].ID}})
+	settle(t, a, func() bool { return !a.Exporting })
+	reports, _ := filepath.Glob(filepath.Join(a.ExportDir, "Export report *.txt"))
+	if len(reports) != 1 {
+		t.Fatalf("the export wrote %d reports (%s)", len(reports), a.Note)
+	}
+	b, _ := os.ReadFile(reports[0])
+	r := string(b)
+	for _, want := range []string{"Night Drive", "The Oscillators", "2026", "Synthwave", "1 exported of 3",
+		"WAV 16-bit, TPDF dither", "02  b", "Needs a new vocal", "Note at 0:01.5: Snare too loud",
+		"b.wav\n", "modified", "WAV, 44100 Hz, 24-bit", "2.00 s (its own)", "Plugins:       none",
+		"LUFS, ", "dBTP true peak", "Written:       02 b.wav"} {
+		if !strings.Contains(r, want) {
+			t.Fatalf("the report lacks %q:\n%s", want, r)
+		}
+	}
+}

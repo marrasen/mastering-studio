@@ -93,10 +93,18 @@ func (a *app) export(ids []int) {
 		a.dirty = true
 	}
 	var jobs []exportJob
+	head := reportHead{at: time.Now(), release: a.Release, album: a.file, wav: a.ExportWAV || !a.ExportMP3,
+		mp3: a.ExportMP3 && encodeMP3 != nil, bits: a.Bits, dither: a.Dither, kbps: a.MP3Rate, lame: lamePath,
+		target: a.Target, gap: a.Gap, tracks: len(a.Tracks)}
+	var report []reportTrack
 	for i, t := range a.Tracks {
 		if len(ids) > 0 && !slices.Contains(ids, t.ID) {
 			continue
 		}
+		report = append(report, reportTrack{number: i + 1, title: t.Title, note: t.Note, marks: slices.Clone(t.Marks),
+			source: t.File, rel: relative(a.file, t.File), format: t.Format, edit: t.Edit, gap: a.gapOf(&a.Tracks[i]),
+			ownGap: t.Silence != nil, chain: slices.Clone(t.Chain),
+			base: filepath.Join(dir, exportName(i+1, t.Title)), wav: head.wav, mp3: head.mp3})
 		chain, states := a.chainOf(&a.Tracks[i])
 		jobs = append(jobs, exportJob{id: t.ID, path: t.File, edit: t.Edit, gap: a.gapOf(&a.Tracks[i]), chain: chain,
 			states: states,
@@ -109,6 +117,8 @@ func (a *app) export(ids []int) {
 			tr.Progress, tr.Exported = 0.001, ""
 		}
 	}
+	head.exportedOf = len(jobs)
+	writeIt := a.ExportReport
 	a.Exporting = true
 	ctx, cancel := context.WithCancel(a.ctx)
 	a.stopExport = cancel
@@ -127,7 +137,8 @@ func (a *app) export(ids []int) {
 			return
 		}
 		var wg sync.WaitGroup
-		for _, j := range jobs {
+		var mu sync.Mutex
+		for k, j := range jobs {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -139,11 +150,18 @@ func (a *app) export(ids []int) {
 				}
 				defer func() { <-slots }()
 				out, path, err := exportTrack(ctx, j, func(p float32) { send(exported{id: j.id, progress: p}) })
+				mu.Lock()
+				report[k].out, report[k].err = out, err
+				mu.Unlock()
 				send(exported{id: j.id, version: j.version, finished: true, path: path, out: out, err: err})
 			}()
 		}
 		wg.Wait()
-		send(exported{done: true, err: ctx.Err()})
+		done := exported{done: true, err: ctx.Err()}
+		if writeIt && ctx.Err() == nil {
+			done.path, done.reportErr = writeReport(dir, head, report)
+		}
+		send(done)
 	}()
 }
 
@@ -255,6 +273,10 @@ func (a *app) exportProgress(e exported) {
 			a.Note = "The export was cancelled; its files half written are removed."
 		case e.err != nil:
 			a.Note = e.err.Error()
+		case e.reportErr != nil:
+			a.Note = "The report was not written: " + e.reportErr.Error()
+		case e.path != "":
+			a.Note = "Exported, with " + filepath.Base(e.path)
 		}
 		return
 	}

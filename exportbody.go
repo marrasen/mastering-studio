@@ -31,6 +31,7 @@ type exportBody struct {
 	mp3    *widget.Checkbox
 	rate   *widget.Dropdown
 	locate *widget.Button
+	report *widget.Checkbox
 	lameAt string
 	list   *exportList
 	scroll *widget.Scroll
@@ -73,6 +74,8 @@ func newExportBody(d ExportDraft) *exportBody {
 	b.rate.Selected = max(0, slices.Index(d.MP3Rates, d.MP3Rate))
 	b.locate = widget.NewButton("Locate LAME…")
 	b.locate.On = LocateLAME{}
+	b.report = widget.NewCheckbox("Write report")
+	b.report.On = d.Report
 	b.list = newExportList(d.Tracks)
 	b.scroll = widget.NewScroll(b.list)
 	b.box = widget.NewSized(b.scroll, 0, float32(min(max(len(d.Tracks), 3), exRows))*exRowH)
@@ -92,12 +95,12 @@ func (b *exportBody) lame(path string) {
 
 // Focusables implements the dialog's way to Tab through the body.
 func (b *exportBody) Focusables() []gunim.Node {
-	return []gunim.Node{b.change, b.wav, b.bits, b.dither, b.mp3, b.rate, b.locate}
+	return []gunim.Node{b.change, b.wav, b.bits, b.dither, b.mp3, b.rate, b.locate, b.report}
 }
 
 // Children implements [gunim.Composite].
 func (b *exportBody) Children() []gunim.Node {
-	return []gunim.Node{b.change, b.wav, b.bits, b.dither, b.mp3, b.rate, b.locate, b.box}
+	return []gunim.Node{b.change, b.wav, b.bits, b.dither, b.mp3, b.rate, b.locate, b.box, b.report}
 }
 
 // exportPlaces are where the body's parts are.
@@ -152,7 +155,10 @@ func (b *exportBody) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Child
 	ls := kids.At(6).Layout(loose)
 	kids.At(6).Place(geom.Pt(mp3Card.Max.X-pad-ls.W, mp3Card.Max.Y-pad-ls.H))
 	place(7, list.Min, gunim.Tight(list.Size()))
-	b.size = geom.Sz(w, sum+18)
+	// The report's tick, on the sum's line, at the right.
+	rs2 := kids.At(8).Layout(loose)
+	kids.At(8).Place(geom.Pt(w-rs2.W, sum-4))
+	b.size = geom.Sz(w, sum+24)
 	return b.size
 }
 

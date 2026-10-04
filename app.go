@@ -41,6 +41,8 @@ type (
 		// MP3 at MP3Rate kbps.
 		ExportWAV, ExportMP3 bool
 		MP3Rate              int
+		// ExportReport writes a report of each export beside its files.
+		ExportReport bool
 		// Current is the track picked, which plays; Playing says it
 		// does, and Starts counts the starts, so the window can tell a
 		// new play from one going on.
@@ -263,6 +265,8 @@ type project struct {
 	ExportWAV *bool `json:",omitempty"`
 	ExportMP3 bool  `json:",omitempty"`
 	MP3Rate   int   `json:",omitempty"`
+	// Report writes a report of each export.
+	Report    bool `json:",omitempty"`
 	Volume    float32
 	Match     bool
 	Current   int
@@ -386,6 +390,8 @@ type measured struct {
 
 type exported struct {
 	id int
+	// reportErr says why the export's report was not written, as done.
+	reportErr error
 	// finished says the track's export is over, done or not.
 	finished bool
 	version  int
@@ -423,7 +429,7 @@ func (a *app) load() {
 	}
 	a.Gap, a.Target, a.Bits, a.Dither = p.Gap, p.Target, p.Bits, p.Dither
 	a.ExportDir = found(a.file, p.ExportDir, p.ExportAt)
-	a.ExportWAV, a.ExportMP3 = p.ExportWAV == nil || *p.ExportWAV, p.ExportMP3
+	a.ExportWAV, a.ExportMP3, a.ExportReport = p.ExportWAV == nil || *p.ExportWAV, p.ExportMP3, p.Report
 	if p.MP3Rate > 0 {
 		a.MP3Rate = p.MP3Rate
 	}
@@ -471,8 +477,8 @@ func (a *app) save() {
 	a.readStates()
 	p := project{Release: a.Release, Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither,
 		ExportDir: relative(a.file, a.ExportDir), ExportAt: a.ExportDir, ExportWAV: &a.ExportWAV, ExportMP3: a.ExportMP3,
-		MP3Rate: a.MP3Rate,
-		Volume:  a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
+		MP3Rate: a.MP3Rate, Report: a.ExportReport,
+		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
 		Follow: a.Follow, View: a.View, Curves: &a.Curves}
 	for _, t := range a.Tracks {
 		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Silence: t.Silence,
@@ -995,7 +1001,7 @@ func (a *app) handle(in gunim.Intent) {
 		if in.Bits == 16 || in.Bits == 24 || in.Bits == 32 {
 			a.Bits = in.Bits
 		}
-		a.Dither, a.ExportWAV, a.ExportMP3 = in.Dither, in.WAV, in.MP3
+		a.Dither, a.ExportWAV, a.ExportMP3, a.ExportReport = in.Dither, in.WAV, in.MP3, in.Report
 		if in.MP3Rate > 0 {
 			a.MP3Rate = in.MP3Rate
 		}

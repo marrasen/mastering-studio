@@ -28,6 +28,8 @@ type (
 		MP3Rates     []int
 		Measuring    int
 		ExportingNow bool
+		// Report writes a report of the export beside its files.
+		Report bool
 	}
 	// ExportTrack is a track as the dialog lists it, ticked to export.
 	ExportTrack struct {
@@ -58,6 +60,7 @@ type (
 		Dither   bool
 		WAV, MP3 bool
 		MP3Rate  int
+		Report   bool
 	}
 )
 
@@ -98,7 +101,7 @@ func newExportDialog(d ExportDraft) *exportDialog {
 	}
 	dlg.OnAccept = func() gunim.Intent {
 		s := StartExport{IDs: b.list.ticked(), Bits: bitsChoices[b.bits.Selected()].bits, Dither: b.dither.On,
-			WAV: b.wav.On, MP3: b.mp3.On}
+			WAV: b.wav.On, MP3: b.mp3.On, Report: b.report.On}
 		if len(d.MP3Rates) > 0 {
 			s.MP3Rate = d.MP3Rates[max(0, min(b.rate.Selected, len(d.MP3Rates)-1))]
 		}
@@ -123,7 +126,7 @@ var mp3Rates = []int{320, 256, 192}
 // every one.
 func (a *app) exportDraft(ids []int) ExportDraft {
 	d := ExportDraft{Dir: a.exportDir(), Bits: a.Bits, Dither: a.Dither, WAV: a.ExportWAV, MP3: a.ExportMP3,
-		MP3Rate: a.MP3Rate, HaveMP3: encodeMP3 != nil, MP3Rates: mp3Rates, LAME: lamePath}
+		MP3Rate: a.MP3Rate, HaveMP3: encodeMP3 != nil, MP3Rates: mp3Rates, LAME: lamePath, Report: a.ExportReport}
 	for i, t := range a.Tracks {
 		length := t.Measure.Length
 		if length == 0 && t.Format.SampleRate > 0 {
