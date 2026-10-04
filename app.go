@@ -93,6 +93,8 @@ type (
 		// Silence, where set, is the silence before the track in place of
 		// the album's.
 		Silence *time.Duration
+		// Marks are notes at times of it, in their order.
+		Marks []Mark
 		// Seq is the window's count of edits taken, so it can tell its
 		// own edit coming back from an older one.
 		Seq int
@@ -274,6 +276,7 @@ type keptTrack struct {
 	Title, File string
 	Note        string         `json:",omitempty"`
 	Silence     *time.Duration `json:",omitempty"`
+	Marks       []Mark         `json:",omitempty"`
 	Edit        Edit
 	Chain       []keptSlot `json:",omitempty"`
 	// At is File whole, as it was last saved, where File is from the
@@ -358,6 +361,8 @@ type app struct {
 	releasing bool
 	// stopExport cancels the export running.
 	stopExport context.CancelFunc
+	// markIDs counts the notes at times made.
+	markIDs int
 	// exportOpen says the export's dialog is open, and lame is where
 	// LAME was located, for MP3s.
 	exportOpen bool
@@ -437,7 +442,10 @@ func (a *app) load() {
 			a.Current = id
 		}
 		t := a.track(id)
-		t.Note, t.Silence = k.Note, k.Silence
+		t.Note, t.Silence, t.Marks = k.Note, k.Silence, k.Marks
+		for _, m := range k.Marks {
+			a.markIDs = max(a.markIDs, m.ID)
+		}
 		for _, s := range k.Chain {
 			a.slots++
 			t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
@@ -468,7 +476,8 @@ func (a *app) save() {
 		Follow: a.Follow, View: a.View, Curves: &a.Curves}
 	for _, t := range a.Tracks {
 		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Silence: t.Silence,
-			Edit: t.Edit, Stale: t.Stale}
+			Marks: t.Marks,
+			Edit:  t.Edit, Stale: t.Stale}
 		if t.Measured {
 			k.Measure = keep(t.File, t.Measure)
 		}
@@ -1071,6 +1080,9 @@ func (a *app) handle(in gunim.Intent) {
 			a.dirty = true
 		}
 	default:
+		if a.handleMarks(in) {
+			return
+		}
 		a.handleChain(in)
 	}
 }

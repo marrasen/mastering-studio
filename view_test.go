@@ -890,3 +890,49 @@ func TestAFlickOfTheRulerGlidesTheViewOnAndSlows(t *testing.T) {
 		t.Fatalf("let go moving, the view glided %.3f s and is still flinging %v", ed.v0.Value()-let, ed.fling != 0)
 	}
 }
+
+func TestANoteIsWrittenAtATimeAndTakenAwayFromItsCard(t *testing.T) {
+	w, r, run := stage(t, album())
+	ed := r.editor
+	ed.v0.Jump(2)
+	ed.v1.Jump(6)
+	b := boundsOf(t, w, run, ed)
+	at := b.Min.Add(ed.noteButton().Center())
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(2)
+	if !ed.writing {
+		t.Fatal("+ Note opened no field")
+	}
+	w.Input(input.TextInput{Text: "Snare too loud"})
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	run(2)
+	_, rest := edits(w)
+	want := AddMark{Track: 1, At: 4 * time.Second, Text: "Snare too loud"}
+	if len(rest) != 1 || rest[0] != want {
+		t.Fatalf("writing a note sent %v, want %v", rest, want)
+	}
+	// The application's answer: the note, at 4 s.
+	a := album()
+	a.Tracks[0].Marks = []Mark{{ID: 5, At: 4 * time.Second, Text: "Snare too loud"}}
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
+	run(2)
+	pin := b.Min.Add(ed.markAt(a.Tracks[0].Marks[0]).Center())
+	w.Input(input.PointerMove{Pos: pin})
+	run(1)
+	if ed.hotMark != 0 {
+		t.Fatal("the pointer over the note's pin shows no card")
+	}
+	_, remove := ed.cardOf(0)
+	at = b.Min.Add(remove.Center())
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (RemoveMark{Track: 1, ID: 5}) {
+		t.Fatalf("the card's button sent %v", rest)
+	}
+}

@@ -92,7 +92,14 @@ type editor struct {
 	fling, dragV float64
 	wasV0        float32
 	still        time.Duration
-	size         geom.Size
+	// markField writes a note at a time, at writeAt, or over the note
+	// writeID, while writing; hotMark is the note under the pointer.
+	markField *markField
+	writing   bool
+	writeAt   time.Duration
+	writeID   int
+	hotMark   int
+	size      geom.Size
 }
 
 // rawSamples is a stretch of a file's samples, read in the background.
@@ -110,6 +117,8 @@ func newEditor(r *root) *editor {
 	e.Add(e.v0, e.v1, e.inMorph, e.outMorph, e.glow, e.zoom)
 	e.raw.loaded = make(chan rawSamples, 1)
 	e.silence = -1
+	e.markField = newMarkField(e)
+	e.hotMark = -1
 	e.gram = anim.NewFloat(0)
 	e.Add(e.gram)
 	for i := range e.curves {
@@ -301,6 +310,9 @@ func (e *editor) DragsTouch() bool { return e.held != gripNone && e.held != grip
 func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 	if !e.track.Scanned {
 		return false
+	}
+	if e.held == gripNone && e.handleMarks(ev, u) {
+		return true
 	}
 	switch ev := ev.(type) {
 	case input.PointerMove:
@@ -616,13 +628,23 @@ func (e *editor) heard() (float64, bool) {
 }
 
 // Layout implements [gunim.Node].
-func (e *editor) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+func (e *editor) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	e.size = c.Max
+	// The field for a note, over where it goes.
+	w := float32(260)
+	x := max(4, min(e.xOf(e.writeAt.Seconds())-w/2, c.Max.W-w-4))
+	kids.At(0).Layout(gunim.Tight(geom.Sz(w, 32)))
+	kids.At(0).Place(geom.Pt(x, rulerH+4+markSize+6))
 	return c.Max
 }
 
+// Children implements [gunim.Composite]: the field a note is written
+// in, there all along so it takes the keyboard at once, shown while a
+// note is written.
+func (e *editor) Children() []gunim.Node { return []gunim.Node{e.markField} }
+
 // Paint implements [gunim.Node].
-func (e *editor) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Children) {
+func (e *editor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
 	whole := geom.Rect{Max: box.Point()}
 	p.RRect(whole, 16, paint.Solid(panel))
 	end := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: 1, Clip: true, Radius: 16})
@@ -658,6 +680,12 @@ func (e *editor) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.C
 		e.paintZoom(p, box)
 	}
 	e.paintLegend(p)
+	e.paintMarks(p, f, box)
+	if e.writing {
+		for k := range kids.All {
+			k.Paint(p)
+		}
+	}
 	if g := e.glow.Value(); g > 0.01 {
 		p.RRectStroke(whole.Inset(geom.Uniform(1)), 15, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 2, Color: faded(teal, g)})
 	}

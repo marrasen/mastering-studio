@@ -345,7 +345,7 @@ func (e *editor) legendRects() []geom.Rect {
 	for i := len(loudCurves) - 1; i >= 0; i-- {
 		w := shaped(loudCurves[i].name, 10, true).Advance + 26
 		x -= w
-		out[i] = geom.Rc(x, rulerH+8, w, 20)
+		out[i] = geom.Rc(x, rulerH+18, w, 20)
 		x -= 4
 	}
 	return out

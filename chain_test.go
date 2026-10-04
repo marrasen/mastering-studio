@@ -718,3 +718,19 @@ func TestMonoAndSideChangeWhatIsHeardAndNotWhatIsMetered(t *testing.T) {
 		}
 	}
 }
+
+func TestNotesAreKeptInTheOrderOfTheirTimes(t *testing.T) {
+	a := measuredApp(t)
+	id := a.Tracks[0].ID
+	a.handle(AddMark{Track: id, At: 3 * time.Second, Text: "late"})
+	a.handle(AddMark{Track: id, At: time.Second, Text: "early"})
+	ms := a.Tracks[0].Marks
+	if len(ms) != 2 || ms[0].Text != "early" || ms[1].Text != "late" {
+		t.Fatalf("the notes are %+v", ms)
+	}
+	a.handle(SetMark{Track: id, ID: ms[1].ID, Text: "later"})
+	a.handle(RemoveMark{Track: id, ID: ms[0].ID})
+	if ms := a.Tracks[0].Marks; len(ms) != 1 || ms[0].Text != "later" {
+		t.Fatalf("after writing one anew and taking one away the notes are %+v", ms)
+	}
+}
