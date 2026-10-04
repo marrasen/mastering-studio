@@ -45,7 +45,12 @@ type meters struct {
 	freqs, spec []float32
 	smooth      []float32
 	bands       [3]float32
-	size        geom.Size
+	// low and high are where the loudness has ranged since the track
+	// started, read every half second, as ranged says it has.
+	low, high float32
+	ranged    bool
+	rangedAt  time.Duration
+	size      geom.Size
 }
 
 func newMeters(r *root) *meters {
@@ -65,6 +70,7 @@ func (m *meters) show(was, s Album) {
 	if s.Starts != was.Starts || s.Current != was.Current {
 		m.lm = audio.NewLoudnessMeter(audio.SampleRate)
 		m.tp = audio.TruePeakMeter{}
+		m.ranged = false
 	}
 }
 
@@ -114,6 +120,15 @@ func (m *meters) Step(dt time.Duration) bool {
 	}
 	ease(&m.moment, momentary, 20, 4)
 	ease(&m.shortTerm, short, 10, 3)
+	// The range, read now and then: it changes slowly, and is read over
+	// all the track heard.
+	if m.rangedAt += dt; m.rangedAt > 500*time.Millisecond {
+		m.rangedAt = 0
+		if low, high, ok := audio.LoudnessRange(m.lm.ShortTerms()); ok {
+			m.ranged = true
+			m.low, m.high = float32(low), float32(high)
+		}
+	}
 	// The correlation of the channels, over the frames drawn.
 	var lr, ll, rr float64
 	for i := 0; i+1 < len(m.scope); i += 2 {
@@ -205,6 +220,15 @@ func (m *meters) paintLoudness(p *paint.Painter, box geom.Size, y float32) float
 		shapedFace(lufsText(row.v), 11, false, true).Paint(p, geom.Pt(box.W-62, y-2), faded(ink, 0.8))
 		y += 22
 	}
+	// The range, as a band on the same scale, from its low to its high.
+	shaped("LRA", 9, true).Paint(p, geom.Pt(14, y), faded(ink, 0.6))
+	m.paintRange(p, geom.Rc(40, y, box.W-110, 10))
+	words := "—"
+	if m.ranged {
+		words = fmt.Sprintf("%.1f LU", m.high-m.low)
+	}
+	shapedFace(words, 11, false, true).Paint(p, geom.Pt(box.W-62, y-2), faded(ink, 0.8))
+	y += 22
 	tp := float32(dB(m.tp.Peak()))
 	tpColor := faded(ink, 0.8)
 	if tp > -1 {
@@ -217,6 +241,20 @@ func (m *meters) paintLoudness(p *paint.Painter, box geom.Size, y float32) float
 	}
 	shapedFace(tpWords, 11, false, true).Paint(p, geom.Pt(40, y), tpColor)
 	return y + 18
+}
+
+// paintRange draws where the loudness has ranged as a band on the
+// bars' scale, from -36 to 0 LUFS.
+func (m *meters) paintRange(p *paint.Painter, bar geom.Rect) {
+	const lo, hi = -36, 0
+	at := func(l float32) float32 { return bar.Min.X + bar.Size().W*min(max((l-lo)/(hi-lo), 0), 1) }
+	p.RRect(bar, 5, paint.Solid(faded(ink, 0.08)))
+	if !m.ranged {
+		return
+	}
+	x0, x1 := at(m.low), at(m.high)
+	band := geom.Rc(x0, bar.Min.Y, max(x1-x0, 3), bar.Size().H)
+	p.ShadowRRect(band, 5, paint.Solid(faded(sky, 0.85)), paint.Shadow{Blur: 8, Color: faded(sky, 0.4)})
 }
 
 // paintBar draws a loudness from -36 to 0 LUFS as a bar, the target

@@ -10,7 +10,8 @@ import (
 	"github.com/marrasen/gunim/paint"
 )
 
-// transport plays and pauses the track picked, steps to the tracks
+// transport plays the track picked from its start, plays and pauses
+// it, steps to the tracks
 // either side, and says where it is; Match levels plays every track at
 // the target loudness, so the ear compares their sound alone; Album
 // plays on through the album, track into track, and the volume sets how
@@ -18,6 +19,7 @@ import (
 type transport struct {
 	r                *root
 	back, play, next *iconButton
+	restart          *iconButton
 	match            *pill
 	album            *pill
 	volume           *valueChip
@@ -25,6 +27,7 @@ type transport struct {
 
 func newTransport(r *root) *transport {
 	t := &transport{r: r}
+	t.restart = newIconButton(icon.RotateCcw, func(u *gunim.UI) { u.Send(r, PlayFromStart{}) })
 	t.back = newIconButton(icon.SkipBack, func(u *gunim.UI) { r.step(-1, u) })
 	t.play = newIconButton(icon.Play, func(u *gunim.UI) { u.Send(r, TogglePlay{}) })
 	t.play.primary = true
@@ -49,19 +52,21 @@ func (t *transport) show(s Album) {
 
 // Children implements [gunim.Composite].
 func (t *transport) Children() []gunim.Node {
-	return []gunim.Node{t.back, t.play, t.next, t.match, t.volume, t.album}
+	return []gunim.Node{t.back, t.play, t.next, t.match, t.volume, t.album, t.restart}
 }
 
 // Layout implements [gunim.Node]: the buttons left, the level right.
 func (t *transport) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	size := c.Max
 	mid := size.H / 2
+	kids.At(6).Layout(gunim.Tight(geom.Sz(40, 40)))
+	kids.At(6).Place(geom.Pt(8, mid-20))
 	kids.At(0).Layout(gunim.Tight(geom.Sz(40, 40)))
-	kids.At(0).Place(geom.Pt(8, mid-20))
+	kids.At(0).Place(geom.Pt(52, mid-20))
 	kids.At(1).Layout(gunim.Tight(geom.Sz(56, 56)))
-	kids.At(1).Place(geom.Pt(56, mid-28))
+	kids.At(1).Place(geom.Pt(100, mid-28))
 	kids.At(2).Layout(gunim.Tight(geom.Sz(40, 40)))
-	kids.At(2).Place(geom.Pt(120, mid-20))
+	kids.At(2).Place(geom.Pt(164, mid-20))
 	w := pillWidth("Match levels")
 	kids.At(4).Layout(gunim.Tight(geom.Sz(84, 44)))
 	kids.At(4).Place(geom.Pt(size.W-84, mid-22))
@@ -73,6 +78,9 @@ func (t *transport) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	return size
 }
 
+// timeX is where the time is written, after the buttons.
+const timeX = 222
+
 // Paint implements [gunim.Node]: the buttons, and the time and the
 // track playing between them and the level.
 func (t *transport) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
@@ -81,14 +89,14 @@ func (t *transport) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids g
 	tr, ok := t.r.track()
 	if ok && id == tr.ID {
 		run := shapedFace(clock(at), 22, true, true)
-		run.Paint(p, geom.Pt(178, box.H/2-20), ink)
-		shapedFace("/ "+clock(length), 12, false, true).Paint(p, geom.Pt(178+run.Advance+8, box.H/2-10), faded(ink, 0.45))
+		run.Paint(p, geom.Pt(timeX, box.H/2-20), ink)
+		shapedFace("/ "+clock(length), 12, false, true).Paint(p, geom.Pt(timeX+run.Advance+8, box.H/2-10), faded(ink, 0.45))
 	} else if ok {
-		shapedFace(clock(0), 22, true, true).Paint(p, geom.Pt(178, box.H/2-20), faded(ink, 0.6))
+		shapedFace(clock(0), 22, true, true).Paint(p, geom.Pt(timeX, box.H/2-20), faded(ink, 0.6))
 	}
 	if ok {
-		room := box.W - 178 - pillWidth("Match levels") - pillWidth("Album") - 128
-		paintFit(p, tr.Title, 12, false, geom.Pt(178, box.H/2+10), room, faded(ink, 0.55))
+		room := box.W - timeX - pillWidth("Match levels") - pillWidth("Album") - 128
+		paintFit(p, tr.Title, 12, false, geom.Pt(timeX, box.H/2+10), room, faded(ink, 0.55))
 	}
 	if t.r.state.Match && ok && tr.Measured && tr.Measure.Loud {
 		d := t.r.state.Target - tr.Measure.LUFS

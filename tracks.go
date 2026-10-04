@@ -396,8 +396,14 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		}
 		subRun := shapedFace(sub, 10, false, true)
 		subRun.Paint(p, geom.Pt(right-subRun.Advance, row.Min.Y+32), tpColor)
+		lraX := right
 		if t.Exported != "" {
 			widget.PaintIcon(p, f.Theme, icon.Check, geom.Rc(right-14, row.Min.Y+46, 14, 14), faded(teal, in))
+			lraX -= 20
+		}
+		if t.Measure.Ranged {
+			lra := shapedFace(fmt.Sprintf("LRA %.1f", t.Measure.LRA), 10, false, true)
+			lra.Paint(p, geom.Pt(lraX-lra.Advance, row.Min.Y+47), faded(sky, 0.75*in))
 		}
 	case t.Measured:
 		run := shaped("silent", 12, false)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio"
 )
 
 // The application's half of the tracks' chains: their plugins, loaded
@@ -390,4 +391,26 @@ func (a *app) turned(id int) {
 	a.queued = queuedKey{}
 	a.dirty = true
 	a.applyLevel()
+}
+
+// measureAlbum measures the album's loudness and its range, every
+// track's measures together, once every track is measured.
+func (a *app) measureAlbum() {
+	a.Loudness = Measure{}
+	var blocks, shorts []float64
+	for _, t := range a.Tracks {
+		if !t.Measured {
+			return
+		}
+		blocks = append(blocks, t.Measure.blocks...)
+		shorts = append(shorts, t.Measure.shorts...)
+		a.Loudness.Length += t.Measure.Length
+		a.Loudness.TruePeak = max(a.Loudness.TruePeak, t.Measure.TruePeak)
+	}
+	if l, ok := audio.Integrated(blocks); ok {
+		a.Loudness.LUFS, a.Loudness.Loud = float32(l), true
+	}
+	if low, high, ok := audio.LoudnessRange(shorts); ok {
+		a.Loudness.Low, a.Loudness.High, a.Loudness.LRA, a.Loudness.Ranged = float32(low), float32(high), float32(high-low), true
+	}
 }

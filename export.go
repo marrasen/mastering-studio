@@ -137,12 +137,7 @@ func exportTrack(j exportJob, progress func(float32)) (Measure, error) {
 	if err := f.Close(); err != nil {
 		return Measure{}, err
 	}
-	l, ok := lm.Integrated()
-	m := Measure{Loud: ok, TruePeak: float32(tp.Peak()), Peak: lm.Peak(), Length: duration(r.Len(), format.SampleRate)}
-	if ok {
-		m.LUFS = float32(l)
-	}
-	return m, nil
+	return reading(lm, &tp, duration(r.Len(), format.SampleRate)), nil
 }
 
 // exportProgress takes the export's progress.

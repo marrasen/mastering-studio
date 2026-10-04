@@ -506,3 +506,52 @@ func TestADoubleClickOnTheTitleRenamesTheTrack(t *testing.T) {
 		}
 	}
 }
+
+func TestDraggingTheRulerScrollsTheViewWithThePointer(t *testing.T) {
+	w, r, run := stage(t, album())
+	ed := r.editor
+	ed.v0.Jump(2)
+	ed.v1.Jump(4)
+	b := boundsOf(t, w, run, ed)
+	from := b.Min.Add(geom.Pt(ed.size.W/2, rulerH/2))
+	grabbed := ed.tAt(ed.size.W / 2)
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	run(1)
+	for i := 1; i <= 20; i++ {
+		at := from.Add(geom.Pt(float32(-10*i), 0))
+		w.Input(input.PointerMove{Pos: at})
+		run(1)
+		if got := ed.tAt(at.X - b.Min.X); math.Abs(got-grabbed) > 0.005 {
+			t.Fatalf("move %d: under the pointer is %.3f s, want %.3f, the time grabbed", i, got, grabbed)
+		}
+	}
+	w.Input(input.PointerUp{Pos: from.Add(geom.Pt(-200, 0)), Button: input.ButtonPrimary})
+	run(1)
+	if _, rest := edits(w); len(rest) != 0 {
+		t.Fatalf("a drag of the ruler sent %v", rest)
+	}
+	// A click on it seeks there.
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: from, Button: input.ButtonPrimary})
+	run(1)
+	_, rest := edits(w)
+	if len(rest) != 1 {
+		t.Fatalf("a click on the ruler sent %v, want a seek", rest)
+	}
+	if s, ok := rest[0].(SeekTo); !ok || math.Abs(s.At.Seconds()-(ed.tAt(ed.size.W/2)+1)) > 0.01 {
+		t.Fatalf("a click on the ruler sent %v, want a seek to %.2f s as rendered", rest[0], ed.tAt(ed.size.W/2)+1)
+	}
+}
+
+func TestTheRestartButtonPlaysFromTheStart(t *testing.T) {
+	w, r, run := stage(t, album())
+	b := boundsOf(t, w, run, r.trans.restart)
+	w.Input(input.PointerMove{Pos: b.Center()})
+	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (PlayFromStart{}) {
+		t.Fatalf("the restart button sent %v", rest)
+	}
+}

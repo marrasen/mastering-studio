@@ -178,6 +178,27 @@ type Measure struct {
 	Peak     float32
 	// Length is how long it plays, silence before it and all.
 	Length time.Duration
+	// LRA is how far its loudness ranges, in LU, from Low to High, in
+	// LUFS, as EBU Tech 3342 measures it; Ranged says it has a range:
+	// under three seconds of sound has none.
+	LRA, Low, High float32
+	Ranged         bool
+	// blocks and shorts are the powers the loudness and its range are
+	// measured from, for the album's, measured over every track; the
+	// window has no need of them.
+	blocks, shorts []float64
+}
+
+// reading is what the meters measured of a sound length long.
+func reading(lm *audio.LoudnessMeter, tp *audio.TruePeakMeter, length time.Duration) Measure {
+	m := Measure{TruePeak: float32(tp.Peak()), Peak: lm.Peak(), Length: length, blocks: lm.Blocks(), shorts: lm.ShortTerms()}
+	if l, ok := lm.Integrated(); ok {
+		m.LUFS, m.Loud = float32(l), true
+	}
+	if low, high, ok := audio.LoudnessRange(m.shorts); ok {
+		m.Low, m.High, m.LRA, m.Ranged = float32(low), float32(high), float32(high-low), true
+	}
+	return m
 }
 
 // measure reads a track through as rendered, at its file's rate, and
@@ -207,12 +228,7 @@ func measure(ctx context.Context, path string, gap time.Duration, e Edit, chain 
 			break
 		}
 	}
-	l, ok := lm.Integrated()
-	m := Measure{Loud: ok, TruePeak: float32(tp.Peak()), Peak: lm.Peak(), Length: duration(r.Len(), format.SampleRate)}
-	if ok {
-		m.LUFS = float32(l)
-	}
-	return m, nil
+	return reading(lm, &tp, duration(r.Len(), format.SampleRate)), nil
 }
 
 // dB is a level, 1 at full scale, in decibels.

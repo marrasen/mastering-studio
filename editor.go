@@ -24,6 +24,9 @@ const (
 	gripFadeOut
 	gripSeek
 	gripZoom
+	// gripRuler is the ruler, which a drag scrolls the view by, and a
+	// click seeks at.
+	gripRuler
 )
 
 // editor is the track picked, laid out along its file's time: both
@@ -46,6 +49,10 @@ type editor struct {
 	held, hot grip
 	heldAt    float64
 	pointer   geom.Point
+	// pressed is where a press went down, and dragged whether it has
+	// moved since, for the ruler to tell a click from a drag.
+	pressed geom.Point
+	dragged bool
 	// inFrom and outFrom are the fades' curves before their last
 	// change, and inMorph and outMorph how far they have turned into the
 	// new ones.
@@ -215,6 +222,8 @@ func (e *editor) gripAt(p geom.Point) grip {
 	switch {
 	case p.X > e.size.W-zoomW && p.Y > top && p.Y < top+2*laneH:
 		return gripZoom
+	case p.Y < rulerH && !near(in) && !near(out):
+		return gripRuler
 	case near(in):
 		return gripFadeIn
 	case near(out):
@@ -263,6 +272,7 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 		}
 		e.held = e.gripAt(ev.Pos)
 		e.heldAt = e.tAt(ev.Pos.X)
+		e.pressed, e.dragged = ev.Pos, false
 		if e.held == gripZoom {
 			e.zoomTo(ev.Pos.Y)
 		}
@@ -270,6 +280,9 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 			u.Send(e, SeekTo{At: e.renderTime(e.tAt(ev.Pos.X))})
 		}
 	case input.PointerUp:
+		if e.held == gripRuler && !e.dragged {
+			u.Send(e, SeekTo{At: e.renderTime(e.tAt(ev.Pos.X))})
+		}
 		e.held = gripNone
 	case input.Scroll:
 		e.wheel(ev)
@@ -346,6 +359,18 @@ func (e *editor) drag(p geom.Point, mods input.Mods, u *gunim.UI) {
 		return
 	case gripZoom:
 		e.zoomTo(p.Y)
+		return
+	case gripRuler:
+		// The view moves with the pointer: the time grabbed stays under
+		// it.
+		if d := p.X - e.pressed.X; d*d > 9 {
+			e.dragged = true
+		}
+		if e.dragged {
+			shift := e.heldAt - e.tAt(p.X)
+			e.v0.Jump(e.v0.Value() + float32(shift))
+			e.v1.Jump(e.v1.Value() + float32(shift))
+		}
 		return
 	default:
 		return
@@ -842,4 +867,21 @@ func segment(p *paint.Painter, a, b geom.Point, width float32, c color.NRGBA) {
 	end := p.Push(paint.Rotate(float32(math.Atan2(float64(d.Y), float64(d.X))), a))
 	p.RRect(geom.Rc(a.X-width/2, a.Y-width/2, l+width, width), width/2, paint.Solid(c))
 	end()
+}
+
+// Cursor implements [gunim.CursorShaper]: the ruler and the cut's ends move
+// across, the slider up and down.
+func (e *editor) Cursor(p geom.Point) input.Cursor {
+	g := e.held
+	if g == gripNone {
+		g = e.gripAt(p)
+	}
+	switch g {
+	case gripRuler, gripStart, gripEnd:
+		return input.CursorResizeH
+	case gripZoom:
+		return input.CursorResizeV
+	case gripNone, gripFadeIn, gripFadeOut, gripSeek:
+	}
+	return input.CursorInherit
 }

@@ -52,6 +52,9 @@ type (
 		Exporting bool
 		// Note says what went wrong last, for the window to show.
 		Note string
+		// Loudness is the album's, every track measured together, as
+		// bs1770gain measures an album, once every track is measured.
+		Loudness Measure
 		// Plugins are the effects this computer has, once found, which
 		// Scanning says is under way.
 		Plugins  []PluginChoice
@@ -113,6 +116,9 @@ type (
 	}
 	// TogglePlay plays or pauses the track picked.
 	TogglePlay struct{}
+	// PlayFromStart plays the track picked from its start, the silence
+	// before it and all.
+	PlayFromStart struct{}
 	// SeekTo moves the track playing.
 	SeekTo struct{ At time.Duration }
 	// SetGap sets the silence before every track.
@@ -382,6 +388,7 @@ func (a *app) add(path, title string, e Edit) int {
 	}
 	a.scan(t.ID, path)
 	a.remeasure(t.ID)
+	a.Loudness = Measure{}
 	a.dirty = true
 	return t.ID
 }
@@ -508,6 +515,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 					t.Measure, t.Measured = m.m, true
 				}
 				a.applyLevel()
+				a.measureAlbum()
 			}
 		case <-a.nextSettle():
 			a.startMeasures()
@@ -665,6 +673,7 @@ func (a *app) handle(in gunim.Intent) {
 				delete(a.states, s.ID)
 			}
 			a.Tracks = slices.Delete(a.Tracks, i, i+1)
+			a.measureAlbum()
 			if a.Current == in.ID {
 				a.d.stop()
 				a.Playing = false
@@ -724,6 +733,8 @@ func (a *app) handle(in gunim.Intent) {
 		default:
 			a.play(0, 10*time.Millisecond)
 		}
+	case PlayFromStart:
+		a.play(0, 10*time.Millisecond)
 	case SeekTo:
 		if a.d.done() == nil {
 			a.play(in.At, 10*time.Millisecond)

@@ -182,7 +182,7 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 	case k.Key == input.KeyRight:
 		u.Send(r, SeekTo{At: at + 5*time.Second})
 	case k.Key == input.KeyHome:
-		u.Send(r, SeekTo{At: 0})
+		u.Send(r, PlayFromStart{})
 	case k.Key == input.KeyM:
 		u.Send(r, SetMatch{On: !r.state.Match})
 	case k.Key == input.KeyA:
@@ -217,6 +217,11 @@ type header struct {
 	add    *pill
 	export *pill
 	sum    string
+	// album is the album's loudness and range, measured together, and
+	// albumOff how far its loudness is from the target.
+	album     string
+	albumOff  float32
+	albumLoud bool
 }
 
 func newHeader(r *root) *header {
@@ -273,6 +278,15 @@ func (h *header) show(s Album) {
 		total += t.Measure.Length
 	}
 	h.sum = fmt.Sprintf("%d tracks · %s", len(s.Tracks), short(total))
+	h.album = "measuring…"
+	if l := s.Loudness; l.Loud {
+		h.album = fmt.Sprintf("%.1f LUFS", l.LUFS)
+		if l.Ranged {
+			h.album += fmt.Sprintf(" · LRA %.1f", l.LRA)
+		}
+	}
+	h.albumOff = s.Loudness.LUFS - s.Target
+	h.albumLoud = s.Loudness.Loud
 }
 
 // lastDirs is the last two parts of a folder's path.
@@ -333,6 +347,16 @@ func (h *header) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	widget.PaintIcon(p, f.Theme, icon.Disc3, geom.Rc(18, (box.H-26)/2, 26, 26), teal)
 	shaped("Mastering", 18, true).Paint(p, geom.Pt(54, 12), ink)
 	shaped(h.sum, 12, false).Paint(p, geom.Pt(54, 36), faded(ink, 0.5))
+	if len(h.r.state.Tracks) > 0 {
+		// The album's loudness, by the target's chip, as a chip reads.
+		x, y := float32(540), (box.H-44)/2
+		shaped("ALBUM", 9, true).Paint(p, geom.Pt(x, y+6), faded(teal, 0.85))
+		c := faded(ink, 0.5)
+		if h.albumLoud {
+			c = loudnessColor(h.albumOff)
+		}
+		shaped(h.album, 14, true).Paint(p, geom.Pt(x, y+19), c)
+	}
 	for k := range kids.All {
 		k.Paint(p)
 	}
