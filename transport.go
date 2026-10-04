@@ -22,7 +22,9 @@ type transport struct {
 	restart          *iconButton
 	match            *pill
 	album            *pill
-	volume           *valueChip
+	// bypass plays the track without its chain and gains, to compare.
+	bypass *pill
+	volume *valueChip
 }
 
 func newTransport(r *root) *transport {
@@ -41,6 +43,7 @@ func newTransport(r *root) *transport {
 		}
 		u.Send(r, SetMatch{On: !r.state.Match})
 	})
+	t.bypass = newPill("Bypass", func(u *gunim.UI) { u.Send(r, SetBypassAll{On: !r.state.Bypass}) })
 	t.album = newPill("Autoplay next", func(u *gunim.UI) { u.Send(r, SetAlbumPlay{On: !r.state.AlbumPlay}) })
 	t.volume = newValueChip("LISTEN", func(v float64) string { return fmt.Sprintf("%.0f%%", v*100) }, 0.004, 0.05, 0, 1, 0.8,
 		func(v float64, u *gunim.UI) { u.Send(r, SetVolume{Volume: float32(v)}) })
@@ -62,12 +65,13 @@ func (t *transport) show(s Album) {
 		}
 	}
 	t.album.setLit(s.AlbumPlay)
+	t.bypass.warn = s.Bypass
 	t.volume.value = float64(s.Volume)
 }
 
 // Children implements [gunim.Composite].
 func (t *transport) Children() []gunim.Node {
-	return []gunim.Node{t.back, t.play, t.next, t.match, t.volume, t.album, t.restart}
+	return []gunim.Node{t.back, t.play, t.next, t.match, t.volume, t.album, t.restart, t.bypass}
 }
 
 // Layout implements [gunim.Node]: the buttons left, the level right.
@@ -90,6 +94,9 @@ func (t *transport) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	aw := pillWidth("Autoplay next")
 	kids.At(5).Layout(gunim.Tight(geom.Sz(aw, 34)))
 	kids.At(5).Place(geom.Pt(size.W-84-12-w-8-aw, mid-17))
+	bw := pillWidth("Bypass")
+	kids.At(7).Layout(gunim.Tight(geom.Sz(bw, 34)))
+	kids.At(7).Place(geom.Pt(size.W-84-12-w-8-aw-8-bw, mid-17))
 	return size
 }
 
@@ -110,7 +117,7 @@ func (t *transport) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids g
 		shapedFace(clock(0), 22, true, true).Paint(p, geom.Pt(timeX, box.H/2-20), faded(ink, 0.6))
 	}
 	if ok {
-		room := box.W - timeX - pillWidth("Match levels") - pillWidth("Autoplay next") - 128
+		room := box.W - timeX - pillWidth("Match levels") - pillWidth("Autoplay next") - pillWidth("Bypass") - 136
 		paintFit(p, tr.Title, 12, false, geom.Pt(timeX, box.H/2+10), room, faded(ink, 0.55))
 	}
 	if t.r.state.Match && ok && tr.Measured && tr.Measure.Loud {

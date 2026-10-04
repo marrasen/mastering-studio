@@ -62,8 +62,10 @@ type (
 		View   View
 		Curves uint8
 		// Listen is how the sound is listened to: in stereo, mono, or
-		// its side alone.
+		// its side alone; Bypass plays the tracks without their chains
+		// and gains, to compare.
 		Listen Listen
+		Bypass bool
 		// Exporting says an export is running.
 		Exporting bool
 		// Note says what went wrong last, for the window to show.
@@ -194,6 +196,9 @@ type (
 	SetCurves struct{ Curves uint8 }
 	// SetListen sets how the sound is listened to.
 	SetListen struct{ Listen Listen }
+	// SetBypassAll plays the tracks without their chains and gains, or
+	// with.
+	SetBypassAll struct{ On bool }
 	// SetSilence sets the silence before a track, or, nil, gives it the
 	// album's.
 	SetSilence struct {
@@ -1065,6 +1070,9 @@ func (a *app) handle(in gunim.Intent) {
 	case SetListen:
 		a.Listen = in.Listen
 		a.d.listen(in.Listen)
+	case SetBypassAll:
+		a.Bypass = in.On
+		a.d.setBypass(in.On)
 	case SetSilence:
 		t := a.track(in.ID)
 		if t == nil {

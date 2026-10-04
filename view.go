@@ -200,6 +200,8 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 		u.Send(r, SetMatch{On: !r.state.Match})
 	case k.Key == input.KeyA:
 		u.Send(r, SetAlbumPlay{On: !r.state.AlbumPlay})
+	case k.Key == input.KeyB:
+		u.Send(r, SetBypassAll{On: !r.state.Bypass})
 	default:
 		return false
 	}

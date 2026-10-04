@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -760,5 +761,40 @@ func TestAnExportWritesItsReport(t *testing.T) {
 		if !strings.Contains(r, want) {
 			t.Fatalf("the report lacks %q:\n%s", want, r)
 		}
+	}
+}
+
+func TestBypassPlaysTheSoundAsFedInTimeWithTheChain(t *testing.T) {
+	s := lspSlot(t, 1, "Limiter Stereo")
+	r, failed := newRack([]Slot{s}, nil, 44100, true)
+	if failed != nil {
+		t.Fatal(failed)
+	}
+	defer r.close()
+	var bypass atomic.Bool
+	bypass.Store(true)
+	// The click at 20000, 6 dB up into the chain: bypassed, it comes out
+	// where it went in, as it was before the gain.
+	st := newStage(&clicks{at: 20000, n: 44100}, r, -3)
+	st.bypass = &bypass
+	st.setIn(6)
+	_ = st.SeekFrame(0)
+	buf := make([]float32, 2*700)
+	var at int64
+	found, level := int64(-1), float32(0)
+	for {
+		n, err := st.Read(buf)
+		for i := range n {
+			if v := buf[2*i]; v > level {
+				found, level = at+int64(i), v
+			}
+		}
+		at += int64(n)
+		if err != nil || n == 0 {
+			break
+		}
+	}
+	if found != 20000 || math.Abs(float64(level)-0.25/2) > 0.01 {
+		t.Fatalf("bypassed, the click comes out at %d at %.3f, want at 20000 at 0.125", found, level)
 	}
 }

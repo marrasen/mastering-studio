@@ -308,6 +308,37 @@ type chainStage struct {
 	// glides there over a block, so a change makes no click.
 	out   float32
 	outTo atomic.Uint32
+	// bypass, where set, has the stage play the sound as fed, the
+	// chain's latency later, its gain in taken back out and no gain
+	// after: the mix as it came, to compare. inGain is the gain in, as a
+	// ratio, in bits; delay holds the sound fed over the latency; dry is
+	// how far the sound played is the one fed, gliding there.
+	bypass *atomic.Bool
+	inGain atomic.Uint32
+	delay  []float32
+	at0    int
+	dry    float32
+	dryBuf []float32
+}
+
+// setIn sets the gain in, in decibels, which bypassing takes back out.
+func (s *chainStage) setIn(db float32) {
+	s.inGain.Store(math.Float32bits(float32(math.Pow(10, float64(db)/20))))
+}
+
+// delayed passes frames through the delay of the chain's latency: each
+// comes out as the one fed that long before.
+func (s *chainStage) delayed(frames []float32) {
+	n := len(s.delay) / 2
+	if n == 0 {
+		return
+	}
+	for i := 0; i+1 < len(frames); i += 2 {
+		j := 2 * s.at0
+		frames[i], s.delay[j] = s.delay[j], frames[i]
+		frames[i+1], s.delay[j+1] = s.delay[j+1], frames[i+1]
+		s.at0 = (s.at0 + 1) % n
+	}
 }
 
 // setOut sets the gain after the chain, in decibels.
@@ -318,6 +349,7 @@ func (s *chainStage) setOut(db float32) {
 func newStage(in audio.Seeker, r *rack, outDB float32) *chainStage {
 	s := &chainStage{in: in, r: r, buf: make([]float32, 2*512)}
 	s.setOut(outDB)
+	s.setIn(0)
 	s.out = math.Float32frombits(s.outTo.Load())
 	r.mu.Lock()
 	_ = s.alignLocked(0)
@@ -338,6 +370,7 @@ func (s *chainStage) SeekFrame(f int64) error {
 func (s *chainStage) alignLocked(f int64) error {
 	lat := s.r.latencyLocked()
 	s.gen, s.lat, s.skip, s.tail, s.ended, s.at, s.fed = s.r.gen, lat, lat, lat, false, f, f
+	s.delay, s.at0 = make([]float32, 2*lat), 0
 	for _, lp := range s.r.plugins {
 		lp.p.SetPosition(f)
 	}
@@ -360,6 +393,8 @@ func (s *chainStage) Read(dst []float32) (int, error) {
 			break
 		}
 		s.tapLocked(s.buf[:2*k])
+		s.dryBuf = append(s.dryBuf[:0], s.buf[:2*k]...)
+		s.delayed(s.dryBuf)
 		s.r.processLocked(s.buf[:2*k])
 		s.skip -= k
 	}
@@ -368,6 +403,10 @@ func (s *chainStage) Read(dst []float32) (int, error) {
 		return 0, io.EOF
 	}
 	s.tapLocked(dst[:2*n])
+	// The sound as fed, the latency later, for bypassing.
+	s.dryBuf = append(s.dryBuf[:0], dst[:2*n]...)
+	dry := s.dryBuf
+	s.delayed(dry)
 	s.r.processLocked(dst[:2*n])
 	// The gain after the chain, gliding to where it is set.
 	to := math.Float32frombits(s.outTo.Load())
@@ -378,6 +417,21 @@ func (s *chainStage) Read(dst []float32) (int, error) {
 			dst[2*i+1] *= g
 		}
 		s.out = to
+	}
+	// Bypassed, the sound as fed, its gain in taken back out, gliding
+	// from the one to the other over the block.
+	wantDry := float32(0)
+	if s.bypass != nil && s.bypass.Load() {
+		wantDry = 1
+	}
+	if from := s.dry; from != 0 || wantDry != 0 {
+		back := 1 / max(math.Float32frombits(s.inGain.Load()), 1e-6)
+		for i := range n {
+			m := from + (wantDry-from)*float32(i+1)/float32(n)
+			dst[2*i] = dst[2*i]*(1-m) + dry[2*i]*back*m
+			dst[2*i+1] = dst[2*i+1]*(1-m) + dry[2*i+1]*back*m
+		}
+		s.dry = wantDry
 	}
 	s.at += int64(n)
 	return n, nil

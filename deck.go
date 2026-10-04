@@ -35,8 +35,10 @@ type deck struct {
 	rate  int
 	tap   *ioTap
 	// monitor is how the sound is listened to: in stereo, mono, or its
-	// side alone; the meters read it as it is.
+	// side alone; the meters read it as it is. bypass plays the tracks
+	// without their chains and gains.
 	monitor *monitor
+	bypass  atomic.Bool
 	// id is the track playing, and volume the listening level, as a
 	// ratio, with match, the gain that brings the track to the target
 	// loudness while levels are matched.
@@ -60,7 +62,8 @@ func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at 
 	}
 	sw := &switcher{cur: newRender(src, format.SampleRate, gap, e), closer: closer}
 	st := newStage(sw, r, e.Out)
-	st.tap = d.tap
+	st.tap, st.bypass = d.tap, &d.bypass
+	st.setIn(e.Gain)
 	out := audio.Resample(st, format.SampleRate)
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -137,6 +140,7 @@ func (d *deck) edit(id int, path string, gap time.Duration, e Edit) bool {
 	d.mu.Lock()
 	if d.stage != nil {
 		d.stage.setOut(e.Out)
+		d.stage.setIn(e.Gain)
 	}
 	d.mu.Unlock()
 	return true
@@ -343,7 +347,8 @@ func (d *deck) queue(id int, path string, gap time.Duration, e Edit, r *rack) er
 	}
 	sw := &switcher{cur: newRender(src, format.SampleRate, gap, e), closer: closer}
 	st := newStage(sw, r, e.Out)
-	st.tap = d.tap
+	st.tap, st.bypass = d.tap, &d.bypass
+	st.setIn(e.Gain)
 	out := audio.Resample(st, format.SampleRate)
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -438,3 +443,6 @@ func (m *monitor) Process(frames []float32) {
 
 // listen sets how the sound is listened to.
 func (d *deck) listen(l Listen) { d.monitor.mode.Store(int32(l)) }
+
+// setBypass plays the tracks without their chains and gains, or with.
+func (d *deck) setBypass(on bool) { d.bypass.Store(on) }
