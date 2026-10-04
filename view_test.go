@@ -594,3 +594,51 @@ func TestTheAlbumsNameOpensTheMenuOfAlbums(t *testing.T) {
 		t.Fatalf("the menu's first item sent %v", rest)
 	}
 }
+
+func TestTheSpectrogramTakesColumnsWhileTheSoundPlays(t *testing.T) {
+	r, run, mix := playing(t, FollowOff)
+	m := r.meters
+	columns := func() int { return len(m.gram.tiles)*gramTile + m.gram.n }
+	for range 120 {
+		mix(time.Second / 60)
+		run(1)
+	}
+	// Two seconds, at 40 columns a second, a frame's worth or so either
+	// way.
+	if n := columns(); n < 75 || n > 85 {
+		t.Fatalf("two seconds played took %d columns, want about 80", n)
+	}
+	r.state.Playing = false
+	was := columns()
+	run(30)
+	if columns() != was {
+		t.Fatal("paused, the spectrogram goes on")
+	}
+}
+
+func TestTheSpectrogramKeepsTheTilesItShows(t *testing.T) {
+	var g spectrogram
+	g.keep = 3
+	col := make([]float32, specPoints)
+	for range 10 * gramTile {
+		g.push(col)
+	}
+	if len(g.tiles) != 3 || g.n != 0 {
+		t.Fatalf("after 10 tiles' columns, %d tiles are kept, %d columns filling", len(g.tiles), g.n)
+	}
+}
+
+func TestTheSpectrumsHeadingSwitchesToTheSpectrogram(t *testing.T) {
+	w, r, run := stage(t, album())
+	b := boundsOf(t, w, run, r.meters)
+	at := b.Min.Add(r.meters.specHead.Center())
+	for _, want := range []bool{true, false} {
+		w.Input(input.PointerMove{Pos: at})
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+		run(1)
+		if r.meters.showGram != want {
+			t.Fatalf("a click on the heading left the spectrogram shown %v, want %v", r.meters.showGram, want)
+		}
+	}
+}

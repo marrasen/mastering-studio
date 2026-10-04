@@ -9,6 +9,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 )
 
@@ -50,7 +51,16 @@ type meters struct {
 	low, high float32
 	ranged    bool
 	rangedAt  time.Duration
-	size      geom.Size
+	// gram is the spectrogram, shown in the spectrum's place while
+	// showGram says; gramAt counts toward its next column, and
+	// column holds the levels of one.
+	gram     spectrogram
+	showGram bool
+	gramAt   time.Duration
+	column   []float32
+	// specHead is where the spectrum's heading is, which switches it.
+	specHead geom.Rect
+	size     geom.Size
 }
 
 func newMeters(r *root) *meters {
@@ -151,11 +161,25 @@ func (m *meters) Step(dt time.Duration) bool {
 	}
 	back := float32(-m.listening())
 	settled := true
+	// The spectrogram takes a column 40 times a second, while the sound
+	// plays.
+	m.gramAt += dt
+	takeColumn := playing && m.gramAt >= 25*time.Millisecond
+	if takeColumn {
+		m.gramAt = 0
+		m.column = m.column[:0]
+	}
 	for i, f := range m.freqs {
 		tilt := float32(specTilt * math.Log2(float64(f)/1000))
 		to := m.spec[i] + tilt + back
+		if takeColumn {
+			m.column = append(m.column, gramLevel(to))
+		}
 		ease(&m.smooth[i], to, 25, 5)
 		settled = settled && math.Abs(float64(m.smooth[i]-to)) < 0.5
+	}
+	if takeColumn {
+		m.gram.push(m.column)
 	}
 	// Three bands of the spectrum, for the little bars of the track
 	// playing.
@@ -335,8 +359,24 @@ func (m *meters) paintSpectrum(p *paint.Painter, area geom.Rect) {
 	if area.Size().H < 40 {
 		return
 	}
-	shaped("SPECTRUM", 10, true).Paint(p, area.Min.Sub(geom.Pt(0, 2)), faded(teal, 0.85))
+	// The heading names both views, the one shown lit; a click on it
+	// switches.
+	head := area.Min.Sub(geom.Pt(0, 2))
+	spec, gram := shaped("SPECTRUM", 10, true), shaped("SPECTROGRAM", 10, true)
+	on, off := faded(teal, 0.85), faded(ink, 0.35)
+	if m.showGram {
+		on, off = off, on
+	}
+	spec.Paint(p, head, on)
+	gram.Paint(p, head.Add(geom.Pt(spec.Advance+12, 0)), off)
+	m.specHead = geom.Rc(head.X-4, head.Y-4, spec.Advance+gram.Advance+20, 20)
 	area.Min.Y += 18
+	if m.showGram {
+		p.RRect(area, 10, paint.Solid(night))
+		m.gram.paint(p, area, 1)
+		m.paintPitches(p, area, true)
+		return
+	}
 	p.RRect(area, 10, paint.Solid(faded(night, 0.6)))
 	w := area.Size().W / float32(len(m.smooth))
 	var prev geom.Point
@@ -351,15 +391,7 @@ func (m *meters) paintSpectrum(p *paint.Painter, area geom.Rect) {
 		}
 		prev = pt
 	}
-	for _, hz := range []float64{100, 1000, 10000} {
-		x := area.Min.X + area.Size().W*float32(math.Log(hz/20)/math.Log(1000))
-		p.RRect(geom.Rc(x, area.Min.Y, 1, area.Size().H), 0, paint.Solid(faded(ink, 0.06)))
-		label := fmt.Sprintf("%.0f", hz)
-		if hz >= 1000 {
-			label = fmt.Sprintf("%.0fk", hz/1000)
-		}
-		shaped(label, 9, false).Paint(p, geom.Pt(x+3, area.Max.Y-14), faded(ink, 0.35))
-	}
+	m.paintPitches(p, area, false)
 }
 
 // paintBars draws three little bars moving with the music, low, middle
@@ -370,4 +402,38 @@ func paintBars(p *paint.Painter, m *meters, mid geom.Point, c color.NRGBA) {
 		x := mid.X - 9 + float32(i)*7
 		p.RRect(geom.Rc(x, mid.Y+9-h, 4, h), 2, paint.Solid(c))
 	}
+}
+
+// paintPitches marks 100 Hz, 1 kHz and 10 kHz along the spectrum, or,
+// up, along the spectrogram.
+func (m *meters) paintPitches(p *paint.Painter, area geom.Rect, up bool) {
+	for _, hz := range []float64{100, 1000, 10000} {
+		at := float32(math.Log(hz/20) / math.Log(1000))
+		label := fmt.Sprintf("%.0f", hz)
+		if hz >= 1000 {
+			label = fmt.Sprintf("%.0fk", hz/1000)
+		}
+		if up {
+			y := area.Max.Y - area.Size().H*at
+			p.RRect(geom.Rc(area.Min.X, y, area.Size().W, 1), 0, paint.Solid(faded(ink, 0.08)))
+			shaped(label, 9, false).Paint(p, geom.Pt(area.Min.X+4, y-12), faded(ink, 0.45))
+			continue
+		}
+		x := area.Min.X + area.Size().W*at
+		p.RRect(geom.Rc(x, area.Min.Y, 1, area.Size().H), 0, paint.Solid(faded(ink, 0.06)))
+		shaped(label, 9, false).Paint(p, geom.Pt(x+3, area.Max.Y-14), faded(ink, 0.35))
+	}
+}
+
+// Handle implements [gunim.Handler]: a click on the spectrum's heading
+// switches it to the spectrogram and back.
+func (m *meters) Handle(e input.Event, u *gunim.UI) bool {
+	d, ok := e.(input.PointerDown)
+	if !ok || d.Button != input.ButtonPrimary || !m.specHead.Contains(d.Pos) {
+		return false
+	}
+	m.showGram = !m.showGram
+	u.Cue(gunim.CueTick, m)
+	u.Invalidate()
+	return true
 }
