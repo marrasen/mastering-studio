@@ -152,7 +152,7 @@ func TestAnExportIsMeasuredAsItWillSound(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(t.TempDir(), exportName(3, "A/B: test"))
-	got, err := exportTrack(exportJob{path: path, edit: e, gap: 2 * time.Second, out: out, bits: 16, dither: true}, func(float32) {})
+	got, err := exportTrack(context.Background(), exportJob{path: path, edit: e, gap: 2 * time.Second, out: out, bits: 16, dither: true}, func(float32) {})
 	if err != nil {
 		t.Fatal(err)
 	}

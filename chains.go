@@ -63,10 +63,37 @@ func (a *app) dropRack(id int) {
 	r.close()
 }
 
+// closeRacks lets every chain loaded go, their states as they are.
 func (a *app) closeRacks() {
-	for id := range a.racks {
-		a.dropRack(id)
+	for id, r := range a.racks {
+		delete(a.racks, id)
+		r.close()
 	}
+}
+
+// shutdown ends the program's work with plugins as it ends: what runs
+// in the background stops, the chains loaded are let go, and, once
+// nothing runs in them, the plugins' modules are unloaded. A module
+// unloaded under a plugin at work, or the process ending under one,
+// crashes it.
+func (a *app) shutdown() {
+	a.stop()
+	a.d.stop()
+	stopped := make(chan struct{})
+	go func() {
+		a.work.Wait()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		// Still at work: the modules stay loaded, for the process to
+		// end with.
+		a.closeRacks()
+		return
+	}
+	a.closeRacks()
+	closeModules()
 }
 
 // readRack reads the states of track id's plugins, loaded, and returns

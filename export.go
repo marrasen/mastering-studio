@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,7 +65,9 @@ func (a *app) export(ids []int) {
 		}
 	}
 	a.Exporting = true
+	a.work.Add(1)
 	go func() {
+		defer a.work.Done()
 		send := func(e exported) {
 			select {
 			case a.progress <- e:
@@ -76,7 +79,7 @@ func (a *app) export(ids []int) {
 			return
 		}
 		for _, j := range jobs {
-			out, err := exportTrack(j, func(p float32) { send(exported{id: j.id, progress: p}) })
+			out, err := exportTrack(a.ctx, j, func(p float32) { send(exported{id: j.id, progress: p}) })
 			send(exported{id: j.id, progress: 1, path: j.out, out: out, err: err})
 			if a.ctx.Err() != nil {
 				return
@@ -88,7 +91,7 @@ func (a *app) export(ids []int) {
 
 // exportTrack renders job to its file, telling its progress, and
 // returns its reading as written.
-func exportTrack(j exportJob, progress func(float32)) (Measure, error) {
+func exportTrack(ctx context.Context, j exportJob, progress func(float32)) (Measure, error) {
 	src, format, closer, err := openTrack(j.path)
 	if err != nil {
 		return Measure{}, err
@@ -114,6 +117,12 @@ func exportTrack(j exportJob, progress func(float32)) (Measure, error) {
 	var at int64
 	last := time.Now()
 	for {
+		if ctx.Err() != nil {
+			// Stopped, as the program ends: no file half written stays.
+			_ = f.Close()
+			_ = os.Remove(j.out)
+			return Measure{}, ctx.Err()
+		}
 		n, rerr := r.Read(buf)
 		lm.Write(buf[:2*n])
 		tp.Write(buf[:2*n])

@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -222,7 +223,11 @@ func projectFile() string {
 // app is the application half.
 type app struct {
 	Album
-	ctx  context.Context
+	ctx context.Context
+	// stop ends ctx, as the program ends, and work counts what runs in
+	// the background with plugins, to wait for before they are let go.
+	stop context.CancelFunc
+	work sync.WaitGroup
 	d    *deck
 	file string
 	ids  int
@@ -287,7 +292,8 @@ type exported struct {
 }
 
 func newApp(ctx context.Context, d *deck, file string) *app {
-	a := &app{ctx: ctx, d: d, file: file,
+	ctx, stop := context.WithCancel(ctx)
+	a := &app{ctx: ctx, stop: stop, d: d, file: file,
 		scans: make(chan scanned, 16), measures: make(chan measured, 16),
 		measurer: map[int]context.CancelFunc{}, settle: map[int]time.Time{},
 		chosen: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
@@ -437,7 +443,9 @@ func (a *app) startMeasures() {
 		ctx, cancel := context.WithCancel(a.ctx)
 		a.measurer[id] = cancel
 		chain, states := a.chainOf(t)
+		a.work.Add(1)
 		go func(path string, gap time.Duration, e Edit, seq int) {
+			defer a.work.Done()
 			select {
 			case slots <- struct{}{}:
 			case <-ctx.Done():
@@ -483,7 +491,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.applyLevel()
 	a.Scanning = true
 	go func() { a.found <- scanPlugins(a.pluginDirs) }()
-	defer a.closeRacks()
+	defer a.shutdown()
 	if err := c.Mount(gunim.Root, "album", "album", a.Album, albumTopic); err != nil {
 		return err
 	}

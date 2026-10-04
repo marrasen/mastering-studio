@@ -60,6 +60,17 @@ func loadModule(path string) (*vst3.Module, error) {
 	return m, nil
 }
 
+// closeModules unloads every module loaded. Nothing made from them may
+// be at work.
+func closeModules() {
+	modulesMu.Lock()
+	defer modulesMu.Unlock()
+	for path, m := range modules {
+		_ = m.Close()
+		delete(modules, path)
+	}
+}
+
 // scanPlugins lists the effects in the system's folders and dirs: from
 // what their bundles list, or, where a bundle lists none, loading it.
 func scanPlugins(dirs []string) []PluginChoice {

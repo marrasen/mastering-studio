@@ -283,3 +283,36 @@ func TestReplacingATracksFileKeepsItsEditAndChain(t *testing.T) {
 		t.Fatal("the new file was never read")
 	}
 }
+
+func TestEndingStopsThePluginsAtWorkBeforeUnloadingThem(t *testing.T) {
+	mix := audio.NewMixer()
+	a := chainApp(t, mix)
+	a.handle(TogglePlay{})
+	mix.Mix(make([]float32, 2*4096))
+	// Every track's measuring starts, through copies of its chain.
+	for id := range a.settle {
+		a.settle[id] = time.Now()
+	}
+	a.startMeasures()
+	time.Sleep(20 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		a.shutdown()
+		close(done)
+	}()
+	// The sound plays on meanwhile, through the chain being let go.
+	for range 20 {
+		mix.Mix(make([]float32, 2*512))
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ending never finished")
+	}
+	modulesMu.Lock()
+	left := len(modules)
+	modulesMu.Unlock()
+	if left != 0 || len(a.racks) != 0 {
+		t.Fatalf("after the end, %d modules and %d chains are loaded", left, len(a.racks))
+	}
+}
