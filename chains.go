@@ -184,10 +184,13 @@ func (a *app) watchPlugins() bool {
 	return changed
 }
 
-// remeasureChain measures track id again once its chain has rested.
+// remeasureChain marks track id changed in its chain since it was
+// measured: never measured, it is measured once its chain has rested.
 func (a *app) remeasureChain(id int) {
 	a.remeasure(id)
-	a.settle[id] = time.Now().Add(pluginSettle)
+	if _, soon := a.settle[id]; soon {
+		a.settle[id] = time.Now().Add(pluginSettle)
+	}
 }
 
 // slot returns track id's slot of ID sid, and its place, or nil.
@@ -208,6 +211,7 @@ func (a *app) handleChain(in gunim.Intent) {
 		}
 		a.slots++
 		c := in.Choice
+		a.used(c)
 		s := Slot{ID: a.slots, Path: c.Path, Class: c.Class, Name: c.Name, Vendor: c.Vendor}
 		if r := a.racks[t.ID]; r != nil {
 			lp, err := newPlugin(s, nil, rateOf(t), false)
@@ -440,4 +444,17 @@ func (a *app) measureAlbum() {
 	if low, high, ok := audio.LoudnessRange(shorts); ok {
 		a.Loudness.Low, a.Loudness.High, a.Loudness.LRA, a.Loudness.Ranged = float32(low), float32(high), float32(high-low), true
 	}
+}
+
+// recentPlugins is how many plugins added last the picker lists first.
+const recentPlugins = 8
+
+// used puts plugin c first among those added last.
+func (a *app) used(c PluginChoice) {
+	a.Recent = slices.DeleteFunc(a.Recent, func(r PluginChoice) bool { return r.Path == c.Path && r.Class == c.Class })
+	a.Recent = slices.Insert(a.Recent, 0, c)
+	if len(a.Recent) > recentPlugins {
+		a.Recent = a.Recent[:recentPlugins]
+	}
+	a.dirty = true
 }

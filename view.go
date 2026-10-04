@@ -216,12 +216,17 @@ type header struct {
 	dir    *pill
 	add    *pill
 	export *pill
-	sum    string
+	// calc measures the tracks changed since they were measured.
+	calc *pill
+	sum  string
 	// album is the album's loudness and range, measured together, and
 	// albumOff how far its loudness is from the target.
 	album     string
 	albumOff  float32
 	albumLoud bool
+	// albumStale says a track changed since it was measured, so the
+	// album's reading is old.
+	albumStale bool
 }
 
 func newHeader(r *root) *header {
@@ -250,6 +255,7 @@ func newHeader(r *root) *header {
 	h.add = newPill("Add tracks", func(u *gunim.UI) { u.Send(r, ChooseFiles{}) })
 	h.export = newPill("Export album", func(u *gunim.UI) { u.Send(r, Export{}) })
 	h.export.primary = true
+	h.calc = newPill("Calc LUFS", func(u *gunim.UI) { u.Send(r, CalcLoudness{}) })
 	return h
 }
 
@@ -287,6 +293,25 @@ func (h *header) show(s Album) {
 	}
 	h.albumOff = s.Loudness.LUFS - s.Target
 	h.albumLoud = s.Loudness.Loud
+	stale, measuring := 0, 0
+	for _, t := range s.Tracks {
+		if t.Stale {
+			stale++
+		}
+		if t.Measuring {
+			measuring++
+		}
+	}
+	h.albumStale = stale > 0
+	switch {
+	case measuring > 0:
+		h.calc.words = fmt.Sprintf("Measuring %d…", measuring)
+	case stale > 0:
+		h.calc.words = fmt.Sprintf("Calc LUFS · %d", stale)
+	default:
+		h.calc.words = "LUFS up to date"
+	}
+	h.calc.setLit(stale > 0 && measuring == 0)
 }
 
 // lastDirs is the last two parts of a folder's path.
@@ -306,7 +331,7 @@ func lastDirs(path string) string {
 
 // Children implements [gunim.Composite].
 func (h *header) Children() []gunim.Node {
-	return []gunim.Node{h.gap, h.target, h.format, h.dir, h.add, h.export}
+	return []gunim.Node{h.gap, h.target, h.format, h.dir, h.add, h.export, h.calc}
 }
 
 // Layout implements [gunim.Node]: the settings right of the name, the
@@ -320,6 +345,10 @@ func (h *header) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children)
 		kids.At(i).Place(geom.Pt(x, y))
 		x += w + 10
 	}
+	// The button that measures, after the album's reading.
+	cw := pillWidth(h.calc.words)
+	kids.At(6).Layout(gunim.Tight(geom.Sz(cw, 32)))
+	kids.At(6).Place(geom.Pt(540+max(shaped(h.album, 14, true).Advance, 110)+16, (size.H-32)/2))
 	right := size.W - 16
 	for _, i := range []int{5, 4, 3, 2} {
 		var words string
@@ -354,6 +383,9 @@ func (h *header) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 		c := faded(ink, 0.5)
 		if h.albumLoud {
 			c = loudnessColor(h.albumOff)
+		}
+		if h.albumStale {
+			c = faded(c, 0.45)
 		}
 		shaped(h.album, 14, true).Paint(p, geom.Pt(x, y+19), c)
 	}

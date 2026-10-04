@@ -307,10 +307,31 @@ func (c *chainRow) openPicker(u *gunim.UI) {
 	if c.track == 0 {
 		return
 	}
-	items := make([]widget.PaletteItem, 0, len(c.choices))
+	// The plugins added last first, the latest at the top, as found on
+	// this computer, then the rest.
+	choices := make([]PluginChoice, 0, len(c.choices))
+	recent := map[[2]string]bool{}
+	for _, r := range c.r.state.Recent {
+		for _, p := range c.choices {
+			if p.Path == r.Path && p.Class == r.Class && !recent[[2]string{p.Path, p.Class}] {
+				choices = append(choices, p)
+				recent[[2]string{p.Path, p.Class}] = true
+			}
+		}
+	}
 	for _, p := range c.choices {
-		items = append(items, widget.PaletteItem{Title: p.Name, Detail: p.Vendor, Also: []string{p.Vendor, p.Kind},
-			Icon: icon.AudioLines})
+		if !recent[[2]string{p.Path, p.Class}] {
+			choices = append(choices, p)
+		}
+	}
+	items := make([]widget.PaletteItem, 0, len(choices))
+	for _, p := range choices {
+		it := widget.PaletteItem{Title: p.Name, Detail: p.Vendor, Also: []string{p.Vendor, p.Kind},
+			Icon: icon.AudioLines, Key: widget.Key(p.Path + "|" + p.Class)}
+		if recent[[2]string{p.Path, p.Class}] {
+			it.Hint = "recent"
+		}
+		items = append(items, it)
 	}
 	c.picker.Items = items
 	c.picker.Placeholder = "Find a plugin"
@@ -321,7 +342,7 @@ func (c *chainRow) openPicker(u *gunim.UI) {
 	case len(items) == 0:
 		c.picker.Status = "No VST3 plugins found in the system's plugin folders"
 	}
-	choices, track := c.choices, c.track
+	track := c.track
 	c.picker.Pick = func(i int, u *gunim.UI) {
 		if i >= 0 && i < len(choices) {
 			u.Send(c, AddPlugin{Track: track, Choice: choices[i]})

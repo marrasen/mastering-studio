@@ -57,7 +57,9 @@ type (
 		// bs1770gain measures an album, once every track is measured.
 		Loudness Measure
 		// Plugins are the effects this computer has, once found, which
-		// Scanning says is under way.
+		// Scanning says is under way; Recent are those added last, the
+		// latest first.
+		Recent   []PluginChoice
 		Plugins  []PluginChoice
 		Scanning bool
 	}
@@ -85,6 +87,9 @@ type (
 		Measure   Measure
 		Measured  bool
 		Measuring bool
+		// Stale says the track changed since it was last measured, to be
+		// measured again with CalcLoudness.
+		Stale bool
 		// Progress is how far its export is, from 0 to 1, while it is
 		// exported, and Exported where it went once it is, with Out its
 		// reading as written.
@@ -154,6 +159,9 @@ type (
 	SetFollow struct{ Follow Follow }
 	// Export exports tracks: those named, or every one.
 	Export struct{ IDs []int }
+	// CalcLoudness measures every track changed since it was last
+	// measured.
+	CalcLoudness struct{}
 
 	// AddPlugin adds an effect to the end of a track's chain.
 	AddPlugin struct {
@@ -195,12 +203,17 @@ type project struct {
 	Current   int
 	AlbumPlay bool
 	Follow    Follow
+	Recent    []PluginChoice `json:",omitempty"`
 }
 
 type keptTrack struct {
 	Title, File string
 	Edit        Edit
 	Chain       []keptSlot `json:",omitempty"`
+	// Measure is the track as last measured, of its file as it was then,
+	// and Stale says it changed since.
+	Measure *keptMeasure `json:",omitempty"`
+	Stale   bool         `json:",omitempty"`
 }
 
 // keptSlot is a plugin of a chain, kept with its state.
@@ -266,6 +279,11 @@ type app struct {
 	reveal    func(path string) error
 	// queued is what the deck has waiting to play next, in album play.
 	queued queuedKey
+	// version counts each track's changes, so a measuring tells whether
+	// it measured the track as it is.
+	version map[int]int
+	// measuringVersion is the version of each track being measured.
+	measuringVersion map[int]int
 }
 
 type scanned struct {
@@ -276,14 +294,15 @@ type scanned struct {
 }
 
 type measured struct {
-	id  int
-	seq int
-	m   Measure
-	err error
+	id      int
+	version int
+	m       Measure
+	err     error
 }
 
 type exported struct {
 	id       int
+	version  int
 	progress float32
 	path     string
 	out      Measure
@@ -297,7 +316,7 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 		scans: make(chan scanned, 16), measures: make(chan measured, 16),
 		measurer: map[int]context.CancelFunc{}, settle: map[int]time.Time{},
 		chosen: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
-		racks: map[int]*rack{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1),
+		racks: map[int]*rack{}, version: map[int]int{}, measuringVersion: map[int]int{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1),
 		replacing: make(chan ReplaceFile, 1)}
 	a.Gap, a.Target, a.Bits, a.Dither, a.Volume = time.Second, -14, 16, true, 0.8
 	return a
@@ -317,7 +336,7 @@ func (a *app) load() {
 	if p.Volume > 0 {
 		a.Volume = p.Volume
 	}
-	a.Match, a.AlbumPlay, a.Follow = p.Match, p.AlbumPlay, p.Follow
+	a.Match, a.AlbumPlay, a.Follow, a.Recent = p.Match, p.AlbumPlay, p.Follow, p.Recent
 	for i, k := range p.Tracks {
 		id := a.add(k.File, k.Title, k.Edit)
 		if i == p.Current {
@@ -330,7 +349,14 @@ func (a *app) load() {
 				Vendor: s.Vendor, Bypass: s.Bypass})
 			a.states[a.slots] = s.State
 		}
+		// Measured before, it waits for CalcLoudness, unless its file
+		// changed since.
+		if m, ok := k.Measure.measure(k.File); ok {
+			t.Measure, t.Measured, t.Measuring, t.Stale = m, true, false, k.Stale
+			delete(a.settle, id)
+		}
 	}
+	a.measureAlbum()
 }
 
 // save keeps the album, if it changed.
@@ -342,9 +368,12 @@ func (a *app) save() {
 	a.readStates()
 	p := project{Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither, ExportDir: a.ExportDir,
 		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
-		Follow: a.Follow}
+		Follow: a.Follow, Recent: a.Recent}
 	for _, t := range a.Tracks {
-		k := keptTrack{Title: t.Title, File: t.File, Edit: t.Edit}
+		k := keptTrack{Title: t.Title, File: t.File, Edit: t.Edit, Stale: t.Stale}
+		if t.Measured {
+			k.Measure = keep(t.File, t.Measure)
+		}
 		for _, s := range t.Chain {
 			k.Chain = append(k.Chain, keptSlot{Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor,
 				Bypass: s.Bypass, State: a.states[s.ID]})
@@ -414,15 +443,58 @@ func (a *app) scan(id int, path string) {
 // together share the computer.
 var slots = make(chan struct{}, max(1, runtime.NumCPU()/2))
 
-// remeasure measures track id again once its edits have paused a
-// moment, stopping a measuring under way for an edit since changed.
+// remeasure marks track id changed since it was measured. A track
+// never measured is measured once its changes pause a moment; the rest
+// wait for CalcLoudness, as measuring through heavy plugins after every
+// change would keep the computer busy.
 func (a *app) remeasure(id int) {
 	t := a.track(id)
 	if t == nil {
 		return
 	}
-	t.Measuring = true
-	a.settle[id] = time.Now().Add(300 * time.Millisecond)
+	a.version[id]++
+	t.Stale = true
+	if !t.Measured {
+		a.measureSoon(id, 300*time.Millisecond)
+	}
+}
+
+// measureSoon measures track id after wait.
+func (a *app) measureSoon(id int, wait time.Duration) {
+	if t := a.track(id); t != nil {
+		t.Measuring = true
+		a.settle[id] = time.Now().Add(wait)
+	}
+}
+
+// calcLoudness measures every track changed since it was measured, and
+// not being measured as it is now.
+func (a *app) calcLoudness() {
+	for _, t := range a.Tracks {
+		if t.Stale && (!t.Measuring || a.measuringVersion[t.ID] != a.version[t.ID]) {
+			a.measureSoon(t.ID, 0)
+		}
+	}
+}
+
+// measured takes a measuring's result: the track as it was measured,
+// fresh where nothing changed since.
+func (a *app) measured(m measured) {
+	t := a.track(m.id)
+	if t == nil {
+		return
+	}
+	t.Measuring = false
+	if m.err != nil {
+		a.Note = fmt.Sprintf("%s: %v", t.Title, m.err)
+		return
+	}
+	t.Measure, t.Measured = m.m, true
+	t.Stale = m.version != a.version[m.id]
+	// The project keeps it, so the next run need not measure again.
+	a.dirty = true
+	a.applyLevel()
+	a.measureAlbum()
 }
 
 // startMeasures starts the measurings whose edits have settled.
@@ -443,8 +515,9 @@ func (a *app) startMeasures() {
 		ctx, cancel := context.WithCancel(a.ctx)
 		a.measurer[id] = cancel
 		chain, states := a.chainOf(t)
+		a.measuringVersion[id] = a.version[id]
 		a.work.Add(1)
-		go func(path string, gap time.Duration, e Edit, seq int) {
+		go func(path string, gap time.Duration, e Edit, version int) {
 			defer a.work.Done()
 			select {
 			case slots <- struct{}{}:
@@ -457,10 +530,10 @@ func (a *app) startMeasures() {
 				return
 			}
 			select {
-			case a.measures <- measured{id, seq, m, err}:
+			case a.measures <- measured{id, version, m, err}:
 			case <-a.ctx.Done():
 			}
-		}(t.File, a.Gap, t.Edit, t.Seq)
+		}(t.File, a.Gap, t.Edit, a.version[id])
 	}
 }
 
@@ -517,14 +590,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		case s := <-a.scans:
 			a.scanned(s)
 		case m := <-a.measures:
-			if t := a.track(m.id); t != nil && m.seq == t.Seq {
-				t.Measuring = false
-				if m.err == nil {
-					t.Measure, t.Measured = m.m, true
-				}
-				a.applyLevel()
-				a.measureAlbum()
-			}
+			a.measured(m)
 		case <-a.nextSettle():
 			a.startMeasures()
 		case <-a.replay:
@@ -776,6 +842,8 @@ func (a *app) handle(in gunim.Intent) {
 		a.dirty = true
 	case Export:
 		a.export(in.IDs)
+	case CalcLoudness:
+		a.calcLoudness()
 	case ReplaceFile:
 		a.replace(in.ID, in.Path)
 	case ChooseReplacement:

@@ -35,6 +35,8 @@ type exportJob struct {
 	dither bool
 	chain  []Slot
 	states map[int][]byte
+	// version is the track's, as it is exported.
+	version int
 }
 
 // export renders tracks to WAV files, one at a time, each at its own
@@ -59,7 +61,7 @@ func (a *app) export(ids []int) {
 		chain, states := a.chainOf(&a.Tracks[i])
 		jobs = append(jobs, exportJob{id: t.ID, path: t.File, edit: t.Edit, gap: a.Gap,
 			out: filepath.Join(dir, exportName(i+1, t.Title)), bits: a.Bits, dither: a.Dither,
-			chain: chain, states: states})
+			chain: chain, states: states, version: a.version[t.ID]})
 		if tr := a.track(t.ID); tr != nil {
 			tr.Progress, tr.Exported = 0.001, ""
 		}
@@ -80,7 +82,7 @@ func (a *app) export(ids []int) {
 		}
 		for _, j := range jobs {
 			out, err := exportTrack(a.ctx, j, func(p float32) { send(exported{id: j.id, progress: p}) })
-			send(exported{id: j.id, progress: 1, path: j.out, out: out, err: err})
+			send(exported{id: j.id, version: j.version, progress: 1, path: j.out, out: out, err: err})
 			if a.ctx.Err() != nil {
 				return
 			}
@@ -170,5 +172,7 @@ func (a *app) exportProgress(e exported) {
 			return
 		}
 		t.Exported, t.Out = e.path, e.out
+		// What was written is the track measured, as it was exported.
+		a.measured(measured{id: e.id, version: e.version, m: e.out})
 	}
 }

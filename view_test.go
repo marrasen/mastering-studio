@@ -196,9 +196,7 @@ func settle(t *testing.T, a *app, cond func() bool) {
 		case s := <-a.scans:
 			a.scanned(s)
 		case m := <-a.measures:
-			if tr := a.track(m.id); tr != nil && m.seq == tr.Seq {
-				tr.Measuring, tr.Measure, tr.Measured = false, m.m, m.err == nil
-			}
+			a.measured(m)
 		case p := <-a.progress:
 			a.exportProgress(p)
 		case <-time.After(20 * time.Millisecond):
@@ -553,5 +551,25 @@ func TestTheRestartButtonPlaysFromTheStart(t *testing.T) {
 	run(1)
 	if _, rest := edits(w); len(rest) != 1 || rest[0] != (PlayFromStart{}) {
 		t.Fatalf("the restart button sent %v", rest)
+	}
+}
+
+func TestCalcLUFSCountsTheTracksChangedAndMeasuresThem(t *testing.T) {
+	a := album()
+	two := a.Tracks[0]
+	two.ID = 2
+	a.Tracks = append(a.Tracks, two)
+	a.Tracks[0].Stale = true
+	w, r, run := stage(t, a)
+	if got := r.header.calc.words; got != "Calc LUFS · 1" {
+		t.Fatalf("the button reads %q, want one track to measure", got)
+	}
+	b := boundsOf(t, w, run, r.header.calc)
+	w.Input(input.PointerMove{Pos: b.Center()})
+	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (CalcLoudness{}) {
+		t.Fatalf("the button sent %v", rest)
 	}
 }

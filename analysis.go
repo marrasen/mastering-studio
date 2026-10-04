@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
 	"math"
 	"os"
 	"time"
@@ -247,4 +248,55 @@ func rendered(src audio.Seeker, rate int, gap time.Duration, e Edit, chain []Slo
 		return nil, nil, err
 	}
 	return newStage(r, rk), rk.close, nil
+}
+
+// keptMeasure is a track's measure as the project keeps it, with what
+// the album's is measured from, and the file it measured as it was:
+// a file changed since is measured anew.
+type keptMeasure struct {
+	Measure
+	Blocks, Shorts []byte
+	Size           int64
+	Modified       time.Time
+}
+
+// keep returns m, of the file at path, to keep.
+func keep(path string, m Measure) *keptMeasure {
+	k := &keptMeasure{Measure: m, Blocks: floats(m.blocks), Shorts: floats(m.shorts)}
+	if fi, err := os.Stat(path); err == nil {
+		k.Size, k.Modified = fi.Size(), fi.ModTime()
+	}
+	return k
+}
+
+// measure returns the measure kept, where the file at path is as it was
+// measured.
+func (k *keptMeasure) measure(path string) (Measure, bool) {
+	if k == nil {
+		return Measure{}, false
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Size() != k.Size || !fi.ModTime().Equal(k.Modified) {
+		return Measure{}, false
+	}
+	m := k.Measure
+	m.blocks, m.shorts = unfloats(k.Blocks), unfloats(k.Shorts)
+	return m, true
+}
+
+// floats packs powers as 32-bit floats, as the project keeps them.
+func floats(vs []float64) []byte {
+	b := make([]byte, 0, 4*len(vs))
+	for _, v := range vs {
+		b = binary.LittleEndian.AppendUint32(b, math.Float32bits(float32(v)))
+	}
+	return b
+}
+
+func unfloats(b []byte) []float64 {
+	vs := make([]float64, len(b)/4)
+	for i := range vs {
+		vs[i] = float64(math.Float32frombits(binary.LittleEndian.Uint32(b[4*i:])))
+	}
+	return vs
 }

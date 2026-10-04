@@ -6,6 +6,8 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -278,7 +280,11 @@ func TestReplacingATracksFileKeepsItsEditAndChain(t *testing.T) {
 		t.Fatalf("after the replacement the track is %+v", *tr)
 	}
 	tr.Chain = nil
-	settle(t, a, func() bool { return tr.Scanned && tr.Measured && !tr.Measuring })
+	if !tr.Stale {
+		t.Fatal("a new file leaves the track's measure as fresh")
+	}
+	a.handle(CalcLoudness{})
+	settle(t, a, func() bool { return tr.Scanned && !tr.Stale && !tr.Measuring })
 	if tr.Frames == 0 {
 		t.Fatal("the new file was never read")
 	}
@@ -314,5 +320,113 @@ func TestEndingStopsThePluginsAtWorkBeforeUnloadingThem(t *testing.T) {
 	modulesMu.Unlock()
 	if left != 0 || len(a.racks) != 0 {
 		t.Fatalf("after the end, %d modules and %d chains are loaded", left, len(a.racks))
+	}
+}
+
+// measuredApp returns an application of the three tracks writeAlbum
+// writes, each measured, kept in a project file of its own.
+func measuredApp(t *testing.T) *app {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	a := newApp(ctx, newDeck(audio.NewMixer()), filepath.Join(t.TempDir(), "album.json"))
+	for _, p := range writeAlbum(t) {
+		a.add(p, "", Edit{})
+	}
+	settle(t, a, func() bool {
+		for _, tr := range a.Tracks {
+			if !tr.Measured || tr.Measuring || tr.Stale {
+				return false
+			}
+		}
+		return true
+	})
+	return a
+}
+
+func TestAChangeWaitsForCalcLoudnessToBeMeasured(t *testing.T) {
+	a := measuredApp(t)
+	tr := &a.Tracks[1]
+	was := tr.Measure.LUFS
+	a.handle(SetEdit{ID: tr.ID, Edit: Edit{Gain: -6}, Seq: 1})
+	if !tr.Stale || tr.Measuring || len(a.settle) != 0 {
+		t.Fatalf("after a change the track is stale %v, measuring %v, with %d measurings due", tr.Stale, tr.Measuring, len(a.settle))
+	}
+	a.handle(CalcLoudness{})
+	if !a.Tracks[1].Measuring || a.Tracks[0].Measuring {
+		t.Fatal("Calc LUFS measures other than the track changed")
+	}
+	settle(t, a, func() bool { return !tr.Measuring })
+	if tr.Stale || math.Abs(float64(tr.Measure.LUFS-(was-6))) > 0.1 {
+		t.Fatalf("measured again, the track is %.2f LUFS (stale %v), want %.2f", tr.Measure.LUFS, tr.Stale, was-6)
+	}
+}
+
+func TestAChangeWhileMeasuringLeavesTheTrackStale(t *testing.T) {
+	a := measuredApp(t)
+	tr := &a.Tracks[0]
+	a.handle(SetEdit{ID: tr.ID, Edit: Edit{Gain: -3}, Seq: 1})
+	a.handle(CalcLoudness{})
+	a.startMeasures()
+	// Changed again before the measure comes back.
+	a.handle(SetEdit{ID: tr.ID, Edit: Edit{Gain: -9}, Seq: 2})
+	settle(t, a, func() bool { return !tr.Measuring })
+	if !tr.Stale {
+		t.Fatal("a measure of the track as it was left it fresh")
+	}
+}
+
+func TestAProjectKeepsItsMeasuresUntilAFileChanges(t *testing.T) {
+	a := measuredApp(t)
+	a.handle(SetEdit{ID: a.Tracks[2].ID, Edit: Edit{Gain: -1}, Seq: 1})
+	a.save()
+	// The second file changes on disk.
+	f, err := os.OpenFile(a.Tracks[1].File, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.Write([]byte{0})
+	_ = f.Close()
+	b := newApp(a.ctx, newDeck(audio.NewMixer()), a.file)
+	b.load()
+	one, two, three := b.Tracks[0], b.Tracks[1], b.Tracks[2]
+	if !one.Measured || one.Measuring || one.Stale || one.Measure.LUFS != a.Tracks[0].Measure.LUFS {
+		t.Fatalf("the first track came back %+v, want as measured", one)
+	}
+	if !two.Measuring {
+		t.Fatal("a track whose file changed is not measured again")
+	}
+	if !three.Measured || !three.Stale || three.Measuring {
+		t.Fatal("a track changed since it was measured came back otherwise")
+	}
+	// The album's loudness waits for the track measured again.
+	settle(t, b, func() bool { return !b.Tracks[1].Measuring })
+	if !b.Loudness.Loud {
+		t.Fatal("with every track measured, the album has no loudness")
+	}
+}
+
+func TestAnExportedTrackIsMeasuredAsWritten(t *testing.T) {
+	a := measuredApp(t)
+	tr := &a.Tracks[0]
+	a.handle(SetEdit{ID: tr.ID, Edit: Edit{Gain: -4}, Seq: 1})
+	a.ExportDir = t.TempDir()
+	a.handle(Export{IDs: []int{tr.ID}})
+	settle(t, a, func() bool { return !a.Exporting })
+	if tr.Stale || tr.Measure.LUFS != tr.Out.LUFS {
+		t.Fatalf("exported, the track is stale %v at %.2f LUFS, written at %.2f", tr.Stale, tr.Measure.LUFS, tr.Out.LUFS)
+	}
+}
+
+func TestThePluginsAddedLastComeFirst(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	for i := range 10 {
+		a.used(PluginChoice{Path: "p", Class: strconv.Itoa(i)})
+	}
+	a.used(PluginChoice{Path: "p", Class: "4"})
+	if len(a.Recent) != recentPlugins || a.Recent[0].Class != "4" || a.Recent[1].Class != "9" {
+		t.Fatalf("recent are %v", a.Recent)
 	}
 }

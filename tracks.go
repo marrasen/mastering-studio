@@ -387,7 +387,14 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		off := t.Measure.LUFS - s.Target
 		c := loudnessColor(off)
 		lufs := shapedFace(fmt.Sprintf("%.1f", lk.lufs.Value()), 15, true, true)
-		lufs.Paint(p, geom.Pt(right-lufs.Advance, row.Min.Y+9), faded(c, in))
+		alpha := in
+		if t.Stale {
+			// Changed since: the reading is old, faint, with a dot by
+			// it, until Calc LUFS measures it again.
+			alpha *= 0.4
+			p.RRect(geom.Rc(right-lufs.Advance-11, row.Min.Y+15, 6, 6), 3, paint.Solid(faded(amber, in)))
+		}
+		lufs.Paint(p, geom.Pt(right-lufs.Advance, row.Min.Y+9), faded(c, alpha))
 		tp := lk.peak.Value()
 		sub := fmt.Sprintf("%+.1f · TP %.1f", off, tp)
 		tpColor := faded(ink, 0.5*in)
