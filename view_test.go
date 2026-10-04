@@ -265,3 +265,94 @@ func TestAnAlbumExportsEachTrackAtItsOwnLength(t *testing.T) {
 		}
 	}
 }
+
+func TestThePointerPassingOverTheListMovesNoTrack(t *testing.T) {
+	a := album()
+	two := a.Tracks[0]
+	two.ID, two.Title = 2, "Two"
+	a.Tracks = append(a.Tracks, two)
+	w, r, run := stage(t, a)
+	b := boundsOf(t, w, run, r.list)
+	for i := range 20 {
+		w.Input(input.PointerMove{Pos: b.Min.Add(geom.Pt(40, 10+float32(i)*12))})
+		run(1)
+		if r.list.moving != 0 {
+			t.Fatalf("move %d: with no button down, the pointer drags track %d", i, r.list.moving)
+		}
+		if y := r.list.rows[1].y.Value(); y != 0 {
+			t.Fatalf("move %d: the first track is at %.1f, want 0", i, y)
+		}
+	}
+}
+
+// chained returns the album with a chain of two plugins on its track.
+func chained() Album {
+	a := album()
+	a.Tracks[0].Chain = []Slot{
+		{ID: 7, Name: "Ozone 11 Equalizer With A Long Name", Vendor: "iZotope"},
+		{ID: 8, Name: "Ozone 11 Maximizer", Vendor: "iZotope", Latency: 2048},
+	}
+	return a
+}
+
+func TestAClickOnACardsLightBypassesItsPluginAndOnItOpensItsEditor(t *testing.T) {
+	w, r, run := stage(t, chained())
+	b := boundsOf(t, w, run, r.chain)
+	k := r.chain.cards[8]
+	light := b.Min.Add(r.chain.powerAt(k))
+	w.Input(input.PointerMove{Pos: light})
+	w.Input(input.PointerDown{Pos: light, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: light, Button: input.ButtonPrimary})
+	run(1)
+	body := b.Min.Add(r.chain.cardRect(k).Center().Add(geom.Pt(20, 0)))
+	w.Input(input.PointerMove{Pos: body})
+	w.Input(input.PointerDown{Pos: body, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: body, Button: input.ButtonPrimary})
+	run(1)
+	_, sent := edits(w)
+	want := []gunim.Intent{SetBypass{Track: 1, Slot: 8, On: true}, ShowEditor{Track: 1, Slot: 8}}
+	if len(sent) != 2 || sent[0] != want[0] || sent[1] != want[1] {
+		t.Fatalf("the clicks sent %v, want %v", sent, want)
+	}
+}
+
+func TestTheChainsCardsLeaveRoomForItsButtons(t *testing.T) {
+	a := chained()
+	for i := range 4 {
+		a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 20 + i, Name: "Another Plugin Of Some Length", Vendor: "Somebody"})
+	}
+	_, r, run := stage(t, a)
+	run(40)
+	c := r.chain
+	last := c.cards[c.order[len(c.order)-1]]
+	end := c.cardRect(last).Max.X
+	copyAt := c.size.W - pillWidth("Copy to…")
+	if end > copyAt || c.addX+pillWidth("+ Plugin") > copyAt+1 {
+		t.Fatalf("the cards end at %.0f and the add button at %.0f, past the copy button at %.0f", end, c.addX+pillWidth("+ Plugin"), copyAt)
+	}
+}
+
+func TestThePluginPickerFindsAPluginByItsName(t *testing.T) {
+	a := chained()
+	a.Plugins = []PluginChoice{{Name: "Ozone 11 Equalizer", Vendor: "iZotope", Kind: "Fx|EQ"},
+		{Name: "Ozone 11 Maximizer", Vendor: "iZotope", Kind: "Fx|Dynamics"},
+		{Name: "Pro-Q 3", Vendor: "FabFilter", Kind: "Fx|EQ"}, {Name: "Pro-L 2", Vendor: "FabFilter", Kind: "Fx|Dynamics"}}
+	w, r, run := stage(t, a)
+	b := boundsOf(t, w, run, r.chain)
+	at := b.Min.Add(geom.Pt(r.chain.addX+20, b.Size().H/2))
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(10)
+	if !r.chain.picker.IsOpen() {
+		t.Fatal("the add button opened no picker")
+	}
+	w.Input(input.TextInput{Text: "pro-l"})
+	run(10)
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	run(10)
+	_, sent := edits(w)
+	if len(sent) != 1 || sent[0] != (AddPlugin{Track: 1, Choice: a.Plugins[3]}) {
+		t.Fatalf("picking sent %v, want Pro-L 2 added", sent)
+	}
+}

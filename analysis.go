@@ -125,14 +125,19 @@ type Measure struct {
 	Length time.Duration
 }
 
-// measure reads a track through as rendered, at its file's rate.
-func measure(ctx context.Context, path string, gap time.Duration, e Edit) (Measure, error) {
+// measure reads a track through as rendered, at its file's rate, and
+// through its chain.
+func measure(ctx context.Context, path string, gap time.Duration, e Edit, chain []Slot, states map[int][]byte) (Measure, error) {
 	src, format, closer, err := openTrack(path)
 	if err != nil {
 		return Measure{}, err
 	}
 	defer closer()
-	r := newRender(src, format.SampleRate, gap, e)
+	r, done, err := rendered(src, format.SampleRate, gap, e, chain, states)
+	if err != nil {
+		return Measure{}, err
+	}
+	defer done()
 	lm := audio.NewLoudnessMeter(format.SampleRate)
 	var tp audio.TruePeakMeter
 	buf := make([]float32, 2*8192)
@@ -157,3 +162,18 @@ func measure(ctx context.Context, path string, gap time.Duration, e Edit) (Measu
 
 // dB is a level, 1 at full scale, in decibels.
 func dB(v float64) float64 { return 20 * math.Log10(max(v, 1e-9)) }
+
+// rendered returns a track as exported: rendered from src, at rate, and
+// run through a copy of its chain, offline, which done lets go of.
+func rendered(src audio.Seeker, rate int, gap time.Duration, e Edit, chain []Slot, states map[int][]byte) (
+	out audio.Seeker, done func(), err error) {
+	r := newRender(src, rate, gap, e)
+	if len(chain) == 0 {
+		return r, func() {}, nil
+	}
+	rk, err := offlineRack(chain, states, rate)
+	if err != nil {
+		return nil, nil, err
+	}
+	return newStage(r, rk), rk.close, nil
+}

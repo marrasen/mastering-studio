@@ -37,7 +37,10 @@ type root struct {
 	trans  *transport
 	strip  *strip
 	meters *meters
-	size   geom.Size
+	chain  *chainRow
+	// chainMenu is the chain's menus, around it.
+	chainMenu *widget.ContextMenu
+	size      geom.Size
 }
 
 func newRoot(d *deck) *root {
@@ -54,6 +57,9 @@ func newRoot(d *deck) *root {
 	r.trans = newTransport(r)
 	r.strip = newStrip(r)
 	r.meters = newMeters(r)
+	r.chain = newChainRow(r)
+	r.chainMenu = widget.NewContextMenu(r.chain)
+	r.chain.menu = r.chainMenu
 	return r
 }
 
@@ -75,6 +81,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 	t, _ := r.track()
 	r.editor.show(was, t)
 	r.tools.show(t)
+	r.chain.show(t, s)
 	r.trans.show(s)
 	r.strip.show(s)
 	r.meters.show(was, s)
@@ -83,7 +90,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 
 // Children implements [gunim.Composite].
 func (r *root) Children() []gunim.Node {
-	return []gunim.Node{r.header, r.drop, r.editor, r.tools, r.trans, r.strip, r.meters}
+	return []gunim.Node{r.header, r.drop, r.editor, r.tools, r.trans, r.strip, r.meters, r.chainMenu}
 }
 
 // Focusable implements [gunim.Focusable]: the window's keys come here.
@@ -95,6 +102,7 @@ const (
 	listW   = 340
 	metersW = 330
 	toolsH  = 64
+	chainH  = 60
 	transH  = 76
 	stripH  = 92
 	gutter  = 12
@@ -117,8 +125,9 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	bottom := area.Max.Y - gutter
 	place(5, geom.Rc(x0, bottom-stripH, x1-x0, stripH))
 	place(4, geom.Rc(x0, bottom-stripH-gutter-transH, x1-x0, transH))
+	place(7, geom.Rc(x0, bottom-stripH-gutter-transH-gutter-chainH, x1-x0, chainH))
 	edTop := top + gutter
-	edBottom := bottom - stripH - gutter - transH - gutter - toolsH
+	edBottom := bottom - stripH - gutter - transH - gutter - chainH - toolsH
 	place(2, geom.Rc(x0, edTop, x1-x0, max(edBottom-edTop, 80)))
 	place(3, geom.Rc(x0, edBottom, x1-x0, toolsH))
 	return size

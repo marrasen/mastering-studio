@@ -52,7 +52,7 @@ type trackList struct {
 }
 
 func newTrackList(r *root) *trackList {
-	return &trackList{r: r, rows: map[int]*rowLook{}}
+	return &trackList{r: r, rows: map[int]*rowLook{}, down: -1}
 }
 
 func (l *trackList) look(id int) *rowLook {

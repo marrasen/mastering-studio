@@ -147,7 +147,7 @@ func TestTheCurvesRiseFromNothingToFull(t *testing.T) {
 func TestAnExportIsMeasuredAsItWillSound(t *testing.T) {
 	path := writeTrack(t, 0, 4*time.Second, 0, 0.2)
 	e := Edit{FadeOut: Fade{Length: time.Second, Curve: Natural}}
-	want, err := measure(context.Background(), path, 2*time.Second, e)
+	want, err := measure(context.Background(), path, 2*time.Second, e, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

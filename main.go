@@ -5,6 +5,10 @@
 // as each edit settles; and exported one at a time, each at its own
 // length, to WAV files of 16 or 24 bits, dithered, or 32-bit float.
 //
+// Each track runs through a chain of VST3 plugins of its own: only the
+// track heard has its plugins running, and a track is measured and
+// exported through a copy of its chain, run offline.
+//
 //	go run ./example/mastering
 //	go run ./example/mastering mix1.wav mix2.wav
 //
@@ -22,6 +26,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -37,17 +42,37 @@ func main() {
 	after := flag.Duration("after", 2*time.Second, "how long -shot waits")
 	play := flag.Bool("play", false, "start playing the track picked")
 	size := flag.String("size", "1440x900", "the window's size")
+	plugins := flag.String("plugins", "", "more folders of VST3 plugins, beside the system's, as a list like PATH")
 	flag.Parse()
 	var w, h float32
 	if _, err := fmt.Sscanf(*size, "%gx%g", &w, &h); err != nil || w <= 0 || h <= 0 {
 		log.Fatalf("mastering: -size %q: want a width and a height, as 1440x900", *size)
 	}
-	if err := run(*state, flag.Args(), *play, *shot, *after, geom.Sz(w, h)); err != nil {
+	o := options{file: *state, paths: flag.Args(), play: *play, shot: *shot, after: *after, size: geom.Sz(w, h)}
+	if *plugins != "" {
+		o.plugins = filepath.SplitList(*plugins)
+	}
+	if err := run(o); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(file string, paths []string, play bool, shot string, after time.Duration, size geom.Size) error {
+// options are how the program runs.
+type options struct {
+	// file is where the album is kept, paths the files to add, and play
+	// says to start playing.
+	file  string
+	paths []string
+	play  bool
+	// shot is a PNG file to write the window to, after after.
+	shot  string
+	after time.Duration
+	size  geom.Size
+	// plugins are more folders of plugins.
+	plugins []string
+}
+
+func run(o options) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	mix := audio.NewMixer()
@@ -60,26 +85,26 @@ func run(file string, paths []string, play bool, shot string, after time.Duratio
 		d.spk = spk
 	}
 	err := gunim.Main(ctx, func(a *gunim.App) error {
-		w, err := a.NewWindow(gunim.WindowOptions{Title: "Mastering", Size: size})
+		w, err := a.NewWindow(gunim.WindowOptions{Title: "Mastering", Size: o.size})
 		if err != nil {
 			return fmt.Errorf("mastering: %w", err)
 		}
 		registerViews(w, d)
 		c := w.Client()
-		if shot != "" {
+		if o.shot != "" {
 			go func() {
 				select {
-				case <-time.After(after):
+				case <-time.After(o.after):
 				case <-ctx.Done():
 					return
 				}
-				if err := writeShot(ctx, c, shot); err != nil {
+				if err := writeShot(ctx, c, o.shot); err != nil {
 					log.Print(err)
 				}
 				c.Close()
 			}()
 		}
-		return serve(ctx, c, d, file, paths, play)
+		return serve(ctx, c, d, o)
 	})
 	if errors.Is(err, driver.ErrNoDriver) {
 		log.Print("gunim has no driver for this operating system yet")

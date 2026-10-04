@@ -32,6 +32,8 @@ type exportJob struct {
 	out    string
 	bits   int
 	dither bool
+	chain  []Slot
+	states map[int][]byte
 }
 
 // export renders tracks to WAV files, one at a time, each at its own
@@ -53,8 +55,10 @@ func (a *app) export(ids []int) {
 		if len(ids) > 0 && !slices.Contains(ids, t.ID) {
 			continue
 		}
+		chain, states := a.chainOf(&a.Tracks[i])
 		jobs = append(jobs, exportJob{id: t.ID, path: t.File, edit: t.Edit, gap: a.Gap,
-			out: filepath.Join(dir, exportName(i+1, t.Title)), bits: a.Bits, dither: a.Dither})
+			out: filepath.Join(dir, exportName(i+1, t.Title)), bits: a.Bits, dither: a.Dither,
+			chain: chain, states: states})
 		if tr := a.track(t.ID); tr != nil {
 			tr.Progress, tr.Exported = 0.001, ""
 		}
@@ -90,7 +94,11 @@ func exportTrack(j exportJob, progress func(float32)) (Measure, error) {
 		return Measure{}, err
 	}
 	defer closer()
-	r := newRender(src, format.SampleRate, j.gap, j.edit)
+	r, done, err := rendered(src, format.SampleRate, j.gap, j.edit, j.chain, j.states)
+	if err != nil {
+		return Measure{}, err
+	}
+	defer done()
 	f, err := os.Create(j.out)
 	if err != nil {
 		return Measure{}, err
@@ -103,7 +111,7 @@ func exportTrack(j exportJob, progress func(float32)) (Measure, error) {
 	lm := audio.NewLoudnessMeter(format.SampleRate)
 	var tp audio.TruePeakMeter
 	buf := make([]float32, 2*8192)
-	var done int64
+	var at int64
 	last := time.Now()
 	for {
 		n, rerr := r.Read(buf)
@@ -113,10 +121,10 @@ func exportTrack(j exportJob, progress func(float32)) (Measure, error) {
 			_ = f.Close()
 			return Measure{}, werr
 		}
-		done += int64(n)
+		at += int64(n)
 		if time.Since(last) > 50*time.Millisecond {
 			last = time.Now()
-			progress(float32(done) / float32(max(r.Len(), 1)))
+			progress(float32(at) / float32(max(r.Len(), 1)))
 		}
 		if rerr != nil || n == 0 {
 			break

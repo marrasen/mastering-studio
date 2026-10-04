@@ -47,6 +47,10 @@ type (
 		Exporting bool
 		// Note says what went wrong last, for the window to show.
 		Note string
+		// Plugins are the effects this computer has, once found, which
+		// Scanning says is under way.
+		Plugins  []PluginChoice
+		Scanning bool
 	}
 	// Track is one of the album's tracks.
 	Track struct {
@@ -57,6 +61,8 @@ type (
 		// Seq is the window's count of edits taken, so it can tell its
 		// own edit coming back from an older one.
 		Seq int
+		// Chain is the plugins the track runs through, after its edit.
+		Chain []Slot
 		// Scanned says the file has been read through: its format,
 		// length, waveform and where its sound starts and ends.
 		Scanned    bool
@@ -121,6 +127,29 @@ type (
 	ChooseExportDir struct{}
 	// Export exports tracks: those named, or every one.
 	Export struct{ IDs []int }
+
+	// AddPlugin adds an effect to the end of a track's chain.
+	AddPlugin struct {
+		Track  int
+		Choice PluginChoice
+	}
+	// RemovePlugin takes a plugin out of a track's chain.
+	RemovePlugin struct{ Track, Slot int }
+	// MovePlugin moves the plugin at From in a track's chain to To.
+	MovePlugin struct{ Track, From, To int }
+	// SetBypass passes a plugin by, or runs it again.
+	SetBypass struct {
+		Track, Slot int
+		On          bool
+	}
+	// ShowEditor opens a plugin's editor.
+	ShowEditor struct{ Track, Slot int }
+	// CopyChain gives the tracks To a copy of track From's chain, every
+	// plugin as it is set; To empty means every other track.
+	CopyChain struct {
+		From int
+		To   []int
+	}
 )
 
 // albumTopic is what the window watches.
@@ -142,6 +171,15 @@ type project struct {
 type keptTrack struct {
 	Title, File string
 	Edit        Edit
+	Chain       []keptSlot `json:",omitempty"`
+}
+
+// keptSlot is a plugin of a chain, kept with its state.
+type keptSlot struct {
+	Path, Class  string
+	Name, Vendor string
+	Bypass       bool
+	State        []byte
 }
 
 // projectFile returns where the album is kept, in the user's settings.
@@ -179,6 +217,16 @@ type app struct {
 	// than it is worth reopening the file.
 	replayed time.Time
 	replay   <-chan time.Time
+	// racks are the tracks' chains, loaded, by track: a track's is
+	// loaded once it plays or its editor opens. states are the plugins'
+	// states, by slot, as last read, and slots counts the slots made.
+	racks  map[int]*rack
+	states map[int][]byte
+	slots  int
+	// pluginDirs are where else to look for plugins, and found carries
+	// what was found.
+	pluginDirs []string
+	found      chan []PluginChoice
 }
 
 type scanned struct {
@@ -207,7 +255,8 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 	a := &app{ctx: ctx, d: d, file: file,
 		scans: make(chan scanned, 16), measures: make(chan measured, 16),
 		measurer: map[int]context.CancelFunc{}, settle: map[int]time.Time{},
-		chosen: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64)}
+		chosen: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
+		racks: map[int]*rack{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1)}
 	a.Gap, a.Target, a.Bits, a.Dither, a.Volume = time.Second, -14, 16, true, 0.8
 	return a
 }
@@ -232,6 +281,13 @@ func (a *app) load() {
 		if i == p.Current {
 			a.Current = id
 		}
+		t := a.track(id)
+		for _, s := range k.Chain {
+			a.slots++
+			t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
+				Vendor: s.Vendor, Bypass: s.Bypass})
+			a.states[a.slots] = s.State
+		}
 	}
 }
 
@@ -241,10 +297,16 @@ func (a *app) save() {
 		return
 	}
 	a.dirty = false
+	a.readStates()
 	p := project{Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither, ExportDir: a.ExportDir,
 		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current)}
 	for _, t := range a.Tracks {
-		p.Tracks = append(p.Tracks, keptTrack{Title: t.Title, File: t.File, Edit: t.Edit})
+		k := keptTrack{Title: t.Title, File: t.File, Edit: t.Edit}
+		for _, s := range t.Chain {
+			k.Chain = append(k.Chain, keptSlot{Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor,
+				Bypass: s.Bypass, State: a.states[s.ID]})
+		}
+		p.Tracks = append(p.Tracks, k)
 	}
 	b, err := json.MarshalIndent(p, "", "\t")
 	if err == nil {
@@ -331,13 +393,14 @@ func (a *app) startMeasures() {
 		}
 		ctx, cancel := context.WithCancel(a.ctx)
 		a.measurer[id] = cancel
+		chain, states := a.chainOf(t)
 		go func(path string, gap time.Duration, e Edit, seq int) {
 			select {
 			case slots <- struct{}{}:
 			case <-ctx.Done():
 				return
 			}
-			m, err := measure(ctx, path, gap, e)
+			m, err := measure(ctx, path, gap, e, chain, states)
 			<-slots
 			if ctx.Err() != nil {
 				return
@@ -365,19 +428,25 @@ func (a *app) nextSettle() <-chan time.Time {
 }
 
 // serve keeps the album and hears what the window sends.
-func serve(ctx context.Context, c gunim.Client, d *deck, file string, paths []string, play bool) error {
-	a := newApp(ctx, d, file)
+func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
+	a := newApp(ctx, d, o.file)
+	a.pluginDirs = o.plugins
 	a.choose = func(o driver.ChooseOptions) ([]string, error) { return c.ChooseFiles(ctx, o) }
 	a.load()
-	for _, p := range paths {
+	for _, p := range o.paths {
 		a.add(p, "", Edit{})
 	}
 	a.applyLevel()
+	a.Scanning = true
+	go func() { a.found <- scanPlugins(a.pluginDirs) }()
+	defer a.closeRacks()
 	if err := c.Mount(gunim.Root, "album", "album", a.Album, albumTopic); err != nil {
 		return err
 	}
+	watch := time.NewTicker(time.Second)
+	defer watch.Stop()
 	_ = c.Focus("album")
-	if play {
+	if o.play {
 		a.play(0, 10*time.Millisecond)
 	}
 	defer a.save()
@@ -417,6 +486,12 @@ func serve(ctx context.Context, c gunim.Client, d *deck, file string, paths []st
 			a.dirty = true
 		case p := <-a.progress:
 			a.exportProgress(p)
+		case ps := <-a.found:
+			a.Plugins, a.Scanning = ps, false
+		case <-watch.C:
+			if !a.watchPlugins() {
+				continue
+			}
 		case <-a.d.done():
 			// The track played to its end.
 			a.Playing = false
@@ -484,8 +559,11 @@ func (a *app) replayEdit() {
 		return
 	}
 	a.replayed = time.Now()
-	at, _, _ := a.d.position()
-	a.play(at, 15*time.Millisecond)
+	t := a.track(a.Current)
+	if t == nil || !a.d.edit(t.ID, t.File, a.Gap, t.Edit) {
+		at, _, _ := a.d.position()
+		a.play(at, 15*time.Millisecond)
+	}
 }
 
 // applyLevel sets the listening level, matched to the target where
@@ -505,7 +583,7 @@ func (a *app) play(at, fade time.Duration) {
 	if t == nil {
 		return
 	}
-	if err := a.d.play(t.ID, t.File, a.Gap, t.Edit, at, false, fade); err != nil {
+	if err := a.d.play(t.ID, t.File, a.Gap, t.Edit, a.rackOf(t), at, false, fade); err != nil {
 		a.Note = err.Error()
 		return
 	}
@@ -535,6 +613,13 @@ func (a *app) handle(in gunim.Intent) {
 		}()
 	case RemoveTrack:
 		if i := a.place(in.ID); i >= 0 {
+			if a.Current == in.ID {
+				a.d.stop()
+			}
+			a.dropRack(in.ID)
+			for _, s := range a.Tracks[i].Chain {
+				delete(a.states, s.ID)
+			}
 			a.Tracks = slices.Delete(a.Tracks, i, i+1)
 			if a.Current == in.ID {
 				a.d.stop()
@@ -628,5 +713,7 @@ func (a *app) handle(in gunim.Intent) {
 		a.dirty = true
 	case Export:
 		a.export(in.IDs)
+	default:
+		a.handleChain(in)
 	}
 }

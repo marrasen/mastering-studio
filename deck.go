@@ -19,9 +19,11 @@ type deck struct {
 	an  *audio.Analyzer
 	spk *speaker.Speaker
 
-	mu     sync.Mutex
-	voice  *audio.Voice
-	closer func()
+	mu    sync.Mutex
+	voice *audio.Voice
+	// sw is the track playing, as edited, and rack its chain.
+	sw   *switcher
+	rack *rack
 	// id is the track playing, and volume the listening level, as a
 	// ratio, with match, the gain that brings the track to the target
 	// loudness while levels are matched.
@@ -36,38 +38,64 @@ func newDeck(mix *audio.Mixer) *deck {
 }
 
 // play plays track id, rendered from the file at path with the album's
-// gap and the edit e, from at, paused or not; the track before fades out
-// over fade, and this one in.
-func (d *deck) play(id int, path string, gap time.Duration, e Edit, at time.Duration, paused bool, fade time.Duration) error {
+// gap and the edit e, through its chain, r, from at, paused or not; the
+// track before fades out over fade, and this one in.
+func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at time.Duration, paused bool, fade time.Duration) error {
 	src, format, closer, err := openTrack(path)
 	if err != nil {
 		return err
 	}
-	r := newRender(src, format.SampleRate, gap, e)
-	out := audio.Resample(r, format.SampleRate)
+	sw := &switcher{cur: newRender(src, format.SampleRate, gap, e), closer: closer}
+	out := audio.Resample(newStage(sw, r), format.SampleRate)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.stopLocked(fade)
+	r.setActive(true)
 	d.voice = d.mix.Play(out, audio.Options{Volume: max(d.volume*d.match, 1e-6), FadeIn: fade, Paused: paused})
 	// Seeking through the voice, so it says where it is from the start.
 	_ = d.voice.Seek(at)
-	d.closer, d.id = closer, id
+	d.sw, d.rack, d.id = sw, r, id
 	return nil
 }
 
+// edit plays track id as edited anew, from where it is, with a crossfade
+// too short to hear as one; it returns false where the track is not the
+// one playing.
+func (d *deck) edit(id int, path string, gap time.Duration, e Edit) bool {
+	d.mu.Lock()
+	sw := d.sw
+	same := d.voice != nil && d.id == id
+	d.mu.Unlock()
+	if !same {
+		return false
+	}
+	src, format, closer, err := openTrack(path)
+	if err != nil {
+		return false
+	}
+	sw.swap(newRender(src, format.SampleRate, gap, e), closer, format.SampleRate*15/1000)
+	return true
+}
+
 // stopLocked fades the voice playing out over fade, and closes its file
-// once it is done. It runs with mu held.
+// once it is done, and stops its chain, unless it plays on. It runs with
+// mu held.
 func (d *deck) stopLocked(fade time.Duration) {
 	if d.voice == nil {
 		return
 	}
-	old, closer := d.voice, d.closer
+	old, sw, r := d.voice, d.sw, d.rack
 	old.Stop(fade)
 	go func() {
 		<-old.Done()
-		closer()
+		sw.close()
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if d.rack != r {
+			r.setActive(false)
+		}
 	}()
-	d.voice, d.closer, d.id = nil, nil, 0
+	d.voice, d.sw, d.rack, d.id = nil, nil, nil, 0
 }
 
 func (d *deck) stop() {
@@ -145,4 +173,88 @@ func (d *deck) spectrum(freqs, out []float32) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.an.Spectrum(freqs, out, nil)
+}
+
+// switcher plays a track's render, and takes a new one for an edit,
+// crossfading from the old.
+type switcher struct {
+	mu     sync.Mutex
+	cur    *render
+	closer func()
+	// old fades out over fade more frames, of fadeLen.
+	old           *render
+	oldCloser     func()
+	fade, fadeLen int
+	buf           []float32
+}
+
+// swap plays r, closed by closer, from where the render before is,
+// crossfading over fade frames.
+func (s *switcher) swap(r *render, closer func(), fade int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.old != nil {
+		s.oldCloser()
+	}
+	_ = r.SeekFrame(s.cur.at)
+	s.old, s.oldCloser, s.cur, s.closer = s.cur, s.closer, r, closer
+	s.fade, s.fadeLen = fade, fade
+}
+
+// Len implements [audio.Seeker].
+func (s *switcher) Len() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cur.Len()
+}
+
+// SeekFrame implements [audio.Seeker].
+func (s *switcher) SeekFrame(f int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropOld()
+	return s.cur.SeekFrame(f)
+}
+
+func (s *switcher) dropOld() {
+	if s.old != nil {
+		s.oldCloser()
+		s.old, s.oldCloser = nil, nil
+	}
+}
+
+// Read implements [audio.Source].
+func (s *switcher) Read(dst []float32) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, err := s.cur.Read(dst)
+	if s.old == nil {
+		return n, err
+	}
+	if cap(s.buf) < 2*n {
+		s.buf = make([]float32, 2*n)
+	}
+	b := s.buf[:2*n]
+	clear(b)
+	_, _ = s.old.Read(b)
+	for i := range n {
+		t := float32(1)
+		if left := s.fade - i; left > 0 {
+			t = 1 - float32(left)/float32(s.fadeLen)
+		}
+		dst[2*i] = dst[2*i]*t + b[2*i]*(1-t)
+		dst[2*i+1] = dst[2*i+1]*t + b[2*i+1]*(1-t)
+	}
+	if s.fade -= n; s.fade <= 0 {
+		s.dropOld()
+	}
+	return n, err
+}
+
+// close closes the renders' files.
+func (s *switcher) close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropOld()
+	s.closer()
 }
