@@ -55,7 +55,7 @@ func (t *transport) show(s Album) {
 	}
 	t.match.setLit(s.Match)
 	t.match.words, t.match.warn = "Match levels", false
-	if tr, ok := t.r.track(); ok && s.Match && !(tr.Measured && tr.Measure.Loud) {
+	if tr, ok := t.r.track(); ok && s.Match && (!tr.Measured || !tr.Measure.Loud) {
 		t.match.words, t.match.warn = "Calc LUFS first", true
 		if tr.Measuring {
 			t.match.words = "Measuring…"
