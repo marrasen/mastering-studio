@@ -271,7 +271,7 @@ func newHeader(r *root) *header {
 }
 
 func (h *header) show(s Album) {
-	h.name = s.Release.Title
+	h.name = s.Title
 	if h.name == "" {
 		h.name = s.AlbumName
 	}
@@ -302,8 +302,8 @@ func (h *header) show(s Album) {
 		total += t.Measure.Length
 	}
 	h.sum = fmt.Sprintf("%d tracks · %s", len(s.Tracks), short(total))
-	if s.Release.Artist != "" {
-		h.sum = s.Release.Artist + " · " + h.sum
+	if s.Artist != "" {
+		h.sum = s.Artist + " · " + h.sum
 	}
 	h.album = "measuring…"
 	if l := s.Loudness; l.Loud {
