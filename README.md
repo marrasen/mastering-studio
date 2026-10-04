@@ -1,0 +1,130 @@
+<img src="docs/icon.png" width="96" align="right" alt="">
+
+# Marras Mastering Studio
+
+Marras Mastering Studio masters an album, an EP or a single. You cut and
+fade each track, run it through its own chain of VST3 plugins, compare
+the tracks by ear at matched loudness, and export them to WAV and MP3,
+measured and tagged.
+
+![Marras Mastering Studio, with a chain of four plugins on each track](docs/studio.png)
+
+## Download
+
+Download the zip for Windows from the
+[latest release](https://github.com/marrasen/mastering-studio/releases/latest),
+unpack it anywhere, and run `MarrasMasteringStudio.exe`. The program is
+unsigned, so Windows may warn about an unknown publisher the first time:
+choose More info, then Run anyway.
+
+To try it without music of your own, run it once with `-demo` and a
+folder. It writes six short demo songs there, and a project of them:
+
+```sh
+MarrasMasteringStudio.exe -demo C:\Temp\demo
+```
+
+## What it does
+
+**Tracks.** Drop audio files on the track list, or use Add tracks. WAV,
+FLAC, MP3 and Ogg Vorbis all work, at their own sample rates. Drag the
+rows to set the order. Double-click a title to rename the track, and
+drop a new file on the waveform to replace a mix and keep its edit and
+chain.
+
+**Editing.** Each track is cut at a start and an end, faded in and out
+with one of five curve shapes, and set apart from the track before by
+the same silence. Edit on the waveform or on the spectrogram. The
+waveform zooms in to the samples themselves, and a slider at its right
+draws quiet sound louder. Notes go on a track, and at times along it.
+
+**Listening.** One track plays at a time. Press a number key to switch
+to another at the same moment in the music, so you compare them by ear.
+Match levels plays every track at the target loudness. Bypass plays the
+mix as it came, in time with the master, and with Match levels on it
+plays at the target loudness too. A loop
+plays a stretch over and over. Autoplay next runs on into the next track
+with no gap, as the exported files will play. Listen in mono, or to the
+side channel alone.
+
+![The spectrogram, with the short-term and integrated loudness and the loudness range over it](docs/spectrogram.png)
+
+**Plugins.** Each track has its own chain of VST3 plugins, such as
+Ozone. Only the track you hear runs its plugins, so the rest cost the
+computer nothing. Open a plugin's own window from the chain. Copy a
+chain to other tracks with every plugin as set. The studio compensates
+for each plugin's latency.
+
+**Measuring.** Tracks are measured as they will be exported, through a
+copy of their chain run offline: integrated loudness (LUFS), loudness
+range (LRA) and true peak. Any change marks a track, and Calc LUFS
+measures the marked tracks, so heavy plugins work only when you ask. To
+target finds the gain that brings a track to the target. The album's
+loudness is measured over all its tracks together. The loudness curves
+along a track show where it is loud and where it is quiet.
+
+**Meters.** The input to the chain and its output each have a peak and
+RMS meter with a fader for the gain. Beside them are the loudness
+against the target, the stereo image and correlation, and the spectrum
+in and out of the chain, or a spectrogram.
+
+**Exporting.** Export writes each track at its own length, several at
+once, to 16 or 24-bit WAV with dither, or 32-bit float. With
+[LAME](https://lame.sourceforge.io/) installed, it writes MP3 as well.
+Each file is tagged with the artist, release, title and track number.
+A text report of the export is written if you ask for one.
+
+**Projects.** A project is a `.mastering` file. It keeps its tracks'
+paths relative to its own folder, so a project opens wherever its
+folder and the music move together.
+
+Press F1 or ? in the studio for every key.
+
+## Building from source
+
+Install [Go](https://go.dev/dl/) 1.27 or later, then:
+
+```sh
+go install github.com/marrasen/mastering-studio@latest
+```
+
+or, from a clone:
+
+```sh
+go run .
+go run . mix1.wav mix2.wav
+```
+
+It builds without a C compiler, and runs on Windows and Linux. It finds
+plugins where VST3 installers put them: on Windows in
+`C:\Program Files\Common Files\VST3`, and on Linux in `~/.vst3`,
+`/usr/lib/vst3` and `/usr/local/lib/vst3`.
+
+These flags help:
+
+| Flag | What it does |
+| --- | --- |
+| `-project FILE` | Open this project. By default the studio opens the project open last. |
+| `-plugins DIRS` | Look for VST3 plugins in these folders too, as a list like PATH. |
+| `-demo DIR` | Write six demo songs and a project of them to this folder, and open it. |
+| `-size WxH` | Open the window at this size, as `1680x1040`. |
+| `-play` | Start playing the track picked. |
+| `-shot FILE` | Write the window to a PNG file after `-after`, then quit. |
+| `-write-icon FILE` | Write the icon to a PNG file, then quit. |
+
+A release is built by pushing a tag such as `v0.1.0`. The
+[Release workflow](.github/workflows/release.yml) builds the Windows
+program with its icon and publishes it.
+
+## Built with gunim
+
+The studio is drawn with [gunim](https://github.com/marrasen/gunim), a
+GPU interface toolkit in pure Go. Its meters, spectrum, waveform and
+loudness displays come from gunim's `audioui` package, and its VST3
+hosting from `audio/vst3`.
+
+## Licence
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+VST is a registered trademark of Steinberg Media Technologies GmbH.
