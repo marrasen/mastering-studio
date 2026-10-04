@@ -270,7 +270,7 @@ func (h *header) show(s Album) {
 		h.name = s.AlbumName
 	}
 	if h.name == "" {
-		h.name = "Untitled album"
+		h.name = "Untitled project"
 	}
 	h.gap.value = s.Gap.Seconds()
 	h.target.value = float64(s.Target)
@@ -369,7 +369,7 @@ func (h *header) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children)
 
 // Paint implements [gunim.Node].
 func (h *header) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
-	// The album's name, a menu of albums under it.
+	// The release's name, the menu of projects under it.
 	if hv := h.hover.Value(); hv > 0.01 {
 		p.RRect(h.titleRect(), 10, paint.Solid(faded(ink, 0.06*hv)))
 	}
@@ -403,7 +403,7 @@ const titleW = 196
 func (h *header) titleRect() geom.Rect { return geom.Rc(8, 6, titleW+40, headerH-12) }
 
 // Handle implements [gunim.Handler]: a press on the album's name opens
-// the menu of albums.
+// the menu of projects.
 func (h *header) Handle(e input.Event, u *gunim.UI) bool {
 	switch e := e.(type) {
 	case input.PointerMove:
@@ -426,8 +426,8 @@ func (h *header) Handle(e input.Event, u *gunim.UI) bool {
 // Focusable implements [gunim.Focusable].
 func (h *header) Focusable() bool { return false }
 
-// openMenu opens the menu of albums: a new one, one opened, this one
-// saved elsewhere, and those opened last.
+// openMenu opens the menu of projects: the release's details, a new
+// one, one opened, this one saved elsewhere, and those opened last.
 func (h *header) openMenu(u *gunim.UI) {
 	m := h.menu
 	recent := []string{}
@@ -436,7 +436,7 @@ func (h *header) openMenu(u *gunim.UI) {
 			recent = append(recent, p)
 		}
 	}
-	m.Items = []string{"Release…", "New album…", "Open album…", "Save album as…"}
+	m.Items = []string{"Edit release details…", "New project…", "Open project…", "Save project as…"}
 	m.Icons = []*icon.Icon{icon.Disc3, icon.FilePlus, icon.FolderOpen, icon.Save}
 	m.Hints, m.Checked, m.Disabled, m.Breaks, m.Captions = nil, nil, nil, nil, nil
 	if len(recent) > 0 {

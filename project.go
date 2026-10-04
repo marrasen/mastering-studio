@@ -19,7 +19,7 @@ import (
 const albumExt = ".mastering"
 
 // albumFilter offers album files in the system's dialogs.
-var albumFilter = []driver.FileFilter{{Name: "Mastering album", Patterns: []string{"*" + albumExt}}}
+var albumFilter = []driver.FileFilter{{Name: "Mastering project", Patterns: []string{"*" + albumExt}}}
 
 // recentAlbums is how many albums opened last the menu lists.
 const recentAlbums = 8
@@ -75,7 +75,7 @@ func (a *app) writeSettings() {
 // albumName is what an album's file is called, as the header shows it.
 func albumName(path string) string {
 	if path == "" || path == untitled() {
-		return "Untitled album"
+		return "Untitled project"
 	}
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 }
@@ -187,14 +187,14 @@ func (a *app) chooseAlbum(in gunim.Intent) {
 		switch in.(type) {
 		case OpenAlbum:
 			var paths []string
-			paths, err = a.choose(driver.ChooseOptions{Title: "Open album", Filters: albumFilter})
+			paths, err = a.choose(driver.ChooseOptions{Title: "Open project", Filters: albumFilter})
 			if len(paths) > 0 {
 				path = paths[0]
 			}
 		case NewAlbum:
-			path, err = a.saveDialog(driver.SaveOptions{Title: "New album", Name: "Album" + albumExt, Filters: albumFilter})
+			path, err = a.saveDialog(driver.SaveOptions{Title: "New project", Name: "Project" + albumExt, Filters: albumFilter})
 		case SaveAlbumAs:
-			path, err = a.saveDialog(driver.SaveOptions{Title: "Save album as", Name: a.AlbumName + albumExt,
+			path, err = a.saveDialog(driver.SaveOptions{Title: "Save project as", Name: a.AlbumName + albumExt,
 				Filters: albumFilter})
 		}
 		if err != nil || path == "" {

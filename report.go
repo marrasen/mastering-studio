@@ -70,7 +70,7 @@ func writeReport(dir string, h reportHead, ts []reportTrack) (string, error) {
 	line("Release:       %s", orNone(h.release.Title))
 	line("Year:          %s", orNone(h.release.Year))
 	line("Genre:         %s", orNone(h.release.Genre))
-	line("Album file:    %s", orNone(h.album))
+	line("Project file:  %s", orNone(h.album))
 	line("Tracks:        %d exported of %d", h.exportedOf, h.tracks)
 	var formats []string
 	if h.wav {

@@ -41,7 +41,7 @@ func newTransport(r *root) *transport {
 		}
 		u.Send(r, SetMatch{On: !r.state.Match})
 	})
-	t.album = newPill("Album", func(u *gunim.UI) { u.Send(r, SetAlbumPlay{On: !r.state.AlbumPlay}) })
+	t.album = newPill("Autoplay next", func(u *gunim.UI) { u.Send(r, SetAlbumPlay{On: !r.state.AlbumPlay}) })
 	t.volume = newValueChip("LISTEN", func(v float64) string { return fmt.Sprintf("%.0f%%", v*100) }, 0.004, 0.05, 0, 1, 0.8,
 		func(v float64, u *gunim.UI) { u.Send(r, SetVolume{Volume: float32(v)}) })
 	return t
@@ -87,7 +87,7 @@ func (t *transport) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	kids.At(4).Place(geom.Pt(size.W-84, mid-22))
 	kids.At(3).Layout(gunim.Tight(geom.Sz(w, 34)))
 	kids.At(3).Place(geom.Pt(size.W-84-12-w, mid-17))
-	aw := pillWidth("Album")
+	aw := pillWidth("Autoplay next")
 	kids.At(5).Layout(gunim.Tight(geom.Sz(aw, 34)))
 	kids.At(5).Place(geom.Pt(size.W-84-12-w-8-aw, mid-17))
 	return size
@@ -110,7 +110,7 @@ func (t *transport) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids g
 		shapedFace(clock(0), 22, true, true).Paint(p, geom.Pt(timeX, box.H/2-20), faded(ink, 0.6))
 	}
 	if ok {
-		room := box.W - timeX - pillWidth("Match levels") - pillWidth("Album") - 128
+		room := box.W - timeX - pillWidth("Match levels") - pillWidth("Autoplay next") - 128
 		paintFit(p, tr.Title, 12, false, geom.Pt(timeX, box.H/2+10), room, faded(ink, 0.55))
 	}
 	if t.r.state.Match && ok && tr.Measured && tr.Measure.Loud {
