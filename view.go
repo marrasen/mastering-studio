@@ -25,6 +25,7 @@ func registerViews(w *gunim.Window, d *deck) {
 		theme.Set(widget.ButtonPrimaryFill, rgb(0x1f, 0x8f, 0x80)),
 		theme.Set(widget.ButtonPrimaryHover, rgb(0x2a, 0xa3, 0x92))))
 	gunim.RegisterView(w, "release", newReleaseDialog, nil)
+	gunim.RegisterView(w, "help", newHelp, nil)
 	gunim.RegisterView(w, "export", newExportDialog,
 		func(e *exportDialog, d ExportDraft, u *gunim.UI) { e.show(d, u) })
 }
@@ -206,6 +207,8 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 		r.editor.setLoopEnd(true, u)
 	case k.Key == input.KeyL:
 		r.editor.toggleLoop(u)
+	case k.Key == input.KeyF1 || (k.Key == input.KeySlash && k.Mods.Has(input.ModShift)):
+		u.Send(r, ShowHelp{})
 	case k.Key == input.KeyB:
 		u.Send(r, SetBypassAll{On: !r.state.Bypass})
 	default:
@@ -239,8 +242,10 @@ type header struct {
 	target *valueChip
 	add    *pill
 	export *pill
-	// calc measures the tracks changed since they were measured.
+	// calc measures the tracks changed since they were measured, and
+	// help shows the keys.
 	calc *pill
+	help *iconButton
 	sum  string
 	// album is the album's loudness and range, measured together, and
 	// albumOff how far its loudness is from the target.
@@ -269,6 +274,7 @@ func newHeader(r *root) *header {
 	})
 	h.export.primary = true
 	h.calc = newPill("Calc LUFS", func(u *gunim.UI) { u.Send(r, CalcLoudness{}) })
+	h.help = newIconButton(icon.CircleHelp, func(u *gunim.UI) { u.Send(r, ShowHelp{}) })
 	return h
 }
 
@@ -342,7 +348,7 @@ func lastDirs(path string) string {
 
 // Children implements [gunim.Composite].
 func (h *header) Children() []gunim.Node {
-	return []gunim.Node{h.gap, h.target, h.add, h.export, h.calc}
+	return []gunim.Node{h.gap, h.target, h.add, h.export, h.calc, h.help}
 }
 
 // Layout implements [gunim.Node]: the settings right of the name, the
@@ -372,6 +378,8 @@ func (h *header) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children)
 		kids.At(i).Place(geom.Pt(right, (size.H-36)/2))
 		right -= 10
 	}
+	kids.At(5).Layout(gunim.Tight(geom.Sz(36, 36)))
+	kids.At(5).Place(geom.Pt(right-36, (size.H-36)/2))
 	return size
 }
 
@@ -444,21 +452,23 @@ func (h *header) openMenu(u *gunim.UI) {
 			recent = append(recent, p)
 		}
 	}
-	m.Items = []string{"Edit release details…", "New project…", "Open project…", "Save project as…"}
-	m.Icons = []*icon.Icon{icon.Disc3, icon.FilePlus, icon.FolderOpen, icon.Save}
-	m.Hints, m.Checked, m.Disabled, m.Breaks, m.Captions = nil, nil, nil, nil, nil
+	m.Items = []string{"Edit release details…", "New project…", "Open project…", "Save project as…",
+		"Keyboard shortcuts"}
+	m.Icons = []*icon.Icon{icon.Disc3, icon.FilePlus, icon.FolderOpen, icon.Save, icon.Keyboard}
+	m.Hints, m.Checked, m.Disabled, m.Captions = nil, nil, nil, nil
+	m.Breaks = []int{1, 4}
 	if len(recent) > 0 {
 		m.Items = append(m.Items, "Recent")
 		m.Icons = append(m.Icons, nil)
-		m.Captions = []int{4}
-		m.Breaks = []int{1, 4}
+		m.Captions = []int{5}
+		m.Breaks = []int{1, 4, 5}
 		for _, p := range recent {
 			m.Items = append(m.Items, albumName(p))
 			m.Icons = append(m.Icons, icon.Disc3)
 		}
 		m.Hints = make([]string, len(m.Items))
 		for i, p := range recent {
-			m.Hints[5+i] = lastDirs(filepath.Dir(p))
+			m.Hints[6+i] = lastDirs(filepath.Dir(p))
 		}
 	}
 	m.Picked = func(i int, u *gunim.UI) {
@@ -471,8 +481,10 @@ func (h *header) openMenu(u *gunim.UI) {
 			u.Send(h, OpenAlbum{})
 		case i == 3:
 			u.Send(h, SaveAlbumAs{})
-		case i >= 5 && i-5 < len(recent):
-			u.Send(h, OpenAlbumPath{Path: recent[i-5]})
+		case i == 4:
+			u.Send(h, ShowHelp{})
+		case i >= 6 && i-6 < len(recent):
+			u.Send(h, OpenAlbumPath{Path: recent[i-6]})
 		}
 	}
 	m.Open(geom.Pt(16, headerH-6), u)

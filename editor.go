@@ -102,6 +102,9 @@ type editor struct {
 	writeAt   time.Duration
 	writeID   int
 	hotMark   int
+	// seekMark stops the seek a click on a note waits to make, as a
+	// second click writes the note anew instead.
+	seekMark func()
 	// dragLoop is the loop as a drag sets it, ahead of the application's
 	// answer, or nil.
 	dragLoop *Loop
@@ -423,9 +426,15 @@ func (e *editor) wheel(ev input.Scroll) {
 	}
 	k := math.Pow(1.25, -n)
 	f0, f1 := e.fit()
-	// As close as a few samples across the editor.
+	// As close as a few samples across the editor, and out as far as the
+	// whole track: zoomed out to it, the view is it.
 	least := 24 / float64(max(e.track.Format.SampleRate, 1))
-	k = max(least/span, min(k, (f1-f0)*1.2/span))
+	if span*k >= f1-f0 {
+		e.v0.Animate(float32(f0), anim.Spring{Response: 0.2, Damping: 1})
+		e.v1.Animate(float32(f1), anim.Spring{Response: 0.2, Damping: 1})
+		return
+	}
+	k = max(least/span, k)
 	at := float64(e.tAt(ev.Pos.X))
 	e.v0.Animate(float32(at-(at-v0)*k), anim.Spring{Response: 0.2, Damping: 1})
 	e.v1.Animate(float32(at+(v1-at)*k), anim.Spring{Response: 0.2, Damping: 1})

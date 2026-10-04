@@ -48,16 +48,22 @@ func main() {
 	shot := flag.String("shot", "", "write the window to this PNG file after -after, and quit")
 	after := flag.Duration("after", 2*time.Second, "how long -shot waits")
 	play := flag.Bool("play", false, "start playing the track picked")
-	size := flag.String("size", "1440x900", "the window's size")
+	size := flag.String("size", "", "the window's size, as 1680x1040; by default where it was last, or 1680x1040")
 	plugins := flag.String("plugins", "", "more folders of VST3 plugins, beside the system's, as a list like PATH")
 	flag.Parse()
-	var w, h float32
-	if _, err := fmt.Sscanf(*size, "%gx%g", &w, &h); err != nil || w <= 0 || h <= 0 {
-		log.Fatalf("mastering: -size %q: want a width and a height, as 1440x900", *size)
+	w, h := float32(1680), float32(1040)
+	if *size != "" {
+		if _, err := fmt.Sscanf(*size, "%gx%g", &w, &h); err != nil || w <= 0 || h <= 0 {
+			log.Fatalf("mastering: -size %q: want a width and a height, as 1680x1040", *size)
+		}
 	}
 	o := options{file: *state, paths: flag.Args(), play: *play, shot: *shot, after: *after, size: geom.Sz(w, h)}
 	if d := configDir(); d != "" {
 		o.settings = filepath.Join(d, "settings.json")
+	}
+	// Where the window was as it closed last, unless a size is asked.
+	if s := readSettings(o.settings); s.Window != nil && *size == "" {
+		o.place = s.Window
 	}
 	if o.file == "" {
 		// The album open last, where it still is.
@@ -89,8 +95,12 @@ type options struct {
 	size  geom.Size
 	// plugins are more folders of plugins.
 	plugins []string
-	// settings is the file of what is kept across albums.
+	// settings is the file of what is kept across albums, and place
+	// where the window opens.
 	settings string
+	place    *driver.Placement
+	// placement says where the window is, to keep as it closes.
+	placement func() (driver.Placement, bool)
 }
 
 func run(o options) error {
@@ -106,11 +116,13 @@ func run(o options) error {
 		d.spk = spk
 	}
 	err := gunim.Main(ctx, func(a *gunim.App) error {
-		w, err := a.NewWindow(gunim.WindowOptions{Title: "Mastering", Size: o.size})
+		w, err := a.NewWindow(gunim.WindowOptions{Title: "Mastering", Size: o.size, Place: o.place,
+			AskToClose: Quit{}})
 		if err != nil {
 			return fmt.Errorf("mastering: %w", err)
 		}
 		registerViews(w, d)
+		o.placement = w.Placement
 		c := w.Client()
 		if o.shot != "" {
 			go func() {

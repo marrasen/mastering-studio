@@ -202,12 +202,22 @@ func (e *editor) handleMarks(ev input.Event, u *gunim.UI) bool {
 				return true
 			}
 			if e.markAt(m).Inset(geom.Uniform(-3)).Contains(ev.Pos) {
+				if e.seekMark != nil {
+					e.seekMark()
+					e.seekMark = nil
+				}
 				if ev.Clicks == 2 {
 					e.startMark(m.At, m.ID, m.Text, u)
-				} else {
-					start, _ := e.span()
-					u.Send(e, SeekTo{At: e.renderTime(max(start, m.At.Seconds()))})
+					return true
 				}
+				// A click seeks to the note, once it is plain no second
+				// click follows to write it anew.
+				start, _ := e.span()
+				to := SeekTo{At: e.renderTime(max(start, m.At.Seconds()))}
+				e.seekMark = u.After(doubleClick, func(u *gunim.UI) {
+					e.seekMark = nil
+					u.Send(e, to)
+				})
 				return true
 			}
 			if card, _ := e.cardOf(i); card.Contains(ev.Pos) {
@@ -301,3 +311,7 @@ func sortMarks(ms []Mark) {
 		}
 	}
 }
+
+// doubleClick is how long a click waits for a second, to be a
+// double-click.
+const doubleClick = 350 * time.Millisecond

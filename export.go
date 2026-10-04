@@ -261,7 +261,13 @@ func exportTrack(ctx context.Context, j exportJob, progress func(float32)) (Meas
 			return fail(err)
 		}
 	}
-	return reading(lm, &tp, duration(r.Len(), format.SampleRate)), sinks[0].path, nil
+	m := reading(lm, &tp, duration(r.Len(), format.SampleRate))
+	if st, ok := r.(*chainStage); ok && st.dryMeter != nil {
+		if l, loud := st.dryMeter.Integrated(); loud {
+			m.DryLUFS, m.DryLoud = float32(l), true
+		}
+	}
+	return m, sinks[0].path, nil
 }
 
 // exportProgress takes the export's progress.

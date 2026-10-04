@@ -189,6 +189,10 @@ type Measure struct {
 	// under three seconds of sound has none.
 	LRA, Low, High float32
 	Ranged         bool
+	// DryLUFS is the loudness of the mix, as it came, which DryLoud says
+	// it has: the chain and the gains bypassed.
+	DryLUFS float32
+	DryLoud bool
 	// blocks and shorts are the powers the loudness and its range are
 	// measured from, for the album's, measured over every track, and
 	// for the editor's curves; running is the integrated loudness from
@@ -248,14 +252,18 @@ func dB(v float64) float64 { return 20 * math.Log10(max(v, 1e-9)) }
 func rendered(src audio.Seeker, rate int, gap time.Duration, e Edit, chain []Slot, states map[int][]byte) (
 	out audio.Seeker, done func(), err error) {
 	r := newRender(src, rate, gap, e)
-	if len(chain) == 0 {
-		return newStage(r, &rack{active: true}, e.Out), func() {}, nil
+	rk, done := &rack{active: true}, func() {}
+	if len(chain) > 0 {
+		if rk, err = offlineRack(chain, states, rate); err != nil {
+			return nil, nil, err
+		}
+		done = rk.close
 	}
-	rk, err := offlineRack(chain, states, rate)
-	if err != nil {
-		return nil, nil, err
-	}
-	return newStage(r, rk, e.Out), rk.close, nil
+	st := newStage(r, rk, e.Out)
+	// The mix's loudness too, as fed, for levels matched while bypassed.
+	st.setIn(e.Gain)
+	st.dryMeter = audio.NewLoudnessMeter(rate)
+	return st, done, nil
 }
 
 // keptMeasure is a track's measure as the project keeps it, with what

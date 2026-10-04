@@ -834,3 +834,22 @@ func TestALoopPlaysOverAndOverAndSaysWhereItIs(t *testing.T) {
 		t.Fatalf("with the loop off, the track is still at %v", at)
 	}
 }
+
+func TestBypassedTheMixIsMatchedAsMeasured(t *testing.T) {
+	path := writeTrack(t, 0, 4*time.Second, 0, 0.1)
+	m, err := measure(context.Background(), path, 0, Edit{Gain: 6, Out: -3}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.DryLoud || math.Abs(float64(m.LUFS-m.DryLUFS-3)) > 0.05 {
+		t.Fatalf("6 dB in and 3 out measure %.2f, the mix %.2f: want 3 between", m.LUFS, m.DryLUFS)
+	}
+	s := Album{Match: true, Target: -14}
+	tr := Track{Measured: true, Measure: m}
+	wet, _ := s.matchDB(&tr)
+	s.Bypass = true
+	dry, _ := s.matchDB(&tr)
+	if math.Abs(float64(dry-wet-3)) > 0.05 {
+		t.Fatalf("bypassed, the mix is matched by %+.2f, the master by %+.2f", dry, wet)
+	}
+}

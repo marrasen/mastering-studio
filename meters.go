@@ -99,8 +99,9 @@ func (m *meters) show(was, s Album) {
 func (m *meters) listening() float64 {
 	s := m.r.state
 	g := dB(float64(s.Volume))
-	if t, ok := m.r.track(); ok && s.Match && t.Measured && t.Measure.Loud {
-		g += float64(max(-24, min(s.Target-t.Measure.LUFS, 24)))
+	if t, ok := m.r.track(); ok {
+		d, _ := s.matchDB(&t)
+		g += float64(d)
 	}
 	return g
 }

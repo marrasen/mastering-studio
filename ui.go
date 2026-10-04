@@ -122,6 +122,9 @@ func loudnessColor(off float32) color.NRGBA {
 // over it, squashed as it is pressed; primary fills it with its colour.
 type iconButton struct {
 	anim.Group
+	// from is the icon the button turns from, as turn runs to 1.
+	from        *icon.Icon
+	turn        *anim.Float
 	ic          *icon.Icon
 	press       func(*gunim.UI)
 	primary     bool
@@ -132,9 +135,21 @@ type iconButton struct {
 }
 
 func newIconButton(ic *icon.Icon, press func(*gunim.UI)) *iconButton {
-	b := &iconButton{ic: ic, press: press, color: teal, hover: anim.NewFloat(0), down: anim.NewFloat(0)}
-	b.Add(b.hover, b.down)
+	b := &iconButton{ic: ic, press: press, color: teal, hover: anim.NewFloat(0), down: anim.NewFloat(0),
+		turn: anim.NewFloat(1)}
+	b.Add(b.hover, b.down, b.turn)
 	return b
+}
+
+// morph turns the icon into ic, the one turning out as the other turns
+// in, as play into pause.
+func (b *iconButton) morph(ic *icon.Icon) {
+	if ic == b.ic {
+		return
+	}
+	b.from, b.ic = b.ic, ic
+	b.turn.Jump(0)
+	b.turn.Animate(1, anim.Spring{Response: 0.35, Damping: 0.75})
 }
 
 // Focusable implements [gunim.Focusable]: the window's own keys work
@@ -193,7 +208,18 @@ func (b *iconButton) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		p.RRect(whole, r, paint.Solid(faded(ink, 0.08*b.hover.Value())))
 	}
 	side := min(box.W, box.H) * 0.46
-	widget.PaintIcon(p, f.Theme, b.ic, geom.Rc(mid.X-side/2, mid.Y-side/2, side, side), c)
+	turn := b.turn.Value()
+	draw := func(ic *icon.Icon, alpha, angle float32) {
+		if ic == nil || alpha <= 0.01 {
+			return
+		}
+		defer p.Push(paint.Rotate(angle, mid))()
+		widget.PaintIcon(p, f.Theme, ic, geom.Rc(mid.X-side/2, mid.Y-side/2, side, side), faded(c, alpha))
+	}
+	if turn < 1 {
+		draw(b.from, 1-turn, turn*math.Pi/2)
+	}
+	draw(b.ic, min(turn, 1), (turn-1)*math.Pi/2)
 }
 
 // valueChip is a value to drag: a label over a figure, which a drag

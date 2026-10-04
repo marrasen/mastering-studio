@@ -112,7 +112,13 @@ func measureOf(ctx context.Context, r audio.Seeker, rate int) (Measure, error) {
 			return Measure{}, err
 		}
 	}
-	return reading(lm, &tp, duration(r.Len(), rate)), nil
+	m := reading(lm, &tp, duration(r.Len(), rate))
+	if st, ok := r.(*chainStage); ok && st.dryMeter != nil {
+		if l, loud := st.dryMeter.Integrated(); loud {
+			m.DryLUFS, m.DryLoud = float32(l), true
+		}
+	}
+	return m, nil
 }
 
 // match brings track id to the target, in the background.

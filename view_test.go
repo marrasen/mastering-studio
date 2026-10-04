@@ -985,3 +985,81 @@ func TestTheLoopChipMakesALoopAndTheEdgesDragIt(t *testing.T) {
 		t.Fatalf("I sent %v", rest)
 	}
 }
+
+func TestZoomingOutStopsAtTheWholeTrack(t *testing.T) {
+	w, r, run := stage(t, album())
+	ed := r.editor
+	b := boundsOf(t, w, run, ed)
+	f0, f1 := ed.fit()
+	for range 30 {
+		w.Input(input.Scroll{Pos: b.Center(), Notches: geom.Pt(0, -1)})
+		run(2)
+	}
+	run(30)
+	if math.Abs(float64(ed.v0.Value())-f0) > 0.01 || math.Abs(float64(ed.v1.Value())-f1) > 0.01 {
+		t.Fatalf("zoomed out all the way, the view is %.2f to %.2f, want the whole track, %.2f to %.2f",
+			ed.v0.Value(), ed.v1.Value(), f0, f1)
+	}
+}
+
+func TestADoubleClickOnANoteWritesItWithoutSeeking(t *testing.T) {
+	a := album()
+	a.Tracks[0].Marks = []Mark{{ID: 5, At: 4 * time.Second, Text: "Snare"}}
+	w, r, run := stage(t, a)
+	ed := r.editor
+	ed.v0.Jump(2)
+	ed.v1.Jump(6)
+	b := boundsOf(t, w, run, ed)
+	pin := b.Min.Add(ed.markAt(a.Tracks[0].Marks[0]).Center())
+	w.Input(input.PointerMove{Pos: pin})
+	run(1)
+	w.Input(input.PointerDown{Pos: pin, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: pin, Button: input.ButtonPrimary})
+	w.Input(input.PointerDown{Pos: pin, Button: input.ButtonPrimary, Clicks: 2})
+	w.Input(input.PointerUp{Pos: pin, Button: input.ButtonPrimary})
+	// Past the time a click waits for a second, on the window's clock.
+	run(40)
+	_, rest := edits(w)
+	for _, in := range rest {
+		if _, ok := in.(SeekTo); ok {
+			t.Fatalf("a double-click on a note sought: %v", rest)
+		}
+	}
+	if !ed.writing || ed.writeID != 5 {
+		t.Fatal("a double-click on a note opened no field to write it anew")
+	}
+}
+
+func TestF1ShowsTheHelp(t *testing.T) {
+	w, _, run := stage(t, album())
+	w.Input(input.KeyPress{Key: input.KeyF1})
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || !reflect.DeepEqual(rest[0], ShowHelp{}) {
+		t.Fatalf("F1 sent %v", rest)
+	}
+}
+
+func TestAClickOnANoteSeeksToItOnceNoSecondFollows(t *testing.T) {
+	a := album()
+	a.Tracks[0].Marks = []Mark{{ID: 5, At: 4 * time.Second, Text: "Snare"}}
+	w, r, run := stage(t, a)
+	ed := r.editor
+	ed.v0.Jump(2)
+	ed.v1.Jump(6)
+	b := boundsOf(t, w, run, ed)
+	pin := b.Min.Add(ed.markAt(a.Tracks[0].Marks[0]).Center())
+	w.Input(input.PointerMove{Pos: pin})
+	run(1)
+	w.Input(input.PointerDown{Pos: pin, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: pin, Button: input.ButtonPrimary})
+	run(1)
+	if _, rest := edits(w); len(rest) != 0 {
+		t.Fatalf("a click sought at once, before a second could follow: %v", rest)
+	}
+	// The window's own clock, which its timers keep, past the wait.
+	run(30)
+	_, rest := edits(w)
+	if len(rest) != 1 || rest[0] != (SeekTo{At: 5 * time.Second}) {
+		t.Fatalf("a click on the note at 4 s sent %v, want a seek to it as rendered, 5 s", rest)
+	}
+}

@@ -52,16 +52,18 @@ func newTransport(r *root) *transport {
 
 func (t *transport) show(s Album) {
 	if s.Playing {
-		t.play.ic = icon.Pause
+		t.play.morph(icon.Pause)
 	} else {
-		t.play.ic = icon.Play
+		t.play.morph(icon.Play)
 	}
 	t.match.setLit(s.Match)
 	t.match.words, t.match.warn = "Match levels", false
-	if tr, ok := t.r.track(); ok && s.Match && (!tr.Measured || !tr.Measure.Loud) {
-		t.match.words, t.match.warn = "Calc LUFS first", true
-		if tr.Measuring {
-			t.match.words = "Measuring…"
+	if tr, ok := t.r.track(); ok && s.Match {
+		if _, matched := s.matchDB(&tr); !matched {
+			t.match.words, t.match.warn = "Calc LUFS first", true
+			if tr.Measuring {
+				t.match.words = "Measuring…"
+			}
 		}
 	}
 	t.album.setLit(s.AlbumPlay)
@@ -120,8 +122,7 @@ func (t *transport) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids g
 		room := box.W - timeX - pillWidth("Match levels") - pillWidth("Autoplay next") - pillWidth("Bypass") - 136
 		paintFit(p, tr.Title, 12, false, geom.Pt(timeX, box.H/2+10), room, faded(ink, 0.55))
 	}
-	if t.r.state.Match && ok && tr.Measured && tr.Measure.Loud {
-		d := t.r.state.Target - tr.Measure.LUFS
+	if d, matched := t.r.state.matchDB(&tr); ok && matched {
 		words := fmt.Sprintf("%+.1f dB to match", d)
 		run := shaped(words, 10, false)
 		run.Paint(p, geom.Pt(box.W-84-12-pillWidth("Match levels")/2-run.Advance/2, box.H/2+19), faded(teal, 0.8))

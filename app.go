@@ -201,6 +201,8 @@ type (
 	SetCurves struct{ Curves uint8 }
 	// SetListen sets how the sound is listened to.
 	SetListen struct{ Listen Listen }
+	// Quit is the window asked to close: its placement is kept first.
+	Quit struct{}
 	// SetBypassAll plays the tracks without their chains and gains, or
 	// with.
 	SetBypassAll struct{ On bool }
@@ -386,6 +388,10 @@ type app struct {
 	exportOpen bool
 	lame       string
 	lames      chan string
+	// window is where the window was as it closed last, which the
+	// settings keep; helping says the help is open.
+	window  *driver.Placement
+	helping bool
 }
 
 type scanned struct {
@@ -688,7 +694,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.saveDialog = func(o driver.SaveOptions) (string, error) { return c.SaveFile(ctx, o) }
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
-	a.RecentAlbums, a.Recent, a.lame = st.Albums, st.Plugins, st.LAME
+	a.RecentAlbums, a.Recent, a.lame, a.window = st.Albums, st.Plugins, st.LAME, st.Window
 	useLAME(findLAME(a.lame))
 	a.load()
 	a.opened(a.file)
@@ -777,6 +783,17 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			if !ok {
 				return c.Err()
 			}
+			if _, quit := ev.Intent.(Quit); quit {
+				// Where the window is, kept for the next time, then closed.
+				if o.placement != nil {
+					if p, ok := o.placement(); ok {
+						a.window = &p
+						a.writeSettings()
+					}
+				}
+				c.Close()
+				continue
+			}
 			a.handle(ev.Intent)
 		}
 		a.queueNext()
@@ -850,8 +867,8 @@ func (a *app) replayEdit() {
 // levels are matched.
 func (a *app) applyLevel() {
 	var match float32
-	if t := a.track(a.Current); a.Match && t != nil && t.Measured && t.Measure.Loud {
-		match = max(-24, min(a.Target-t.Measure.LUFS, 24))
+	if t := a.track(a.Current); t != nil {
+		match, _ = a.matchDB(t)
 	}
 	a.d.setLevel(a.Volume, match)
 }
@@ -1027,6 +1044,10 @@ func (a *app) handle(in gunim.Intent) {
 		a.calcLoudness()
 	case MatchTarget:
 		a.match(in.ID)
+	case ShowHelp:
+		a.showHelp(true)
+	case HelpClosed:
+		a.showHelp(false)
 	case EditRelease:
 		a.editRelease(true)
 	case ReleaseClosed:
@@ -1083,6 +1104,7 @@ func (a *app) handle(in gunim.Intent) {
 	case SetBypassAll:
 		a.Bypass = in.On
 		a.d.setBypass(in.On)
+		a.applyLevel()
 	case SetSilence:
 		t := a.track(in.ID)
 		if t == nil {
@@ -1117,4 +1139,21 @@ func (s *Album) gapOf(t *Track) time.Duration {
 		return *t.Silence
 	}
 	return s.Gap
+}
+
+// matchDB is the gain that brings track t to the target as it is heard,
+// in decibels, while levels are matched, and whether there is one: the
+// master's, or, bypassed, the mix's, as each was measured.
+func (s *Album) matchDB(t *Track) (float32, bool) {
+	if !s.Match || !t.Measured {
+		return 0, false
+	}
+	m := t.Measure
+	switch {
+	case s.Bypass && m.DryLoud:
+		return max(-24, min(s.Target-m.DryLUFS, 24)), true
+	case !s.Bypass && m.Loud:
+		return max(-24, min(s.Target-m.LUFS, 24)), true
+	}
+	return 0, false
 }

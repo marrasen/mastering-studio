@@ -32,6 +32,8 @@ type settings struct {
 	Plugins []PluginChoice `json:",omitempty"`
 	// LAME is where LAME was located, for MP3s.
 	LAME string `json:",omitempty"`
+	// Window is where the window was as it closed last.
+	Window *driver.Placement `json:",omitempty"`
 }
 
 // configDir is where the program keeps its settings, and the untitled
@@ -65,7 +67,7 @@ func (a *app) writeSettings() {
 	if a.settingsFile == "" {
 		return
 	}
-	s := settings{Albums: a.RecentAlbums, Plugins: a.Recent, LAME: a.lame}
+	s := settings{Albums: a.RecentAlbums, Plugins: a.Recent, LAME: a.lame, Window: a.window}
 	b, err := json.MarshalIndent(s, "", "\t")
 	if err == nil && os.MkdirAll(filepath.Dir(a.settingsFile), 0o755) == nil {
 		_ = os.WriteFile(a.settingsFile, b, 0o644)

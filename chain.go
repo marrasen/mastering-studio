@@ -315,10 +315,14 @@ type chainStage struct {
 	// how far the sound played is the one fed, gliding there.
 	bypass *atomic.Bool
 	inGain atomic.Uint32
-	delay  []float32
-	at0    int
-	dry    float32
-	dryBuf []float32
+	// dryMeter, where set, measures the sound as fed, its gain in taken
+	// back out: the mix's loudness, for levels matched while bypassed.
+	dryMeter *audio.LoudnessMeter
+	dryCopy  []float32
+	delay    []float32
+	at0      int
+	dry      float32
+	dryBuf   []float32
 }
 
 // setIn sets the gain in, in decibels, which bypassing takes back out.
@@ -441,6 +445,14 @@ func (s *chainStage) Read(dst []float32) (int, error) {
 func (s *chainStage) tapLocked(frames []float32) {
 	if s.tap != nil {
 		s.tap.write(s.fed, frames)
+	}
+	if s.dryMeter != nil {
+		back := 1 / max(math.Float32frombits(s.inGain.Load()), 1e-6)
+		s.dryCopy = append(s.dryCopy[:0], frames...)
+		for i := range s.dryCopy {
+			s.dryCopy[i] *= back
+		}
+		s.dryMeter.Write(s.dryCopy)
 	}
 	s.fed += int64(len(frames) / 2)
 }
