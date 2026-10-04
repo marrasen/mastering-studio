@@ -50,15 +50,15 @@ func matchGain(ctx context.Context, path string, gap time.Duration, e Edit, chai
 	at := func(gain float32) (Measure, error) {
 		ed := e
 		ed.Gain = gain
-		var r audio.Seeker = newRender(src, format.SampleRate, gap, ed)
-		if rk != nil {
-			// Each measure starts the plugins from silence.
-			for _, lp := range rk.plugins {
-				lp.p.Reset()
-			}
-			r = newStage(r, rk)
+		k := rk
+		if k == nil {
+			k = &rack{active: true}
 		}
-		return measureOf(ctx, r, format.SampleRate)
+		// Each measure starts the plugins from silence.
+		for _, lp := range k.plugins {
+			lp.p.Reset()
+		}
+		return measureOf(ctx, newStage(newRender(src, format.SampleRate, gap, ed), k, ed.Out), format.SampleRate)
 	}
 	clamp := func(g float64) float32 { return float32(max(-24, min(g, 24))) }
 	g0 := e.Gain

@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marrasen/gunim/audio"
@@ -296,10 +298,27 @@ type chainStage struct {
 	ended      bool
 	at         int64
 	buf        []float32
+	// fed is the frame of the sound fed in next, which runs ahead of
+	// at by the latency; tap, where set, takes what is fed, for the
+	// input's meters.
+	fed int64
+	tap *ioTap
+	// out is the gain after the chain, as a ratio, and outTo where it
+	// goes, in bits, as the editor sets it while the sound plays: it
+	// glides there over a block, so a change makes no click.
+	out   float32
+	outTo atomic.Uint32
 }
 
-func newStage(in audio.Seeker, r *rack) *chainStage {
+// setOut sets the gain after the chain, in decibels.
+func (s *chainStage) setOut(db float32) {
+	s.outTo.Store(math.Float32bits(float32(math.Pow(10, float64(db)/20))))
+}
+
+func newStage(in audio.Seeker, r *rack, outDB float32) *chainStage {
 	s := &chainStage{in: in, r: r, buf: make([]float32, 2*512)}
+	s.setOut(outDB)
+	s.out = math.Float32frombits(s.outTo.Load())
 	r.mu.Lock()
 	_ = s.alignLocked(0)
 	r.mu.Unlock()
@@ -318,7 +337,7 @@ func (s *chainStage) SeekFrame(f int64) error {
 
 func (s *chainStage) alignLocked(f int64) error {
 	lat := s.r.latencyLocked()
-	s.gen, s.lat, s.skip, s.tail, s.ended, s.at = s.r.gen, lat, lat, lat, false, f
+	s.gen, s.lat, s.skip, s.tail, s.ended, s.at, s.fed = s.r.gen, lat, lat, lat, false, f, f
 	for _, lp := range s.r.plugins {
 		lp.p.SetPosition(f)
 	}
@@ -340,6 +359,7 @@ func (s *chainStage) Read(dst []float32) (int, error) {
 			s.skip = 0
 			break
 		}
+		s.tapLocked(s.buf[:2*k])
 		s.r.processLocked(s.buf[:2*k])
 		s.skip -= k
 	}
@@ -347,9 +367,70 @@ func (s *chainStage) Read(dst []float32) (int, error) {
 	if n == 0 {
 		return 0, io.EOF
 	}
+	s.tapLocked(dst[:2*n])
 	s.r.processLocked(dst[:2*n])
+	// The gain after the chain, gliding to where it is set.
+	to := math.Float32frombits(s.outTo.Load())
+	if from := s.out; from != to || to != 1 {
+		for i := range n {
+			g := from + (to-from)*float32(i+1)/float32(n)
+			dst[2*i] *= g
+			dst[2*i+1] *= g
+		}
+		s.out = to
+	}
 	s.at += int64(n)
 	return n, nil
+}
+
+// tapLocked gives the tap the frames fed in, and counts them.
+func (s *chainStage) tapLocked(frames []float32) {
+	if s.tap != nil {
+		s.tap.write(s.fed, frames)
+	}
+	s.fed += int64(len(frames) / 2)
+}
+
+// ioTap holds the last seconds of the sound fed into a chain, each
+// stretch at the frame it was fed from, for the input's meters to read
+// as the sound comes out to be heard.
+type ioTap struct {
+	mu     sync.Mutex
+	chunks []tapChunk
+	kept   int
+}
+
+type tapChunk struct {
+	at     int64
+	frames []float32
+}
+
+// tapKeep is how many frames a tap keeps.
+const tapKeep = 3 * 48000
+
+func (t *ioTap) write(at int64, frames []float32) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.chunks = append(t.chunks, tapChunk{at, slices.Clone(frames)})
+	t.kept += len(frames) / 2
+	for t.kept > tapKeep && len(t.chunks) > 1 {
+		t.kept -= len(t.chunks[0].frames) / 2
+		t.chunks = t.chunks[1:]
+	}
+}
+
+// read appends to dst the frames fed from frame from up to to.
+func (t *ioTap) read(dst []float32, from, to int64) []float32 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, c := range t.chunks {
+		n := int64(len(c.frames) / 2)
+		lo, hi := max(from, c.at), min(to, c.at+n)
+		if hi > lo {
+			dst = append(dst, c.frames[2*(lo-c.at):2*(hi-c.at)]...)
+		}
+	}
+	return dst
 }
 
 // fill reads the sound into dst, then the silence after it.

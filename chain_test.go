@@ -79,7 +79,7 @@ func TestAChainsLatencyIsMadeUp(t *testing.T) {
 		t.Fatal("the limiter has no latency to make up")
 	}
 	for _, seek := range []int64{0, 5000} {
-		st := newStage(&clicks{at: 20000, n: 44100}, r)
+		st := newStage(&clicks{at: 20000, n: 44100}, r, 0)
 		if err := st.SeekFrame(seek); err != nil {
 			t.Fatal(err)
 		}
@@ -664,5 +664,40 @@ func TestATracksOwnSilenceIsMeasuredAndExported(t *testing.T) {
 	a.handle(SetSilence{ID: a.Tracks[1].ID})
 	if a.Tracks[1].Silence != nil || a.gapOf(&a.Tracks[1]) != a.Gap {
 		t.Fatal("a silence reset is not the album's")
+	}
+}
+
+func TestTheGainAfterTheChainIsMeasured(t *testing.T) {
+	path := writeTrack(t, 0, 4*time.Second, 0, 0.3)
+	plain, err := measure(context.Background(), path, 0, Edit{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	down, err := measure(context.Background(), path, 0, Edit{Out: -6}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := plain.LUFS - down.LUFS; math.Abs(float64(d)-6) > 0.05 {
+		t.Fatalf("6 dB down after the chain measures %.2f dB down", d)
+	}
+}
+
+func TestTheTapHoldsWhatTheChainIsFed(t *testing.T) {
+	tap := &ioTap{}
+	st := newStage(&clicks{at: 1000, n: 44100}, &rack{active: true}, 0)
+	st.tap = tap
+	buf := make([]float32, 2*700)
+	for range 4 {
+		_, _ = st.Read(buf)
+	}
+	got := tap.read(nil, 900, 1100)
+	if len(got) != 2*200 || got[2*100] != 0.25 {
+		t.Fatalf("the tap holds %d frames from 900, the click at 1000 reads %v", len(got)/2, got[2*min(100, len(got)/2-1)])
+	}
+	// From a seek, the frames fed are counted from the frame sought.
+	_ = st.SeekFrame(30000)
+	_, _ = st.Read(buf)
+	if got := tap.read(nil, 30000, 30700); len(got) != 2*700 {
+		t.Fatalf("after a seek to 30000 the tap holds %d frames from it", len(got)/2)
 	}
 }

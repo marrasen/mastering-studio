@@ -249,13 +249,13 @@ func rendered(src audio.Seeker, rate int, gap time.Duration, e Edit, chain []Slo
 	out audio.Seeker, done func(), err error) {
 	r := newRender(src, rate, gap, e)
 	if len(chain) == 0 {
-		return r, func() {}, nil
+		return newStage(r, &rack{active: true}, e.Out), func() {}, nil
 	}
 	rk, err := offlineRack(chain, states, rate)
 	if err != nil {
 		return nil, nil, err
 	}
-	return newStage(r, rk), rk.close, nil
+	return newStage(r, rk, e.Out), rk.close, nil
 }
 
 // keptMeasure is a track's measure as the project keeps it, with what

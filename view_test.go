@@ -786,3 +786,24 @@ func TestDraggingTheSilencesStartGivesTheTrackItsOwn(t *testing.T) {
 		t.Fatalf("the drag sent %v, want the track's silence at 2 s", rest[len(rest)-1])
 	}
 }
+
+func TestTheOutputsFaderSetsTheGainAfterTheChain(t *testing.T) {
+	w, r, run := stage(t, album())
+	b := boundsOf(t, w, run, r.meters.outFader)
+	from := b.Center()
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	// Up a quarter of its travel: half of 24 dB.
+	up := (b.Size().H - 24) / 4
+	w.Input(input.PointerMove{Pos: from.Add(geom.Pt(0, -up))})
+	w.Input(input.PointerUp{Pos: from.Add(geom.Pt(0, -up)), Button: input.ButtonPrimary})
+	run(1)
+	sent, _ := edits(w)
+	if len(sent) == 0 {
+		t.Fatal("the fader sent no edit")
+	}
+	last := sent[len(sent)-1].Edit
+	if math.Abs(float64(last.Out-12)) > 0.2 || last.Gain != 0 {
+		t.Fatalf("the output's fader set the gain in %.1f and out %.1f, want out +12", last.Gain, last.Out)
+	}
+}

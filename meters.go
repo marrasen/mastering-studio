@@ -60,11 +60,18 @@ type meters struct {
 	column   []float32
 	// specHead is where the spectrum's heading is, which switches it.
 	specHead geom.Rect
-	size     geom.Size
+	// in and out are the input's and output's levels, their faders the
+	// gains in and out, and inFrom the frame of the input read next.
+	in, out           ioLevels
+	inFader, outFader *ioFader
+	inFrom            int64
+	inBuf             []float32
+	size              geom.Size
 }
 
 func newMeters(r *root) *meters {
-	m := &meters{r: r, lm: audio.NewLoudnessMeter(audio.SampleRate), moment: -70, shortTerm: -70}
+	m := &meters{r: r, lm: audio.NewLoudnessMeter(audio.SampleRate), moment: -70, shortTerm: -70,
+		in: newIOLevels(), out: newIOLevels(), inFader: newIOFader(r, false), outFader: newIOFader(r, true)}
 	m.freqs = make([]float32, specPoints)
 	m.spec, m.smooth = make([]float32, specPoints), make([]float32, specPoints)
 	for i := range m.freqs {
@@ -81,6 +88,7 @@ func (m *meters) show(was, s Album) {
 		m.lm = audio.NewLoudnessMeter(audio.SampleRate)
 		m.tp = audio.TruePeakMeter{}
 		m.ranged = false
+		m.in, m.out = newIOLevels(), newIOLevels()
 	}
 }
 
@@ -109,6 +117,13 @@ func (m *meters) Step(dt time.Duration) bool {
 		}
 		m.lm.Write(m.buf)
 		m.tp.Write(m.buf)
+		m.out.take(m.buf, audio.SampleRate, dt)
+	} else {
+		m.out.quiet(dt)
+	}
+	// The input, as fed into the chain, for the moment heard.
+	m.takeInput(dt)
+	if len(m.buf) > 0 {
 		m.scope = append(m.scope, m.buf...)
 		if over := len(m.scope) - 2*scopeFrames; over > 0 {
 			m.scope = m.scope[over:]
@@ -194,20 +209,57 @@ func (m *meters) Step(dt time.Duration) bool {
 }
 
 // Layout implements [gunim.Node].
-func (m *meters) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+func (m *meters) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	m.size = c.Max
+	area := m.ioArea(c.Max)
+	for i, out := range []bool{false, true} {
+		kids.At(i).Layout(gunim.Tight(geom.Sz(24, area.Size().H+16)))
+		kids.At(i).Place(geom.Pt(m.faderX(c.Max, out), area.Min.Y-8))
+	}
 	return c.Max
 }
 
+// Children implements [gunim.Composite]: the faders of the gains in and
+// out.
+func (m *meters) Children() []gunim.Node { return []gunim.Node{m.inFader, m.outFader} }
+
 // Paint implements [gunim.Node]: loudness at the top, the stereo image
 // in the middle, the spectrum at the foot.
-func (m *meters) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Children) {
+func (m *meters) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
 	p.RRect(geom.Rect{Max: box.Point()}, 0, paint.Solid(panel))
 	p.RRect(geom.Rc(0, 0, 1, box.H), 0, paint.Solid(faded(ink, 0.06)))
 	y := float32(16)
-	y = m.paintLoudness(p, box, y)
+	y = m.paintIO(p, box, y)
+	for k := range kids.All {
+		k.Paint(p)
+	}
+	y = m.paintLoudness(p, box, y+14)
 	y = m.paintScope(p, box, y+18)
 	m.paintSpectrum(p, geom.Rc(16, y+18, box.W-32, box.H-y-34))
+}
+
+// takeInput reads what was fed into the chain for the moment heard
+// since the last frame, as the input's levels.
+func (m *meters) takeInput(dt time.Duration) {
+	at, _, id := m.r.d.position()
+	if id == 0 || !m.r.state.Playing {
+		m.in.quiet(dt)
+		return
+	}
+	var rate int
+	m.inBuf, rate = m.r.d.input(m.inBuf[:0], 0, 0)
+	heard := int64(at.Seconds() * float64(rate))
+	// Off by more than a second, as after a seek: from here.
+	if heard < m.inFrom || heard > m.inFrom+int64(rate) {
+		m.inFrom = heard
+	}
+	m.inBuf, _ = m.r.d.input(m.inBuf[:0], m.inFrom, heard)
+	m.inFrom = heard
+	if len(m.inBuf) == 0 {
+		m.in.quiet(dt)
+		return
+	}
+	m.in.take(m.inBuf, rate, dt)
 }
 
 // lufsText writes a loudness, a dash for none.
@@ -302,7 +354,7 @@ func (m *meters) paintBar(p *paint.Painter, bar geom.Rect, v, target float32) {
 func (m *meters) paintScope(p *paint.Painter, box geom.Size, y float32) float32 {
 	shaped("STEREO", 10, true).Paint(p, geom.Pt(16, y), faded(teal, 0.85))
 	y += 20
-	side := min(box.W-32, 220)
+	side := min(box.W-32, 170)
 	area := geom.Rc((box.W-side)/2, y, side, side)
 	mid := area.Min.Add(geom.Pt(side/2, side/2))
 	rad := side / 2

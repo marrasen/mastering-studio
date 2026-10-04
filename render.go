@@ -64,8 +64,10 @@ type Edit struct {
 	// zero is the file's end.
 	Start, End      time.Duration
 	FadeIn, FadeOut Fade
-	// Gain is in decibels.
+	// Gain is the gain into the chain, and Out the gain after it, in
+	// decibels.
 	Gain float32
+	Out  float32 `json:",omitempty"`
 }
 
 // span returns the edit's start and end, in frames of a file of length

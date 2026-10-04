@@ -55,7 +55,7 @@ func newEditTools(r *root) *editTools {
 			e.End = sec(v)
 			send(e, u)
 		})
-	t.gain = newValueChip("GAIN", func(v float64) string { return fmt.Sprintf("%+.1f dB", v) }, 0.02, 0.1, -24, 24, 0,
+	t.gain = newValueChip("GAIN IN", func(v float64) string { return fmt.Sprintf("%+.1f dB", v) }, 0.02, 0.1, -24, 24, 0,
 		func(v float64, u *gunim.UI) {
 			e := ed()
 			e.Gain = float32(v)

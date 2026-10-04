@@ -28,6 +28,11 @@ type deck struct {
 	next *queued
 	// turns carries the tracks the voice has turned to, from the queue.
 	turns chan int
+	// stage is the chain of the track playing, at rate, and tap holds
+	// what it is fed, for the input's meters.
+	stage *chainStage
+	rate  int
+	tap   *ioTap
 	// id is the track playing, and volume the listening level, as a
 	// ratio, with match, the gain that brings the track to the target
 	// loudness while levels are matched.
@@ -38,7 +43,7 @@ type deck struct {
 
 func newDeck(mix *audio.Mixer) *deck {
 	an := audio.NewAnalyzer(mix, 32)
-	return &deck{mix: mix, an: an, volume: 0.8, match: 1, turns: make(chan int, 8)}
+	return &deck{mix: mix, an: an, volume: 0.8, match: 1, turns: make(chan int, 8), tap: &ioTap{}}
 }
 
 // play plays track id, rendered from the file at path with the album's
@@ -50,7 +55,9 @@ func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at 
 		return err
 	}
 	sw := &switcher{cur: newRender(src, format.SampleRate, gap, e), closer: closer}
-	out := audio.Resample(newStage(sw, r), format.SampleRate)
+	st := newStage(sw, r, e.Out)
+	st.tap = d.tap
+	out := audio.Resample(st, format.SampleRate)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.stopLocked(fade)
@@ -58,7 +65,7 @@ func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at 
 	d.voice = d.mix.Play(out, audio.Options{Volume: max(d.volume*d.match, 1e-6), FadeIn: fade, Paused: paused})
 	// Seeking through the voice, so it says where it is from the start.
 	_ = d.voice.Seek(at)
-	d.sw, d.rack, d.id = sw, r, id
+	d.sw, d.rack, d.id, d.stage, d.rate = sw, r, id, st, format.SampleRate
 	go d.watch(d.voice)
 	return nil
 }
@@ -98,7 +105,7 @@ func (d *deck) takeTurnLocked() bool {
 	if d.rack != n.rack {
 		d.rack.setActive(false)
 	}
-	d.sw, d.rack, d.id, d.next = n.sw, n.rack, n.id, nil
+	d.sw, d.rack, d.id, d.next, d.stage, d.rate = n.sw, n.rack, n.id, nil, n.stage, n.rate
 	select {
 	case d.turns <- n.id:
 	default:
@@ -122,6 +129,11 @@ func (d *deck) edit(id int, path string, gap time.Duration, e Edit) bool {
 		return false
 	}
 	sw.swap(newRender(src, format.SampleRate, gap, e), closer, format.SampleRate*15/1000)
+	d.mu.Lock()
+	if d.stage != nil {
+		d.stage.setOut(e.Out)
+	}
+	d.mu.Unlock()
 	return true
 }
 
@@ -310,9 +322,11 @@ func (s *switcher) close() {
 
 // queued is a track waiting to play once the one playing ends.
 type queued struct {
-	id   int
-	sw   *switcher
-	rack *rack
+	id    int
+	sw    *switcher
+	rack  *rack
+	stage *chainStage
+	rate  int
 }
 
 // queue has track id, rendered and run through its chain r, play once
@@ -323,7 +337,9 @@ func (d *deck) queue(id int, path string, gap time.Duration, e Edit, r *rack) er
 		return err
 	}
 	sw := &switcher{cur: newRender(src, format.SampleRate, gap, e), closer: closer}
-	out := audio.Resample(newStage(sw, r), format.SampleRate)
+	st := newStage(sw, r, e.Out)
+	st.tap = d.tap
+	out := audio.Resample(st, format.SampleRate)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.voice == nil {
@@ -334,7 +350,7 @@ func (d *deck) queue(id int, path string, gap time.Duration, e Edit, r *rack) er
 	// Its chain runs from the moment the mixer reaches it.
 	r.setActive(true)
 	d.voice.Then(out)
-	d.next = &queued{id: id, sw: sw, rack: r}
+	d.next = &queued{id: id, sw: sw, rack: r, stage: st, rate: format.SampleRate}
 	return nil
 }
 
@@ -368,4 +384,13 @@ func (d *deck) hasNext() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.next != nil
+}
+
+// input appends to dst the frames fed into the chain of the track
+// playing from frame from up to to, at its rate, which it returns.
+func (d *deck) input(dst []float32, from, to int64) (frames []float32, rate int) {
+	d.mu.Lock()
+	rate = d.rate
+	d.mu.Unlock()
+	return d.tap.read(dst, from, to), rate
 }
