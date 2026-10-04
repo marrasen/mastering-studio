@@ -27,6 +27,9 @@ const (
 	// gripRuler is the ruler, which a drag scrolls the view by, and a
 	// click seeks at.
 	gripRuler
+	// gripSilence is the start of the silence before the cut, which a
+	// drag sets the track's own silence by.
+	gripSilence
 )
 
 // editor is the track picked, laid out along its file's time: both
@@ -72,7 +75,10 @@ type editor struct {
 	clockID int
 	// grams are the spectrograms drawn, of the tracks seen last.
 	grams map[*Gram]*gramTiles
-	size  geom.Size
+	// silence is the silence before the track as a drag sets it, ahead
+	// of the application's answer, or -1.
+	silence float64
+	size    geom.Size
 }
 
 // rawSamples is a stretch of a file's samples, read in the background.
@@ -89,6 +95,7 @@ func newEditor(r *root) *editor {
 		outMorph: anim.NewFloat(1), glow: anim.NewFloat(0), zoom: anim.NewFloat(0)}
 	e.Add(e.v0, e.v1, e.inMorph, e.outMorph, e.glow, e.zoom)
 	e.raw.loaded = make(chan rawSamples, 1)
+	e.silence = -1
 	return e
 }
 
@@ -100,8 +107,14 @@ func (e *editor) length() float64 {
 	return float64(e.track.Frames) / float64(e.track.Format.SampleRate)
 }
 
-// gap is the album's silence before every track, in seconds.
-func (e *editor) gap() float64 { return e.r.state.Gap.Seconds() }
+// gap is the silence before the track, in seconds: its own, or the
+// album's, or as a drag sets it.
+func (e *editor) gap() float64 {
+	if e.silence >= 0 {
+		return e.silence
+	}
+	return e.r.state.gapOf(&e.track).Seconds()
+}
 
 // fit returns the view showing the whole file and the silence before
 // its cut.
@@ -239,6 +252,8 @@ func (e *editor) gripAt(p geom.Point) grip {
 		return gripStart
 	case p.Y > rulerH && math.Abs(float64(p.X-e.xOf(end))) < 7:
 		return gripEnd
+	case p.Y > rulerH && math.Abs(float64(p.X-e.xOf(start-e.gap()))) < 7:
+		return gripSilence
 	}
 	return gripSeek
 }
@@ -276,6 +291,12 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 			e.zoom.Animate(0, anim.Gentle)
 			break
 		}
+		// A double-click on the silence gives the track the album's.
+		if start, _ := e.span(); ev.Clicks == 2 && ev.Pos.Y > rulerH && e.track.Silence != nil &&
+			e.tAt(ev.Pos.X) < start && e.tAt(ev.Pos.X) > start-e.gap() {
+			u.Send(e, SetSilence{ID: e.track.ID})
+			break
+		}
 		if ev.Clicks == 2 && e.gripAt(ev.Pos) == gripSeek {
 			v0, v1 := e.fit()
 			e.v0.Animate(float32(v0), anim.Gentle)
@@ -292,6 +313,9 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 			u.Send(e, SeekTo{At: e.renderTime(e.tAt(ev.Pos.X))})
 		}
 	case input.PointerUp:
+		if e.held == gripSilence {
+			e.silence = -1
+		}
 		if e.held == gripRuler && !e.dragged {
 			u.Send(e, SeekTo{At: e.renderTime(e.tAt(ev.Pos.X))})
 		}
@@ -371,6 +395,12 @@ func (e *editor) drag(p geom.Point, mods input.Mods, u *gunim.UI) {
 		return
 	case gripZoom:
 		e.zoomTo(p.Y)
+		return
+	case gripSilence:
+		s := max(0, min(start-t, 10))
+		e.silence = s
+		d := time.Duration(s * float64(time.Second))
+		u.Send(e, SetSilence{ID: e.track.ID, Silence: &d})
 		return
 	case gripRuler:
 		// The view moves with the pointer: the time grabbed stays under
@@ -631,9 +661,22 @@ func (e *editor) paintGap(p *paint.Painter, box geom.Size) {
 		}
 	}
 	label := fmt.Sprintf("%.2f s silence", e.gap())
+	own := e.track.Silence != nil || e.silence >= 0
+	if own {
+		label += " · own"
+	}
 	run := shaped(label, 11, true)
 	if run.Advance < x1-x0-8 {
 		run.Paint(p, geom.Pt((x0+x1-run.Advance)/2, top+8), faded(sky, 0.85))
+	}
+	// Its start, a handle to set the track's own silence by.
+	w := float32(1.5)
+	if e.hot == gripSilence || e.held == gripSilence {
+		w = 3
+	}
+	p.RRect(geom.Rc(x0-w/2, top, w, box.H-top), w/2, paint.Solid(faded(sky, 0.4+0.4*onOff(own))))
+	if e.hot == gripSilence || e.held == gripSilence {
+		e.bubble(p, box, geom.Pt(x0, box.H-44), fmt.Sprintf("%.2f s", e.gap()), sky)
 	}
 }
 
@@ -934,7 +977,7 @@ func (e *editor) Cursor(p geom.Point) input.Cursor {
 		g = e.gripAt(p)
 	}
 	switch g {
-	case gripRuler, gripStart, gripEnd:
+	case gripRuler, gripStart, gripEnd, gripSilence:
 		return input.CursorResizeH
 	case gripZoom:
 		return input.CursorResizeV

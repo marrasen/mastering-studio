@@ -32,7 +32,15 @@ func newTransport(r *root) *transport {
 	t.play = newIconButton(icon.Play, func(u *gunim.UI) { u.Send(r, TogglePlay{}) })
 	t.play.primary = true
 	t.next = newIconButton(icon.SkipForward, func(u *gunim.UI) { r.step(1, u) })
-	t.match = newPill("Match levels", func(u *gunim.UI) { u.Send(r, SetMatch{On: !r.state.Match}) })
+	t.match = newPill("Match levels", func(u *gunim.UI) {
+		// Matching a track not yet measured waits on its loudness: the
+		// button measures it.
+		if t.match.warn {
+			u.Send(r, CalcLoudness{})
+			return
+		}
+		u.Send(r, SetMatch{On: !r.state.Match})
+	})
 	t.album = newPill("Album", func(u *gunim.UI) { u.Send(r, SetAlbumPlay{On: !r.state.AlbumPlay}) })
 	t.volume = newValueChip("LISTEN", func(v float64) string { return fmt.Sprintf("%.0f%%", v*100) }, 0.004, 0.05, 0, 1, 0.8,
 		func(v float64, u *gunim.UI) { u.Send(r, SetVolume{Volume: float32(v)}) })
@@ -46,6 +54,13 @@ func (t *transport) show(s Album) {
 		t.play.ic = icon.Play
 	}
 	t.match.setLit(s.Match)
+	t.match.words, t.match.warn = "Match levels", false
+	if tr, ok := t.r.track(); ok && s.Match && !(tr.Measured && tr.Measure.Loud) {
+		t.match.words, t.match.warn = "Calc LUFS first", true
+		if tr.Measuring {
+			t.match.words = "Measuring…"
+		}
+	}
 	t.album.setLit(s.AlbumPlay)
 	t.volume.value = float64(s.Volume)
 }

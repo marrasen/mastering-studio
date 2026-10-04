@@ -123,7 +123,7 @@ func (a *app) match(id int) {
 	}
 	t.Matching = true
 	chain, states := a.chainOf(t)
-	version, path, gap, e, target := a.version[id], t.File, a.Gap, t.Edit, a.Target
+	version, path, gap, e, target := a.version[id], t.File, a.gapOf(t), t.Edit, a.Target
 	a.work.Add(1)
 	go func() {
 		defer a.work.Done()

@@ -647,3 +647,22 @@ func TestACancelledExportLeavesNoFilesHalfWritten(t *testing.T) {
 		}
 	}
 }
+
+func TestATracksOwnSilenceIsMeasuredAndExported(t *testing.T) {
+	a := measuredApp(t)
+	before := a.Tracks[1].Measure.Length
+	s := 2500 * time.Millisecond
+	a.handle(SetSilence{ID: a.Tracks[1].ID, Silence: &s})
+	a.handle(CalcLoudness{})
+	settle(t, a, func() bool { return !a.Tracks[1].Measuring })
+	if d := a.Tracks[1].Measure.Length - before; (d - 1500*time.Millisecond).Abs() > time.Millisecond {
+		t.Fatalf("with 2.5 s of silence for the album's 1, the track grew %v", d)
+	}
+	if a.Tracks[0].Stale || a.Tracks[2].Stale {
+		t.Fatal("a track's own silence marked the others changed")
+	}
+	a.handle(SetSilence{ID: a.Tracks[1].ID})
+	if a.Tracks[1].Silence != nil || a.gapOf(&a.Tracks[1]) != a.Gap {
+		t.Fatal("a silence reset is not the album's")
+	}
+}

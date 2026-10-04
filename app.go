@@ -87,6 +87,9 @@ type (
 		Edit  Edit
 		// Note is a note on the track, as what it still needs.
 		Note string
+		// Silence, where set, is the silence before the track in place of
+		// the album's.
+		Silence *time.Duration
 		// Seq is the window's count of edits taken, so it can tell its
 		// own edit coming back from an older one.
 		Seq int
@@ -182,6 +185,12 @@ type (
 	SetView struct{ View View }
 	// SetCurves sets the loudness curves the editor draws.
 	SetCurves struct{ Curves uint8 }
+	// SetSilence sets the silence before a track, or, nil, gives it the
+	// album's.
+	SetSilence struct {
+		ID      int
+		Silence *time.Duration
+	}
 	// SetNote sets a track's note.
 	SetNote struct {
 		ID   int
@@ -258,7 +267,8 @@ type project struct {
 
 type keptTrack struct {
 	Title, File string
-	Note        string `json:",omitempty"`
+	Note        string         `json:",omitempty"`
+	Silence     *time.Duration `json:",omitempty"`
 	Edit        Edit
 	Chain       []keptSlot `json:",omitempty"`
 	// At is File whole, as it was last saved, where File is from the
@@ -422,7 +432,7 @@ func (a *app) load() {
 			a.Current = id
 		}
 		t := a.track(id)
-		t.Note = k.Note
+		t.Note, t.Silence = k.Note, k.Silence
 		for _, s := range k.Chain {
 			a.slots++
 			t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
@@ -452,8 +462,8 @@ func (a *app) save() {
 		Volume:  a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
 		Follow: a.Follow, View: a.View, Curves: &a.Curves}
 	for _, t := range a.Tracks {
-		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Edit: t.Edit,
-			Stale: t.Stale}
+		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Silence: t.Silence,
+			Edit: t.Edit, Stale: t.Stale}
 		if t.Measured {
 			k.Measure = keep(t.File, t.Measure)
 		}
@@ -616,7 +626,7 @@ func (a *app) startMeasures() {
 			case a.measures <- measured{id, version, m, err}:
 			case <-a.ctx.Done():
 			}
-		}(t.File, a.Gap, t.Edit, a.version[id])
+		}(t.File, a.gapOf(t), t.Edit, a.version[id])
 	}
 }
 
@@ -795,7 +805,7 @@ func (a *app) replayEdit() {
 	}
 	a.replayed = time.Now()
 	t := a.track(a.Current)
-	if t == nil || !a.d.edit(t.ID, t.File, a.Gap, t.Edit) {
+	if t == nil || !a.d.edit(t.ID, t.File, a.gapOf(t), t.Edit) {
 		at, _, _ := a.d.position()
 		a.play(at, 15*time.Millisecond)
 	}
@@ -818,7 +828,7 @@ func (a *app) play(at, fade time.Duration) {
 	if t == nil {
 		return
 	}
-	if err := a.d.play(t.ID, t.File, a.Gap, t.Edit, a.rackOf(t), at, false, fade); err != nil {
+	if err := a.d.play(t.ID, t.File, a.gapOf(t), t.Edit, a.rackOf(t), at, false, fade); err != nil {
 		a.Note = err.Error()
 		return
 	}
@@ -1032,6 +1042,21 @@ func (a *app) handle(in gunim.Intent) {
 	case SetCurves:
 		a.Curves = in.Curves
 		a.dirty = true
+	case SetSilence:
+		t := a.track(in.ID)
+		if t == nil {
+			return
+		}
+		if in.Silence != nil {
+			s := max(0, min(*in.Silence, 10*time.Second))
+			in.Silence = &s
+		}
+		t.Silence = in.Silence
+		a.dirty = true
+		a.remeasure(t.ID)
+		if a.Playing && a.Current == t.ID {
+			a.replayEdit()
+		}
 	case SetNote:
 		if t := a.track(in.ID); t != nil && t.Note != in.Note {
 			t.Note = in.Note
@@ -1040,4 +1065,12 @@ func (a *app) handle(in gunim.Intent) {
 	default:
 		a.handleChain(in)
 	}
+}
+
+// gapOf is the silence before track t: its own, or the album's.
+func (s *Album) gapOf(t *Track) time.Duration {
+	if t.Silence != nil {
+		return *t.Silence
+	}
+	return s.Gap
 }

@@ -98,8 +98,9 @@ func (a *app) export(ids []int) {
 			continue
 		}
 		chain, states := a.chainOf(&a.Tracks[i])
-		jobs = append(jobs, exportJob{id: t.ID, path: t.File, edit: t.Edit, gap: a.Gap, chain: chain, states: states,
-			base: filepath.Join(dir, exportName(i+1, t.Title)), wav: a.ExportWAV || !a.ExportMP3,
+		jobs = append(jobs, exportJob{id: t.ID, path: t.File, edit: t.Edit, gap: a.gapOf(&a.Tracks[i]), chain: chain,
+			states: states,
+			base:   filepath.Join(dir, exportName(i+1, t.Title)), wav: a.ExportWAV || !a.ExportMP3,
 			mp3: a.ExportMP3 && encodeMP3 != nil, bits: a.Bits, dither: a.Dither, kbps: a.MP3Rate,
 			tags: trackTags{Title: t.Title, Artist: a.Artist, Album: a.Title, Year: a.Year, Genre: a.Genre,
 				Track: i + 1, Total: len(a.Tracks)},

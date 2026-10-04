@@ -299,9 +299,11 @@ func (c *valueChip) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ guni
 // pill is a button of words, lit while on.
 type pill struct {
 	anim.Group
-	words      string
-	press      func(*gunim.UI)
-	primary    bool
+	words   string
+	press   func(*gunim.UI)
+	primary bool
+	// warn shows the pill in amber, for what waits on the user.
+	warn       bool
 	hover, lit *anim.Float
 	down       *anim.Float
 	held       bool
@@ -365,6 +367,10 @@ func (b *pill) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Chi
 	lit := b.lit.Value()
 	words := mix(faded(ink, 0.8), teal, lit)
 	switch {
+	case b.warn:
+		p.RRect(whole, box.H/2, paint.Solid(faded(amber, 0.16+0.08*b.hover.Value())))
+		p.RRectStroke(whole, box.H/2, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1, Color: faded(amber, 0.6)})
+		words = amber
 	case b.primary:
 		p.ShadowRRect(whole, box.H/2, paint.Solid(teal), paint.Shadow{Blur: 12 + 8*b.hover.Value(), Color: faded(teal, 0.35)})
 		words = night

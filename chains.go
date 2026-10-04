@@ -375,7 +375,7 @@ func (a *app) replace(id int, path string) {
 	a.dirty = true
 	if a.Current == id && a.d.done() != nil {
 		at, _, _ := a.d.position()
-		if err := a.d.play(t.ID, t.File, a.Gap, t.Edit, a.rackOf(t), at, !a.Playing, 15*time.Millisecond); err != nil {
+		if err := a.d.play(t.ID, t.File, a.gapOf(t), t.Edit, a.rackOf(t), at, !a.Playing, 15*time.Millisecond); err != nil {
 			a.Note = err.Error()
 		}
 	}
@@ -397,7 +397,7 @@ func (a *app) queueNext() {
 	var want queuedKey
 	if i := a.place(a.Current); a.AlbumPlay && a.d.done() != nil && i >= 0 && i+1 < len(a.Tracks) {
 		n := &a.Tracks[i+1]
-		want = queuedKey{id: n.ID, file: n.File, edit: n.Edit, gap: a.Gap, rack: a.rackOf(n)}
+		want = queuedKey{id: n.ID, file: n.File, edit: n.Edit, gap: a.gapOf(n), rack: a.rackOf(n)}
 	}
 	if want == a.queued && (want.id == 0 || a.d.hasNext()) {
 		return

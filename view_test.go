@@ -742,3 +742,47 @@ func TestASpectrogramIsDrawnAtLevelsForTheViewZoomedOut(t *testing.T) {
 		t.Fatalf("a tile is %dx%d", w, h)
 	}
 }
+
+func TestMatchingATrackNotMeasuredAsksForItsLoudness(t *testing.T) {
+	a := album()
+	a.Match = true
+	w, r, run := stage(t, a)
+	m := r.trans.match
+	if !m.warn || m.words != "Calc LUFS first" {
+		t.Fatalf("matching a track not measured, the button reads %q, warning %v", m.words, m.warn)
+	}
+	b := boundsOf(t, w, run, m)
+	w.Input(input.PointerMove{Pos: b.Center()})
+	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || !reflect.DeepEqual(rest[0], CalcLoudness{}) {
+		t.Fatalf("the button sent %v, want the track measured", rest)
+	}
+}
+
+func TestDraggingTheSilencesStartGivesTheTrackItsOwn(t *testing.T) {
+	a := album()
+	a.Tracks[0].Edit = Edit{Start: 3 * time.Second}
+	w, r, run := stage(t, a)
+	ed := r.editor
+	b := boundsOf(t, w, run, ed)
+	from := b.Min.Add(geom.Pt(ed.xOf(2), b.Size().H/2))
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	for i := 1; i <= 10; i++ {
+		to := b.Min.Add(geom.Pt(ed.xOf(2-0.1*float64(i)), b.Size().H/2))
+		w.Input(input.PointerMove{Pos: to})
+		run(1)
+		if got := ed.gap(); math.Abs(got-(1+0.1*float64(i))) > 0.01 {
+			t.Fatalf("step %d: the silence is %.3f s, want %.3f, as dragged", i, got, 1+0.1*float64(i))
+		}
+	}
+	w.Input(input.PointerUp{Pos: from, Button: input.ButtonPrimary})
+	run(1)
+	_, rest := edits(w)
+	last, ok := rest[len(rest)-1].(SetSilence)
+	if !ok || last.Silence == nil || math.Abs(last.Silence.Seconds()-2) > 0.01 {
+		t.Fatalf("the drag sent %v, want the track's silence at 2 s", rest[len(rest)-1])
+	}
+}

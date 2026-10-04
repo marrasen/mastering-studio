@@ -47,11 +47,11 @@ func lengthOf(t Track, gap time.Duration) time.Duration {
 func (s *strip) show(a Album) {
 	var total time.Duration
 	for _, t := range a.Tracks {
-		total += lengthOf(t, a.Gap)
+		total += lengthOf(t, a.gapOf(&t))
 	}
 	var at time.Duration
 	for _, t := range a.Tracks {
-		l := lengthOf(t, a.Gap)
+		l := lengthOf(t, a.gapOf(&t))
 		from, to := float32(at.Seconds()/max(total.Seconds(), 1)), float32((at+l).Seconds()/max(total.Seconds(), 1))
 		at += l
 		if s.x0[t.ID] == nil {
@@ -84,7 +84,7 @@ func (s *strip) Handle(e input.Event, u *gunim.UI) bool {
 			continue
 		}
 		frac := float64((u0 - a.Value()) / max(b.Value()-a.Value(), 1e-6))
-		at := time.Duration(frac * float64(lengthOf(t, s.r.state.Gap)))
+		at := time.Duration(frac * float64(lengthOf(t, s.r.state.gapOf(&t))))
 		u.Cue(gunim.CueSelect, s)
 		if t.ID != s.r.state.Current {
 			u.Send(s, Pick{ID: t.ID})
@@ -116,8 +116,8 @@ func (s *strip) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Ch
 		}
 		left := band.Min.X + band.Size().W*x0.Value()
 		right := band.Min.X + band.Size().W*x1.Value()
-		length := lengthOf(t, a.Gap).Seconds()
-		gapX := left + (right-left)*float32(a.Gap.Seconds()/max(length, 0.001))
+		length := lengthOf(t, a.gapOf(&t)).Seconds()
+		gapX := left + (right-left)*float32(a.gapOf(&t).Seconds()/max(length, 0.001))
 		// The silence, then the sound.
 		p.RRect(geom.Rc(left, band.Min.Y, max(gapX-left, 0), band.Size().H), 0, paint.Solid(faded(sky, 0.05)))
 		block := geom.Rc(gapX, band.Min.Y, max(right-gapX-2, 1), band.Size().H)
