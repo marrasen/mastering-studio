@@ -65,7 +65,12 @@ type editor struct {
 	// raw is the samples of the file in view, read for a view zoomed in
 	// past the waveform's finest level.
 	raw  rawSamples
-	size geom.Size
+	// clock is the playhead, in seconds of the file, run on by the
+	// frames' time and drawn gently toward where the speakers are, as
+	// they tell it in uneven steps; clockID is the track it runs for.
+	clock   float64
+	clockID int
+	size    geom.Size
 }
 
 // rawSamples is a stretch of a file's samples, read in the background.
@@ -415,6 +420,7 @@ func (e *editor) Step(dt time.Duration) bool {
 	default:
 	}
 	moving = e.wantRaw() || moving
+	e.runClock(dt)
 	if !e.r.state.Playing {
 		return moving
 	}
@@ -429,7 +435,11 @@ func (e *editor) Step(dt time.Duration) bool {
 				e.v1.Animate(float32(to+span), anim.Gentle)
 			}
 		case FollowScroll:
-			to := t - span*0.25
+			// The playhead still, a quarter in, with the sound sliding
+			// under it, but for the view's running past the sound's
+			// start or end: there the playhead moves.
+			lo, hi := e.fit()
+			to := max(lo, min(t-span*0.25, max(lo, hi-span)))
 			if math.Abs(float64(e.v0.Value())-to) > span*0.05 {
 				e.v0.Animate(float32(to), anim.Snappy)
 				e.v1.Animate(float32(to+span), anim.Snappy)
@@ -489,9 +499,34 @@ func (e *editor) wantRaw() bool {
 	return true
 }
 
-// playhead returns the file's time the speakers play, and false while
-// the track picked is not the one playing.
+// runClock runs the playhead's clock on by dt, drawn toward where the
+// speakers are: gently while near, at once after a seek or a turn.
+func (e *editor) runClock(dt time.Duration) {
+	t, ok := e.heard()
+	if !ok {
+		e.clockID = 0
+		return
+	}
+	if e.clockID != e.track.ID || !e.r.state.Playing || math.Abs(t-e.clock) > 0.25 {
+		e.clock, e.clockID = t, e.track.ID
+		return
+	}
+	e.clock += dt.Seconds()
+	e.clock += (t - e.clock) * min(1, 3*dt.Seconds())
+}
+
+// playhead returns the file's time the playhead is at, run smoothly,
+// and false while the track picked is not the one playing.
 func (e *editor) playhead() (float64, bool) {
+	if e.clockID == e.track.ID && e.clockID != 0 {
+		return e.clock, true
+	}
+	return e.heard()
+}
+
+// heard returns the file's time the speakers play, as they tell it, and
+// false while the track picked is not the one playing.
+func (e *editor) heard() (float64, bool) {
 	at, _, id := e.r.d.position()
 	if id != e.track.ID || id == 0 {
 		return 0, false
@@ -609,8 +644,15 @@ func (e *editor) paintWave(p *paint.Painter, box geom.Size) {
 		lv := e.level(fpp)
 		k := e.gain()
 		clip := func(v float32) float32 { return max(-half, min(v*half*k, half)) }
+		// The columns keep to a grid in time, so each shows the same
+		// stretch of sound as the view scrolls, by whole columns: off
+		// it, a stretch's loudest moment falls now in one column, now
+		// in the next, and the waveform shimmers.
+		per := float64(e.v1.Value()-e.v0.Value()) / float64(box.W)
+		first := math.Floor(float64(e.v0.Value()) / per)
+		colT := func(x float32) float64 { return (first + float64(x)) * per }
 		for x := float32(0); x < box.W; x++ {
-			f0, f1 := int64(e.tAt(x)*rate), int64(e.tAt(x+1)*rate)
+			f0, f1 := int64(math.Round(colT(x)*rate)), int64(math.Round(colT(x+1)*rate))
 			if f1 <= 0 || f0 >= e.track.Frames {
 				continue
 			}
@@ -626,7 +668,7 @@ func (e *editor) paintWave(p *paint.Painter, box geom.Size) {
 			}
 			y0, y1 := mid-clip(hi), mid-clip(lo)
 			p.RRect(geom.Rc(x, y0, 1, max(1, y1-y0)), 0, paint.Solid(faded(ink, 0.12)))
-			tm := (e.tAt(x) + e.tAt(x+1)) / 2
+			tm := (colT(x) + colT(x+1)) / 2
 			if tm < start || tm > end {
 				continue
 			}

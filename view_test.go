@@ -372,9 +372,12 @@ func playing(t *testing.T, follow Follow) (r *root, run func(int), mix func(time
 	if err := r.d.play(tr.ID, path, a.Gap, tr.Edit, &rack{active: true}, 0, false, 0); err != nil {
 		t.Fatal(err)
 	}
+	// The mixer runs in blocks of 10 ms, as many as the time asks, the
+	// rest carried on: one block a frame, then two.
 	buf := make([]float32, 2*audio.SampleRate/100)
+	var owed time.Duration
 	mix = func(d time.Duration) {
-		for range int(d / (10 * time.Millisecond)) {
+		for owed += d; owed >= 10*time.Millisecond; owed -= 10 * time.Millisecond {
 			r.d.mix.Mix(buf)
 		}
 	}
@@ -384,17 +387,40 @@ func playing(t *testing.T, follow Follow) (r *root, run func(int), mix func(time
 func TestScrollingKeepsThePlayheadStillAsTheSoundSlidesUnderIt(t *testing.T) {
 	r, run, mix := playing(t, FollowScroll)
 	ed := r.editor
-	for f := range 240 {
+	// Zoomed in to two seconds, where a jitter of the playhead shows.
+	ed.v0.Jump(0)
+	ed.v1.Jump(2)
+	lo, _ := ed.fit()
+	var lastX float32
+	var lastT float64
+	for f := range 300 {
+		// The speakers tell the time in steps of 10 ms, against frames
+		// of 16.7: the playhead must run smoothly all the same.
 		mix(time.Second / 60)
 		run(1)
 		ph, ok := ed.playhead()
 		if !ok {
 			t.Fatalf("frame %d: no playhead", f)
 		}
-		// Once the view has caught up, a quarter of the way in.
-		if x := ed.xOf(ph); f > 40 && math.Abs(float64(x-ed.size.W/4)) > 2 {
-			t.Fatalf("frame %d: the playhead is at %.1f, want %.1f, a quarter in", f, x, ed.size.W/4)
+		x := ed.xOf(ph)
+		switch {
+		case f < 30:
+			// The view glides from where it was to the sound's start.
+		case ph < float64(ed.v1.Value()-ed.v0.Value())/4+lo:
+			// Near the start, the view stays at the sound's start, and the
+			// playhead runs to the quarter mark.
+			if ed.v0.Value() != float32(lo) {
+				t.Fatalf("frame %d: at %.2f s the view starts at %.3f, before the sound's start %.3f", f, ph, ed.v0.Value(), lo)
+			}
+		case f > 60:
+			if math.Abs(float64(x-ed.size.W/4)) > 1 || math.Abs(float64(x-lastX)) > 0.5 {
+				t.Fatalf("frame %d: the playhead is at %.2f, the frame before at %.2f, want still a quarter in", f, x, lastX)
+			}
+			if d := ph - lastT; math.Abs(d-1.0/60) > 0.002 {
+				t.Fatalf("frame %d: the playhead moved %.4f s, want a frame's time, %.4f", f, d, 1.0/60)
+			}
 		}
+		lastX, lastT = x, ph
 	}
 }
 
