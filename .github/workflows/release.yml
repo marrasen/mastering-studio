@@ -1,0 +1,59 @@
+name: Release
+
+# A tag such as v0.1.0 builds the Windows program and publishes it as a
+# release. A run started by hand builds it and keeps it as an artifact
+# of the run.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test ./...
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Icon and version resource
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          go run . -write-icon icon.png
+          go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --icon icon.png --manifest none \
+            --product-name "Marras Mastering Studio" --file-description "Marras Mastering Studio" \
+            --product-version "$VERSION" --file-version "$VERSION" \
+            --copyright "Copyright 2026 Marcus Johansson" --original-filename MarrasMasteringStudio.exe
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist/MarrasMasteringStudio
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+            -ldflags "-H windowsgui -s -w -X main.version=$VERSION" \
+            -o dist/MarrasMasteringStudio/MarrasMasteringStudio.exe .
+          cp README.md LICENSE NOTICE dist/MarrasMasteringStudio/
+          cd dist && zip -r "MarrasMasteringStudio-$VERSION-windows-amd64.zip" MarrasMasteringStudio
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MarrasMasteringStudio-windows-amd64
+          path: dist/*.zip
+      - name: Publish
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --title "Marras Mastering Studio $GITHUB_REF_NAME" --generate-notes
