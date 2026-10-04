@@ -23,6 +23,8 @@ type Wave struct {
 	// Frames is the file's length, and Rate its rate.
 	Frames int64
 	Rate   int
+	// Gram is its spectrogram.
+	Gram *Gram
 	// Levels are the waveform finer, for the editor zoomed in: each
 	// stretch's lowest and highest sample and its RMS, the finest first,
 	// of finest frames a stretch, and each after four times coarser.
@@ -109,6 +111,7 @@ func scanTrack(ctx context.Context, path string) (scan, error) {
 	counts := make([]int, waveBuckets)
 	per := max(float64(total)/waveBuckets, 1)
 	nFine := int(max(1, (total+finest-1)/finest))
+	gs := newGramScan(format.SampleRate)
 	fine := Level{Per: finest}
 	for ch := range 2 {
 		fine.Min[ch], fine.Max[ch], fine.RMS[ch] = make([]float32, nFine), make([]float32, nFine), make([]float32, nFine)
@@ -121,6 +124,7 @@ func scanTrack(ctx context.Context, path string) (scan, error) {
 			return scan{}, ctx.Err()
 		}
 		n, err := src.Read(buf)
+		gs.write(buf[:2*n])
 		for i := range n {
 			b := min(int(float64(at+int64(i))/per), waveBuckets-1)
 			fb := min(int((at+int64(i))/finest), nFine-1)
@@ -162,6 +166,7 @@ func scanTrack(ctx context.Context, path string) (scan, error) {
 		}
 	}
 	w.Levels = levels(fine)
+	w.Gram = gs.done()
 	sc := scan{Format: format, Frames: total, Wave: w, SoundEnd: duration(total, format.SampleRate)}
 	if first >= 0 {
 		sc.SoundStart, sc.SoundEnd = duration(first, format.SampleRate), duration(last+1, format.SampleRate)

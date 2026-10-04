@@ -681,3 +681,64 @@ func TestTheExportButtonOpensTheDialog(t *testing.T) {
 		t.Fatalf("the export button sent %v", rest)
 	}
 }
+
+func TestTheLegendSwitchesTheLoudnessCurves(t *testing.T) {
+	a := album()
+	a.Curves = CurveS | CurveI
+	w, r, run := stage(t, a)
+	b := boundsOf(t, w, run, r.editor)
+	for i, c := range loudCurves {
+		at := b.Min.Add(r.editor.legendRects()[i].Center())
+		w.Input(input.PointerMove{Pos: at})
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+		run(1)
+		_, rest := edits(w)
+		if len(rest) != 1 || rest[0] != (SetCurves{Curves: a.Curves ^ c.bit}) {
+			t.Fatalf("a click on %s sent %v", c.name, rest)
+		}
+	}
+}
+
+func TestTheViewSwitchesToTheSpectrogramAndANoteIsKeptAsTyped(t *testing.T) {
+	w, r, run := stage(t, album())
+	b := boundsOf(t, w, run, r.head.view)
+	w.Input(input.PointerMove{Pos: b.Center()})
+	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (SetView{View: ViewGram}) {
+		t.Fatalf("the view's switch sent %v", rest)
+	}
+	nb := boundsOf(t, w, run, r.head.note)
+	w.Input(input.PointerMove{Pos: nb.Center()})
+	w.Input(input.PointerDown{Pos: nb.Center(), Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: nb.Center(), Button: input.ButtonPrimary})
+	w.Input(input.TextInput{Text: "Needs a new vocal"})
+	run(2)
+	_, rest := edits(w)
+	if len(rest) == 0 || rest[len(rest)-1] != (SetNote{ID: 1, Note: "Needs a new vocal"}) {
+		t.Fatalf("typing a note sent %v", rest)
+	}
+	// The application's answer, older than what is typed, leaves the
+	// field as it is.
+	gunim.RegisterPatch(w, "album", func(r *root, _ struct{}, u *gunim.UI) { r.head.show(r.state.Tracks[0], r.state, u) })
+	if err := w.Client().Patch("album", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	if got := r.head.note.Text(); got != "Needs a new vocal" {
+		t.Fatalf("the note reads %q as it is typed", got)
+	}
+}
+
+func TestASpectrogramIsDrawnAtLevelsForTheViewZoomedOut(t *testing.T) {
+	g := &Gram{Cols: 10000, Rate: rate, Data: make([]byte, 10000*gramRows)}
+	tiles := newGramTiles(g)
+	if len(tiles.levels) != 3 || tiles.levels[1].per != 4 || tiles.levels[2].cols > 2048 {
+		t.Fatalf("10,000 columns are drawn at %d levels", len(tiles.levels))
+	}
+	if w, h := tiles.levels[0].tiles[0].Size(); w != gramTileCols || h != gramRows {
+		t.Fatalf("a tile is %dx%d", w, h)
+	}
+}

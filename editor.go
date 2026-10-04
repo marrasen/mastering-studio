@@ -70,7 +70,9 @@ type editor struct {
 	// they tell it in uneven steps; clockID is the track it runs for.
 	clock   float64
 	clockID int
-	size    geom.Size
+	// grams are the spectrograms drawn, of the tracks seen last.
+	grams map[*Gram]*gramTiles
+	size  geom.Size
 }
 
 // rawSamples is a stretch of a file's samples, read in the background.
@@ -225,7 +227,7 @@ func (e *editor) gripAt(p geom.Point) grip {
 	start, end := e.span()
 	top, laneH := e.lanes()
 	switch {
-	case p.X > e.size.W-zoomW && p.Y > top && p.Y < top+2*laneH:
+	case p.X > e.size.W-zoomW && p.Y > top && p.Y < top+2*laneH && e.r.state.View == ViewWave:
 		return gripZoom
 	case p.Y < rulerH && !near(in) && !near(out):
 		return gripRuler
@@ -264,6 +266,11 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 	case input.PointerDown:
 		if ev.Button != input.ButtonPrimary {
 			return false
+		}
+		if bit := e.legendAt(ev.Pos); bit != 0 {
+			u.Cue(gunim.CueTick, e)
+			u.Send(e, SetCurves{Curves: e.r.state.Curves ^ bit})
+			break
 		}
 		if ev.Clicks == 2 && e.gripAt(ev.Pos) == gripZoom {
 			e.zoom.Animate(0, anim.Gentle)
@@ -558,11 +565,19 @@ func (e *editor) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.C
 	}
 	e.paintRuler(p, box)
 	e.paintGap(p, box)
-	e.paintWave(p, box)
+	if e.r.state.View == ViewGram {
+		e.paintGram(p, box)
+	} else {
+		e.paintWave(p, box)
+	}
+	e.paintCurves(p, box)
 	e.paintFades(p, box)
 	e.paintCut(p, box)
 	e.paintPlayhead(p, box)
-	e.paintZoom(p, box)
+	if e.r.state.View == ViewWave {
+		e.paintZoom(p, box)
+	}
+	e.paintLegend(p)
 	if g := e.glow.Value(); g > 0.01 {
 		p.RRectStroke(whole.Inset(geom.Uniform(1)), 15, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 2, Color: faded(teal, g)})
 	}
@@ -680,13 +695,7 @@ func (e *editor) paintWave(p *paint.Painter, box geom.Size) {
 		}
 	}
 	// Outside the cut, the file is shaded away.
-	sx, ex := e.xOf(start), e.xOf(end)
-	if sx > 0 {
-		p.RRect(geom.Rc(0, rulerH+1, sx, box.H-rulerH), 0, paint.Solid(faded(night, 0.35)))
-	}
-	if ex < box.W {
-		p.RRect(geom.Rc(ex, rulerH+1, box.W-ex, box.H-rulerH), 0, paint.Solid(faded(night, 0.45)))
-	}
+	e.paintOutside(p, box)
 }
 
 // paintLine draws channel ch's samples in view as the line they make,
@@ -821,7 +830,13 @@ func (e *editor) paintFades(p *paint.Painter, box geom.Size) {
 		x0, x1 := e.xOf(f.from), e.xOf(f.to)
 		if x1-x0 >= 1 {
 			gain := math.Pow(10, float64(e.edit.Gain)/20)
-			for lane := range 2 {
+			// A curve a channel over the waveform; one over the
+			// spectrogram, which is of both.
+			lanes := 2
+			if e.r.state.View == ViewGram {
+				lanes, laneH = 1, 2*laneH
+			}
+			for lane := range lanes {
 				lt := top + laneH*float32(lane)
 				var prev geom.Point
 				for x := x0; x <= x1; x += 2 {

@@ -203,3 +203,28 @@ func TestAWaveformsCoarserLevelsHoldTheFinersExtremes(t *testing.T) {
 		}
 	}
 }
+
+func TestAScanDrawsTheFilesPitchesOverItsLength(t *testing.T) {
+	// A second of silence, two of a 1 kHz tone at -10.5 dBFS, a second of
+	// silence.
+	path := writeTrack(t, time.Second, 2*time.Second, time.Second, 0.3)
+	sc, err := scanTrack(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := sc.Wave.Gram
+	if want := int(4*rate/gramHop) + 1; g.Cols < want-1 || g.Cols > want+1 {
+		t.Fatalf("four seconds made %d columns, want about %d", g.Cols, want)
+	}
+	col := func(at float64) int { return int(at * rate / gramHop) }
+	row := func(hz float64) int { return int(math.Log(hz/20) / math.Log(1000) * gramRows) }
+	if db := g.at(col(2), row(1000)); math.Abs(db-(-10.5)) > 1.5 {
+		t.Fatalf("in the tone, its pitch reads %.1f dB, want -10.5", db)
+	}
+	if db := g.at(col(2), row(100)); db > -60 {
+		t.Fatalf("in the tone, 100 Hz reads %.1f dB", db)
+	}
+	if db := g.at(col(0.5), row(1000)); db > -90 {
+		t.Fatalf("in the silence before, 1 kHz reads %.1f dB", db)
+	}
+}

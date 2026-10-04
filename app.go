@@ -54,8 +54,11 @@ type (
 		// AlbumPlay plays on from each track into the next, without a
 		// gap, as the album's files play one after another.
 		AlbumPlay bool
-		// Follow is how the editor follows the playhead.
+		// Follow is how the editor follows the playhead, View how it shows
+		// the track, and Curves the loudness curves it draws over it.
 		Follow Follow
+		View   View
+		Curves uint8
 		// Exporting says an export is running.
 		Exporting bool
 		// Note says what went wrong last, for the window to show.
@@ -82,6 +85,8 @@ type (
 		Title string
 		File  string
 		Edit  Edit
+		// Note is a note on the track, as what it still needs.
+		Note string
 		// Seq is the window's count of edits taken, so it can tell its
 		// own edit coming back from an older one.
 		Seq int
@@ -173,6 +178,15 @@ type (
 	SetAlbumPlay struct{ On bool }
 	// SetFollow sets how the editor follows the playhead.
 	SetFollow struct{ Follow Follow }
+	// SetView sets how the editor shows the track.
+	SetView struct{ View View }
+	// SetCurves sets the loudness curves the editor draws.
+	SetCurves struct{ Curves uint8 }
+	// SetNote sets a track's note.
+	SetNote struct {
+		ID   int
+		Note string
+	}
 	// Export exports tracks: those named, or every one.
 	Export struct{ IDs []int }
 	// CalcLoudness measures every track changed since it was last
@@ -238,10 +252,13 @@ type project struct {
 	Current   int
 	AlbumPlay bool
 	Follow    Follow
+	View      View   `json:",omitempty"`
+	Curves    *uint8 `json:",omitempty"`
 }
 
 type keptTrack struct {
 	Title, File string
+	Note        string `json:",omitempty"`
 	Edit        Edit
 	Chain       []keptSlot `json:",omitempty"`
 	// At is File whole, as it was last saved, where File is from the
@@ -366,6 +383,7 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 		albums: make(chan albumChoice, 1), lames: make(chan string, 1)}
 	a.Gap, a.Target, a.Bits, a.Dither, a.Volume = time.Second, -14, 16, true, 0.8
 	a.ExportWAV, a.MP3Rate = true, 320
+	a.Curves = CurveS | CurveI
 	return a
 }
 
@@ -389,7 +407,10 @@ func (a *app) load() {
 	if p.Volume > 0 {
 		a.Volume = p.Volume
 	}
-	a.Match, a.AlbumPlay, a.Follow = p.Match, p.AlbumPlay, p.Follow
+	a.Match, a.AlbumPlay, a.Follow, a.View = p.Match, p.AlbumPlay, p.Follow, p.View
+	if p.Curves != nil {
+		a.Curves = *p.Curves
+	}
 	for i, k := range p.Tracks {
 		k.File = found(a.file, k.File, k.At)
 		id := a.add(k.File, k.Title, k.Edit)
@@ -397,6 +418,7 @@ func (a *app) load() {
 			a.Current = id
 		}
 		t := a.track(id)
+		t.Note = k.Note
 		for _, s := range k.Chain {
 			a.slots++
 			t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
@@ -424,9 +446,10 @@ func (a *app) save() {
 		ExportDir: relative(a.file, a.ExportDir), ExportAt: a.ExportDir, ExportWAV: &a.ExportWAV, ExportMP3: a.ExportMP3,
 		MP3Rate: a.MP3Rate,
 		Volume:  a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
-		Follow: a.Follow}
+		Follow: a.Follow, View: a.View, Curves: &a.Curves}
 	for _, t := range a.Tracks {
-		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Edit: t.Edit, Stale: t.Stale}
+		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Edit: t.Edit,
+			Stale: t.Stale}
 		if t.Measured {
 			k.Measure = keep(t.File, t.Measure)
 		}
@@ -994,6 +1017,17 @@ func (a *app) handle(in gunim.Intent) {
 	case SetFollow:
 		a.Follow = in.Follow % followModes
 		a.dirty = true
+	case SetView:
+		a.View = in.View
+		a.dirty = true
+	case SetCurves:
+		a.Curves = in.Curves
+		a.dirty = true
+	case SetNote:
+		if t := a.track(in.ID); t != nil && t.Note != in.Note {
+			t.Note = in.Note
+			a.dirty = true
+		}
 	default:
 		a.handleChain(in)
 	}

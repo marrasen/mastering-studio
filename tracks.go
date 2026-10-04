@@ -366,7 +366,14 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		run.Paint(p, geom.Pt(ring.Min.X+(30-run.Advance)/2, ring.Min.Y+7), faded(numColor, in))
 	}
 	textX := ring.Max.X + 12
-	paintFit(p, t.Title, 14, true, geom.Pt(textX, row.Min.Y+10), row.Max.X-textX-92, faded(ink, 0.92*in))
+	room := row.Max.X - textX - 92
+	if t.Note != "" {
+		// A note waits on the track: a mark after its title.
+		room -= 20
+		at := textX + min(shaped(t.Title, 14, true).Advance, room) + 6
+		widget.PaintIcon(p, f.Theme, icon.MessageSquareText, geom.Rc(at, row.Min.Y+11, 14, 14), faded(amber, 0.9*in))
+	}
+	paintFit(p, t.Title, 14, true, geom.Pt(textX, row.Min.Y+10), room, faded(ink, 0.92*in))
 	// The waveform, small, under the title.
 	if lk.thumb != nil {
 		w := row.Max.X - textX - 96
