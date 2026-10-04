@@ -33,11 +33,15 @@ type root struct {
 	scroll *widget.Scroll
 	drop   *widget.DropTarget
 	editor *editor
+	// edDrop takes a file dropped on the editor, as the track's new
+	// file.
+	edDrop *widget.DropTarget
 	tools  *editTools
 	trans  *transport
 	strip  *strip
 	meters *meters
 	chain  *chainRow
+	head   *trackHead
 	// chainMenu is the chain's menus, around it.
 	chainMenu *widget.ContextMenu
 	size      geom.Size
@@ -53,11 +57,21 @@ func newRoot(d *deck) *root {
 	r.drop.Accept = func(_ any, paths []string) bool { return len(paths) > 0 }
 	r.drop.OnDrop = func(d input.Drop) gunim.Intent { return AddFiles{Paths: d.Paths} }
 	r.editor = newEditor(r)
+	r.edDrop = widget.NewDropTarget(r.editor)
+	r.edDrop.Accept = func(_ any, paths []string) bool { return len(paths) == 1 && r.state.Current != 0 }
+	r.edDrop.Hint = func(input.DragOver) any {
+		t, _ := r.track()
+		return widget.DropHint{Text: "Replace the file of " + t.Title, Effect: widget.DropCopy}
+	}
+	r.edDrop.OnDrop = func(d input.Drop) gunim.Intent {
+		return ReplaceFile{ID: r.state.Current, Path: d.Paths[0]}
+	}
 	r.tools = newEditTools(r)
 	r.trans = newTransport(r)
 	r.strip = newStrip(r)
 	r.meters = newMeters(r)
 	r.chain = newChainRow(r)
+	r.head = newTrackHead(r)
 	r.chainMenu = widget.NewContextMenu(r.chain)
 	r.chain.menu = r.chainMenu
 	return r
@@ -82,6 +96,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 	r.editor.show(was, t)
 	r.tools.show(t)
 	r.chain.show(t, s)
+	r.head.show(t, s, u)
 	r.trans.show(s)
 	r.strip.show(s)
 	r.meters.show(was, s)
@@ -90,7 +105,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 
 // Children implements [gunim.Composite].
 func (r *root) Children() []gunim.Node {
-	return []gunim.Node{r.header, r.drop, r.editor, r.tools, r.trans, r.strip, r.meters, r.chainMenu}
+	return []gunim.Node{r.header, r.drop, r.edDrop, r.tools, r.trans, r.strip, r.meters, r.chainMenu, r.head}
 }
 
 // Focusable implements [gunim.Focusable]: the window's keys come here.
@@ -103,6 +118,7 @@ const (
 	metersW = 330
 	toolsH  = 64
 	chainH  = 60
+	headH   = 44
 	transH  = 76
 	stripH  = 92
 	gutter  = 12
@@ -126,7 +142,8 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	place(5, geom.Rc(x0, bottom-stripH, x1-x0, stripH))
 	place(4, geom.Rc(x0, bottom-stripH-gutter-transH, x1-x0, transH))
 	place(7, geom.Rc(x0, bottom-stripH-gutter-transH-gutter-chainH, x1-x0, chainH))
-	edTop := top + gutter
+	place(8, geom.Rc(x0, top+gutter, x1-x0, headH))
+	edTop := top + gutter + headH
 	edBottom := bottom - stripH - gutter - transH - gutter - chainH - toolsH
 	place(2, geom.Rc(x0, edTop, x1-x0, max(edBottom-edTop, 80)))
 	place(3, geom.Rc(x0, edBottom, x1-x0, toolsH))
@@ -168,6 +185,8 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 		u.Send(r, SeekTo{At: 0})
 	case k.Key == input.KeyM:
 		u.Send(r, SetMatch{On: !r.state.Match})
+	case k.Key == input.KeyA:
+		u.Send(r, SetAlbumPlay{On: !r.state.AlbumPlay})
 	default:
 		return false
 	}

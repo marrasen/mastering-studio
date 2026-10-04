@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -314,4 +315,79 @@ func (a *app) handleChain(in gunim.Intent) {
 		}
 		a.dirty = true
 	}
+}
+
+// replace gives track id the file at path, keeping its title, edit and
+// chain: read and measured anew, and, while it plays, played on from
+// the same moment.
+func (a *app) replace(id int, path string) {
+	t := a.track(id)
+	if t == nil || path == "" || path == t.File {
+		return
+	}
+	_, format, closer, err := openTrack(path)
+	if err != nil {
+		a.Note = fmt.Sprintf("%s: %v", filepath.Base(path), err)
+		return
+	}
+	closer()
+	// A chain runs at its file's rate: another rate loads it anew.
+	if format.SampleRate != rateOf(t) {
+		a.dropRack(id)
+	}
+	t.File = path
+	t.Scanned, t.Wave, t.Frames, t.Format = false, nil, 0, format
+	t.Exported, t.Out = "", Measure{}
+	a.scan(id, path)
+	a.remeasure(id)
+	a.dirty = true
+	if a.Current == id && a.d.done() != nil {
+		at, _, _ := a.d.position()
+		if err := a.d.play(t.ID, t.File, a.Gap, t.Edit, a.rackOf(t), at, !a.Playing, 15*time.Millisecond); err != nil {
+			a.Note = err.Error()
+		}
+	}
+}
+
+// queuedKey is what a track queued to play next was queued as, so it
+// is queued anew only once that changes.
+type queuedKey struct {
+	id   int
+	file string
+	edit Edit
+	gap  time.Duration
+	rack *rack
+}
+
+// queueNext has the deck play the track after the one playing once it
+// ends, in album play, and nothing otherwise.
+func (a *app) queueNext() {
+	var want queuedKey
+	if i := a.place(a.Current); a.AlbumPlay && a.d.done() != nil && i >= 0 && i+1 < len(a.Tracks) {
+		n := &a.Tracks[i+1]
+		want = queuedKey{id: n.ID, file: n.File, edit: n.Edit, gap: a.Gap, rack: a.rackOf(n)}
+	}
+	if want == a.queued && (want.id == 0 || a.d.hasNext()) {
+		return
+	}
+	a.queued = want
+	if want.id == 0 {
+		a.d.unqueue()
+		return
+	}
+	if err := a.d.queue(want.id, want.file, want.gap, want.edit, want.rack); err != nil {
+		a.Note = err.Error()
+		a.queued = queuedKey{}
+	}
+}
+
+// turned takes the deck's turn to track id, queued.
+func (a *app) turned(id int) {
+	if a.track(id) == nil {
+		return
+	}
+	a.Current = id
+	a.queued = queuedKey{}
+	a.dirty = true
+	a.applyLevel()
 }

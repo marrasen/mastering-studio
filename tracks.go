@@ -253,13 +253,25 @@ func (l *trackList) openMenu(p geom.Point, u *gunim.UI) bool {
 		return false
 	}
 	id := l.order[i]
-	l.menu.Items = []string{"Export this track", "Remove from the album"}
-	l.menu.Icons = []*icon.Icon{icon.Download, icon.Trash2}
+	l.menu.Items = []string{"Rename", "Replace file…", "Show file in folder", "Export this track", "Remove from the album"}
+	l.menu.Icons = []*icon.Icon{icon.Pencil, icon.FileAudio, icon.FolderOpen, icon.Download, icon.Trash2}
+	l.menu.Breaks = []int{3, 4}
+	l.menu.Disabled, l.menu.Captions = nil, nil
 	l.menu.Picked = func(k int, u *gunim.UI) {
 		switch k {
 		case 0:
-			u.Send(l, Export{IDs: []int{id}})
+			// The title is renamed where the editor shows it.
+			if id != l.r.state.Current {
+				u.Send(l, Pick{ID: id})
+			}
+			l.r.head.renameTrack(id, u)
 		case 1:
+			u.Send(l, ChooseReplacement{ID: id})
+		case 2:
+			u.Send(l, ShowFile{ID: id})
+		case 3:
+			u.Send(l, Export{IDs: []int{id}})
+		case 4:
 			u.Send(l, RemoveTrack{ID: id})
 		}
 	}

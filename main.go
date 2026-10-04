@@ -12,9 +12,13 @@
 //	go run ./example/mastering
 //	go run ./example/mastering mix1.wav mix2.wav
 //
-// Files dropped on the list join the album, which is kept between runs.
-// Keys: Space plays and pauses, 1 to 9 pick a track, Up and Down step
-// through them, Left and Right seek, Home starts over, M matches levels.
+// Files dropped on the list join the album, which is kept between runs;
+// a file dropped on the waveform replaces the track's, its edit and
+// chain kept. A double-click on the title over the waveform renames the
+// track. Keys: Space plays and pauses, 1 to 9 pick a track, Up and Down
+// step through them, Left and Right seek, Home starts over, M matches
+// levels, A plays on through the album. Alt with the wheel, or the
+// slider at the waveform's right, draws it louder, to see quiet sound.
 package main
 
 import (

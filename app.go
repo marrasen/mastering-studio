@@ -43,6 +43,11 @@ type (
 		// them on their sound alone; Volume is the listening level.
 		Match  bool
 		Volume float32
+		// AlbumPlay plays on from each track into the next, without a
+		// gap, as the album's files play one after another.
+		AlbumPlay bool
+		// Follow is how the editor follows the playhead.
+		Follow Follow
 		// Exporting says an export is running.
 		Exporting bool
 		// Note says what went wrong last, for the window to show.
@@ -125,6 +130,21 @@ type (
 	}
 	// ChooseExportDir asks, with the system's dialog, where to export.
 	ChooseExportDir struct{}
+	// ReplaceFile gives a track another file, as a new mix of it, its
+	// title, edit and chain kept.
+	ReplaceFile struct {
+		ID   int
+		Path string
+	}
+	// ChooseReplacement asks, with the system's dialog, for a track's
+	// new file.
+	ChooseReplacement struct{ ID int }
+	// ShowFile shows a track's file in the system's file manager.
+	ShowFile struct{ ID int }
+	// SetAlbumPlay turns playing on through the album on or off.
+	SetAlbumPlay struct{ On bool }
+	// SetFollow sets how the editor follows the playhead.
+	SetFollow struct{ Follow Follow }
 	// Export exports tracks: those named, or every one.
 	Export struct{ IDs []int }
 
@@ -166,6 +186,8 @@ type project struct {
 	Volume    float32
 	Match     bool
 	Current   int
+	AlbumPlay bool
+	Follow    Follow
 }
 
 type keptTrack struct {
@@ -227,12 +249,19 @@ type app struct {
 	// what was found.
 	pluginDirs []string
 	found      chan []PluginChoice
+	// replacing carries the files chosen to replace tracks', and
+	// reveal shows a file in the file manager.
+	replacing chan ReplaceFile
+	reveal    func(path string) error
+	// queued is what the deck has waiting to play next, in album play.
+	queued queuedKey
 }
 
 type scanned struct {
-	id  int
-	sc  scan
-	err error
+	id   int
+	path string
+	sc   scan
+	err  error
 }
 
 type measured struct {
@@ -256,7 +285,8 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 		scans: make(chan scanned, 16), measures: make(chan measured, 16),
 		measurer: map[int]context.CancelFunc{}, settle: map[int]time.Time{},
 		chosen: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
-		racks: map[int]*rack{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1)}
+		racks: map[int]*rack{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1),
+		replacing: make(chan ReplaceFile, 1)}
 	a.Gap, a.Target, a.Bits, a.Dither, a.Volume = time.Second, -14, 16, true, 0.8
 	return a
 }
@@ -275,7 +305,7 @@ func (a *app) load() {
 	if p.Volume > 0 {
 		a.Volume = p.Volume
 	}
-	a.Match = p.Match
+	a.Match, a.AlbumPlay, a.Follow = p.Match, p.AlbumPlay, p.Follow
 	for i, k := range p.Tracks {
 		id := a.add(k.File, k.Title, k.Edit)
 		if i == p.Current {
@@ -299,7 +329,8 @@ func (a *app) save() {
 	a.dirty = false
 	a.readStates()
 	p := project{Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither, ExportDir: a.ExportDir,
-		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current)}
+		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
+		Follow: a.Follow}
 	for _, t := range a.Tracks {
 		k := keptTrack{Title: t.Title, File: t.File, Edit: t.Edit}
 		for _, s := range t.Chain {
@@ -349,16 +380,21 @@ func (a *app) add(path, title string, e Edit) int {
 	if a.Current == 0 {
 		a.Current = t.ID
 	}
-	go func(id int) {
-		sc, err := scanTrack(a.ctx, path)
-		select {
-		case a.scans <- scanned{id, sc, err}:
-		case <-a.ctx.Done():
-		}
-	}(t.ID)
+	a.scan(t.ID, path)
 	a.remeasure(t.ID)
 	a.dirty = true
 	return t.ID
+}
+
+// scan reads track id's file, path, in the background.
+func (a *app) scan(id int, path string) {
+	go func() {
+		sc, err := scanTrack(a.ctx, path)
+		select {
+		case a.scans <- scanned{id, path, sc, err}:
+		case <-a.ctx.Done():
+		}
+	}()
 }
 
 // slots holds the measurings running at once, so many tracks measured
@@ -432,6 +468,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a := newApp(ctx, d, o.file)
 	a.pluginDirs = o.plugins
 	a.choose = func(o driver.ChooseOptions) ([]string, error) { return c.ChooseFiles(ctx, o) }
+	a.reveal = c.Reveal
 	a.load()
 	for _, p := range o.paths {
 		a.add(p, "", Edit{})
@@ -488,6 +525,11 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			a.exportProgress(p)
 		case ps := <-a.found:
 			a.Plugins, a.Scanning = ps, false
+		case r := <-a.replacing:
+			a.replace(r.ID, r.Path)
+		case id := <-a.d.turns:
+			// Album play ran on into the next track.
+			a.turned(id)
 		case <-watch.C:
 			if !a.watchPlugins() {
 				continue
@@ -502,6 +544,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			}
 			a.handle(ev.Intent)
 		}
+		a.queueNext()
 		_ = c.Publish(albumTopic, a.Album)
 	}
 }
@@ -509,7 +552,8 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 // scanned takes what reading a track's file told.
 func (a *app) scanned(s scanned) {
 	t := a.track(s.id)
-	if t == nil {
+	if t == nil || t.File != s.path {
+		// Gone, or given another file since.
 		return
 	}
 	if s.err != nil {
@@ -713,6 +757,32 @@ func (a *app) handle(in gunim.Intent) {
 		a.dirty = true
 	case Export:
 		a.export(in.IDs)
+	case ReplaceFile:
+		a.replace(in.ID, in.Path)
+	case ChooseReplacement:
+		t := a.track(in.ID)
+		if t == nil {
+			return
+		}
+		go func(id int, old string) {
+			paths, err := a.choose(driver.ChooseOptions{Title: "Replace " + filepath.Base(old),
+				Filters: []driver.FileFilter{{Name: "Sound", Patterns: []string{"*.wav", "*.flac", "*.mp3", "*.ogg"}}}})
+			if err == nil && len(paths) > 0 {
+				a.replacing <- ReplaceFile{ID: id, Path: paths[0]}
+			}
+		}(t.ID, t.File)
+	case ShowFile:
+		if t := a.track(in.ID); t != nil && a.reveal != nil {
+			if err := a.reveal(t.File); err != nil {
+				a.Note = err.Error()
+			}
+		}
+	case SetAlbumPlay:
+		a.AlbumPlay = in.On
+		a.dirty = true
+	case SetFollow:
+		a.Follow = in.Follow % followModes
+		a.dirty = true
 	default:
 		a.handleChain(in)
 	}

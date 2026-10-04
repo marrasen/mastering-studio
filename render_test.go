@@ -175,3 +175,30 @@ func TestAnExportIsMeasuredAsItWillSound(t *testing.T) {
 		t.Fatalf("the file is %+v, %d frames; want 16 bits at 44.1 kHz, six seconds", format, src.Len())
 	}
 }
+
+func TestAWaveformsCoarserLevelsHoldTheFinersExtremes(t *testing.T) {
+	path := writeTrack(t, 0, 20*time.Second, 0, 0.3)
+	sc, err := scanTrack(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls := sc.Wave.Levels
+	if len(ls) < 2 || ls[0].Per != finest {
+		t.Fatalf("the waveform has %d levels, the finest of %d frames", len(ls), ls[0].Per)
+	}
+	for i := 1; i < len(ls); i++ {
+		fine, coarse := ls[i-1], ls[i]
+		if coarse.Per != 4*fine.Per {
+			t.Fatalf("level %d is of %d frames, after %d", i, coarse.Per, fine.Per)
+		}
+		for b := range coarse.Max[0] {
+			var hi float32
+			for j := 4 * b; j < min(4*b+4, len(fine.Max[0])); j++ {
+				hi = max(hi, fine.Max[0][j])
+			}
+			if coarse.Max[0][b] != hi {
+				t.Fatalf("level %d, stretch %d: highest %v, the finer's %v", i, b, coarse.Max[0][b], hi)
+			}
+		}
+	}
+}

@@ -21,9 +21,13 @@ type deck struct {
 
 	mu    sync.Mutex
 	voice *audio.Voice
-	// sw is the track playing, as edited, and rack its chain.
+	// sw is the track playing, as edited, and rack its chain; next is
+	// the track queued after it.
 	sw   *switcher
 	rack *rack
+	next *queued
+	// turns carries the tracks the voice has turned to, from the queue.
+	turns chan int
 	// id is the track playing, and volume the listening level, as a
 	// ratio, with match, the gain that brings the track to the target
 	// loudness while levels are matched.
@@ -34,7 +38,7 @@ type deck struct {
 
 func newDeck(mix *audio.Mixer) *deck {
 	an := audio.NewAnalyzer(mix, 32)
-	return &deck{mix: mix, an: an, volume: 0.8, match: 1}
+	return &deck{mix: mix, an: an, volume: 0.8, match: 1, turns: make(chan int, 8)}
 }
 
 // play plays track id, rendered from the file at path with the album's
@@ -55,7 +59,51 @@ func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at 
 	// Seeking through the voice, so it says where it is from the start.
 	_ = d.voice.Seek(at)
 	d.sw, d.rack, d.id = sw, r, id
+	go d.watch(d.voice)
 	return nil
+}
+
+// watch follows voice v's turns to the tracks queued, until it ends.
+// It looks with mu held, as unqueue does, so a turn is taken once.
+func (d *deck) watch(v *audio.Voice) {
+	t := time.NewTicker(10 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-v.Done():
+			return
+		case <-t.C:
+		}
+		d.mu.Lock()
+		if d.voice == v {
+			d.takeTurnLocked()
+		}
+		d.mu.Unlock()
+	}
+}
+
+// takeTurnLocked makes the track queued the one playing, where the
+// voice has turned to it, and tells of it. It runs with mu held.
+func (d *deck) takeTurnLocked() bool {
+	if d.next == nil {
+		return false
+	}
+	select {
+	case <-d.voice.Turned():
+	default:
+		return false
+	}
+	n := d.next
+	d.sw.close()
+	if d.rack != n.rack {
+		d.rack.setActive(false)
+	}
+	d.sw, d.rack, d.id, d.next = n.sw, n.rack, n.id, nil
+	select {
+	case d.turns <- n.id:
+	default:
+	}
+	return true
 }
 
 // edit plays track id as edited anew, from where it is, with a crossfade
@@ -84,6 +132,7 @@ func (d *deck) stopLocked(fade time.Duration) {
 	if d.voice == nil {
 		return
 	}
+	d.unqueueLocked()
 	old, sw, r := d.voice, d.sw, d.rack
 	old.Stop(fade)
 	go func() {
@@ -257,4 +306,66 @@ func (s *switcher) close() {
 	defer s.mu.Unlock()
 	s.dropOld()
 	s.closer()
+}
+
+// queued is a track waiting to play once the one playing ends.
+type queued struct {
+	id   int
+	sw   *switcher
+	rack *rack
+}
+
+// queue has track id, rendered and run through its chain r, play once
+// the track playing ends, without a gap, in place of any queued before.
+func (d *deck) queue(id int, path string, gap time.Duration, e Edit, r *rack) error {
+	src, format, closer, err := openTrack(path)
+	if err != nil {
+		return err
+	}
+	sw := &switcher{cur: newRender(src, format.SampleRate, gap, e), closer: closer}
+	out := audio.Resample(newStage(sw, r), format.SampleRate)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.voice == nil {
+		sw.close()
+		return nil
+	}
+	d.unqueueLocked()
+	// Its chain runs from the moment the mixer reaches it.
+	r.setActive(true)
+	d.voice.Then(out)
+	d.next = &queued{id: id, sw: sw, rack: r}
+	return nil
+}
+
+// unqueue takes the track queued away.
+func (d *deck) unqueue() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.unqueueLocked()
+}
+
+func (d *deck) unqueueLocked() {
+	if d.next == nil {
+		return
+	}
+	if d.voice != nil {
+		d.voice.Then(nil)
+		// Turned to it already, it plays: it stays.
+		if d.takeTurnLocked() {
+			return
+		}
+	}
+	d.next.sw.close()
+	if d.next.rack != d.rack {
+		d.next.rack.setActive(false)
+	}
+	d.next = nil
+}
+
+// hasNext says a track is queued.
+func (d *deck) hasNext() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.next != nil
 }

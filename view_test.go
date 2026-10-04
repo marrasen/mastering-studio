@@ -356,3 +356,153 @@ func TestThePluginPickerFindsAPluginByItsName(t *testing.T) {
 		t.Fatalf("picking sent %v, want Pro-L 2 added", sent)
 	}
 }
+
+// playing stages an album of one real track, ten seconds long, playing
+// from its start on the stage's deck; mix advances the sound by d.
+func playing(t *testing.T, follow Follow) (r *root, run func(int), mix func(time.Duration)) {
+	t.Helper()
+	path := writeTrack(t, 0, 10*time.Second, 0, 0.3)
+	sc, err := scanTrack(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := album()
+	tr := &a.Tracks[0]
+	tr.File, tr.Wave, tr.Frames, tr.Format = path, sc.Wave, sc.Frames, sc.Format
+	a.Playing, a.Follow = true, follow
+	_, r, run = stage(t, a)
+	if err := r.d.play(tr.ID, path, a.Gap, tr.Edit, &rack{active: true}, 0, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]float32, 2*audio.SampleRate/100)
+	mix = func(d time.Duration) {
+		for range int(d / (10 * time.Millisecond)) {
+			r.d.mix.Mix(buf)
+		}
+	}
+	return r, run, mix
+}
+
+func TestScrollingKeepsThePlayheadStillAsTheSoundSlidesUnderIt(t *testing.T) {
+	r, run, mix := playing(t, FollowScroll)
+	ed := r.editor
+	for f := range 240 {
+		mix(time.Second / 60)
+		run(1)
+		ph, ok := ed.playhead()
+		if !ok {
+			t.Fatalf("frame %d: no playhead", f)
+		}
+		// Once the view has caught up, a quarter of the way in.
+		if x := ed.xOf(ph); f > 40 && math.Abs(float64(x-ed.size.W/4)) > 2 {
+			t.Fatalf("frame %d: the playhead is at %.1f, want %.1f, a quarter in", f, x, ed.size.W/4)
+		}
+	}
+}
+
+func TestJumpingTurnsTheViewOnAPageAndOffLeavesIt(t *testing.T) {
+	for _, follow := range []Follow{FollowJump, FollowOff} {
+		r, run, mix := playing(t, follow)
+		ed := r.editor
+		// Zoomed in on the first two seconds.
+		ed.v0.Jump(0)
+		ed.v1.Jump(2)
+		for range 300 {
+			mix(time.Second / 60)
+			run(1)
+		}
+		ph, _ := ed.playhead()
+		in := float64(ed.v0.Value()) <= ph && ph <= float64(ed.v1.Value())
+		if follow == FollowJump && !in {
+			t.Errorf("jumping, the playhead at %.2f s is out of the view, %.2f to %.2f", ph, ed.v0.Value(), ed.v1.Value())
+		}
+		if follow == FollowOff && (ed.v0.Value() != 0 || ed.v1.Value() != 2) {
+			t.Errorf("off, the view moved to %.2f to %.2f", ed.v0.Value(), ed.v1.Value())
+		}
+	}
+}
+
+func TestZoomingInFarDrawsFromTheSamplesThemselves(t *testing.T) {
+	r, run, _ := playing(t, FollowOff)
+	ed := r.editor
+	ed.v0.Jump(5)
+	ed.v1.Jump(5.01)
+	for range 120 {
+		run(1)
+		if len(ed.raw.data) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if ed.raw.file != ed.track.File || ed.raw.from > 5*rate || ed.raw.from+int64(len(ed.raw.data)/2) < 5*rate+441 {
+		t.Fatalf("zoomed in on 5 s, the samples read are from %d, %d frames", ed.raw.from, len(ed.raw.data)/2)
+	}
+}
+
+func TestTheZoomSliderDrawsTheWaveformLouder(t *testing.T) {
+	w, r, run := stage(t, album())
+	ed := r.editor
+	b := boundsOf(t, w, run, ed)
+	top, laneH := ed.lanes()
+	x := b.Max.X - zoomW/2
+	for i, y := range []float32{top + 2*laneH - 8, top + laneH, top + 8} {
+		at := geom.Pt(x, b.Min.Y+y)
+		w.Input(input.PointerMove{Pos: at})
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+		run(40)
+		want := []float32{0, maxZoom / 2, maxZoom}[i]
+		if got := ed.zoom.Value(); math.Abs(float64(got-want)) > 1.5 {
+			t.Fatalf("pressed at %.0f up the slider, the zoom is %.1f dB, want %.0f", y, got, want)
+		}
+	}
+	at := geom.Pt(x, b.Min.Y+top+laneH)
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 2})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(60)
+	if z := ed.zoom.Value(); z > 0.1 {
+		t.Fatalf("a double-click left the zoom at %.1f dB", z)
+	}
+}
+
+func TestADoubleClickOnTheTitleRenamesTheTrack(t *testing.T) {
+	for _, how := range []string{"enter", "away", "escape"} {
+		w, r, run := stage(t, album())
+		b := boundsOf(t, w, run, r.head)
+		at := b.Min.Add(geom.Pt(10, b.Size().H/2))
+		w.Input(input.PointerMove{Pos: at})
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 2})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+		run(5)
+		if !r.head.renaming || r.head.field.Text() != "One" {
+			t.Fatalf("%s: a double-click on the title opened no field", how)
+		}
+		w.Input(input.TextInput{Text: "Uno"})
+		switch how {
+		case "enter":
+			w.Input(input.KeyPress{Key: input.KeyEnter})
+		case "away":
+			// A click on the editor takes the keyboard.
+			eb := boundsOf(t, w, run, r.editor)
+			w.Input(input.PointerDown{Pos: eb.Center(), Button: input.ButtonPrimary, Clicks: 1})
+			w.Input(input.PointerUp{Pos: eb.Center(), Button: input.ButtonPrimary})
+		case "escape":
+			w.Input(input.KeyPress{Key: input.KeyEscape})
+		}
+		run(5)
+		var renamed []gunim.Intent
+		_, rest := edits(w)
+		for _, in := range rest {
+			if _, ok := in.(RenameTrack); ok {
+				renamed = append(renamed, in)
+			}
+		}
+		want := []gunim.Intent{RenameTrack{ID: 1, Title: "Uno"}}
+		if how == "escape" {
+			want = nil
+		}
+		if len(renamed) != len(want) || (len(want) > 0 && renamed[0] != want[0]) || r.head.renaming {
+			t.Fatalf("%s: sent %v, want %v, and the field closed", how, renamed, want)
+		}
+	}
+}

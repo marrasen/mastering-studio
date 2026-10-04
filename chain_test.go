@@ -221,3 +221,65 @@ func TestCopyingAChainCopiesEveryPluginAsSet(t *testing.T) {
 		t.Fatal("a track not copied to took the first's setting")
 	}
 }
+
+func TestAlbumPlayRunsOnIntoTheNextTrackWithoutAGap(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mix := audio.NewMixer()
+	a := newApp(ctx, newDeck(mix), "")
+	for _, p := range writeAlbum(t) {
+		a.add(p, "", Edit{})
+	}
+	a.handle(SetAlbumPlay{On: true})
+	a.handle(TogglePlay{})
+	a.queueNext()
+	// The first track, its second of silence and three of sound, and
+	// half a second into the second.
+	buf := make([]float32, 2*audio.SampleRate/10)
+	for range 45 {
+		mix.Mix(buf)
+	}
+	var id int
+	select {
+	case id = <-a.d.turns:
+	case <-time.After(time.Second):
+		t.Fatal("the deck never turned to the next track")
+	}
+	a.turned(id)
+	if a.Current != a.Tracks[1].ID {
+		t.Fatalf("playing track %d, want the second, %d", a.Current, a.Tracks[1].ID)
+	}
+	at, _, playing := a.d.position()
+	if playing != a.Tracks[1].ID || at > 600*time.Millisecond {
+		t.Fatalf("the second track plays at %v (track %d), want half a second in", at, playing)
+	}
+	// The third is queued next.
+	a.queueNext()
+	if a.queued.id != a.Tracks[2].ID {
+		t.Fatalf("queued track %d, want the third", a.queued.id)
+	}
+}
+
+func TestReplacingATracksFileKeepsItsEditAndChain(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	paths := writeAlbum(t)
+	a.add(paths[0], "Opener", Edit{})
+	tr := &a.Tracks[0]
+	e := Edit{Start: 200 * time.Millisecond, FadeIn: Fade{Length: 50 * time.Millisecond, Curve: Smooth}, Gain: -1.5}
+	tr.Edit = e
+	settle(t, a, func() bool { return tr.Scanned && tr.Measured })
+	// A chain, as kept; its plugin is none to load, so it goes again
+	// before the measuring.
+	tr.Chain = []Slot{{ID: 9, Name: "Some EQ"}}
+	a.handle(ReplaceFile{ID: tr.ID, Path: paths[1]})
+	if tr.File != paths[1] || tr.Scanned || tr.Title != "Opener" || tr.Edit != e || len(tr.Chain) != 1 {
+		t.Fatalf("after the replacement the track is %+v", *tr)
+	}
+	tr.Chain = nil
+	settle(t, a, func() bool { return tr.Scanned && tr.Measured && !tr.Measuring })
+	if tr.Frames == 0 {
+		t.Fatal("the new file was never read")
+	}
+}

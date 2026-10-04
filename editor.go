@@ -23,6 +23,7 @@ const (
 	gripFadeIn
 	gripFadeOut
 	gripSeek
+	gripZoom
 )
 
 // editor is the track picked, laid out along its file's time: both
@@ -51,13 +52,29 @@ type editor struct {
 	inFrom, outFrom   Curve
 	inMorph, outMorph *anim.Float
 	glow              *anim.Float
-	size              geom.Size
+	// zoom is how far the waveform is drawn louder, in decibels, to see
+	// quiet sound: its slider runs up the editor's right edge.
+	zoom *anim.Float
+	// raw is the samples of the file in view, read for a view zoomed in
+	// past the waveform's finest level.
+	raw  rawSamples
+	size geom.Size
+}
+
+// rawSamples is a stretch of a file's samples, read in the background.
+type rawSamples struct {
+	file    string
+	from    int64
+	data    []float32
+	loading bool
+	loaded  chan rawSamples
 }
 
 func newEditor(r *root) *editor {
 	e := &editor{r: r, v0: anim.NewFloat(-1), v1: anim.NewFloat(10), inMorph: anim.NewFloat(1),
-		outMorph: anim.NewFloat(1), glow: anim.NewFloat(0)}
-	e.Add(e.v0, e.v1, e.inMorph, e.outMorph, e.glow)
+		outMorph: anim.NewFloat(1), glow: anim.NewFloat(0), zoom: anim.NewFloat(0)}
+	e.Add(e.v0, e.v1, e.inMorph, e.outMorph, e.glow, e.zoom)
+	e.raw.loaded = make(chan rawSamples, 1)
 	return e
 }
 
@@ -82,7 +99,7 @@ func (e *editor) fit() (v0, v1 float64) {
 }
 
 func (e *editor) show(was Album, t Track) {
-	fresh := t.ID != e.track.ID || t.Scanned != e.track.Scanned
+	fresh := t.ID != e.track.ID || t.Scanned != e.track.Scanned || t.File != e.track.File
 	e.track = t
 	// The window's own edits are newer than the application's answers.
 	if t.Seq >= e.seq || fresh {
@@ -194,7 +211,10 @@ func (e *editor) gripAt(p geom.Point) grip {
 		return d.X*d.X+d.Y*d.Y < 12*12
 	}
 	start, end := e.span()
+	top, laneH := e.lanes()
 	switch {
+	case p.X > e.size.W-zoomW && p.Y > top && p.Y < top+2*laneH:
+		return gripZoom
 	case near(in):
 		return gripFadeIn
 	case near(out):
@@ -231,6 +251,10 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 		if ev.Button != input.ButtonPrimary {
 			return false
 		}
+		if ev.Clicks == 2 && e.gripAt(ev.Pos) == gripZoom {
+			e.zoom.Animate(0, anim.Gentle)
+			break
+		}
 		if ev.Clicks == 2 && e.gripAt(ev.Pos) == gripSeek {
 			v0, v1 := e.fit()
 			e.v0.Animate(float32(v0), anim.Gentle)
@@ -239,6 +263,9 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 		}
 		e.held = e.gripAt(ev.Pos)
 		e.heldAt = e.tAt(ev.Pos.X)
+		if e.held == gripZoom {
+			e.zoomTo(ev.Pos.Y)
+		}
 		if e.held == gripSeek {
 			u.Send(e, SeekTo{At: e.renderTime(e.tAt(ev.Pos.X))})
 		}
@@ -264,6 +291,16 @@ func (e *editor) renderTime(t float64) time.Duration {
 // wheel zooms the view about the pointer, or with Shift, or a wheel
 // across, pans it.
 func (e *editor) wheel(ev input.Scroll) {
+	n := float64(ev.Notches.Y)
+	if n == 0 {
+		n = float64(ev.Delta.Y) / 40
+	}
+	// With Alt, or over the slider, the wheel zooms the waveform up: Ctrl
+	// with the wheel zooms the whole window.
+	if ev.Mods.Has(input.ModAlt) || e.gripAt(ev.Pos) == gripZoom {
+		e.zoom.Animate(float32(max(0, min(float64(e.zoom.Target())+3*n, maxZoom))), anim.Spring{Response: 0.2, Damping: 1})
+		return
+	}
 	v0, v1 := float64(e.v0.Target()), float64(e.v1.Target())
 	span := v1 - v0
 	if ev.Mods.Has(input.ModShift) || ev.Delta.X != 0 {
@@ -272,13 +309,11 @@ func (e *editor) wheel(ev input.Scroll) {
 		e.v1.Animate(float32(v1-d), anim.Spring{Response: 0.2, Damping: 1})
 		return
 	}
-	n := float64(ev.Notches.Y)
-	if n == 0 {
-		n = float64(ev.Delta.Y) / 40
-	}
 	k := math.Pow(1.25, -n)
 	f0, f1 := e.fit()
-	k = max(0.05/span, min(k, (f1-f0)*1.2/span))
+	// As close as a few samples across the editor.
+	least := 24 / float64(max(e.track.Format.SampleRate, 1))
+	k = max(least/span, min(k, (f1-f0)*1.2/span))
 	at := float64(e.tAt(ev.Pos.X))
 	e.v0.Animate(float32(at-(at-v0)*k), anim.Spring{Response: 0.2, Damping: 1})
 	e.v1.Animate(float32(at+(v1-at)*k), anim.Spring{Response: 0.2, Damping: 1})
@@ -309,6 +344,9 @@ func (e *editor) drag(p geom.Point, mods input.Mods, u *gunim.UI) {
 	case gripSeek:
 		u.Send(e, SeekTo{At: e.renderTime(t)})
 		return
+	case gripZoom:
+		e.zoomTo(p.Y)
+		return
 	default:
 		return
 	}
@@ -322,22 +360,107 @@ func (e *editor) drag(p geom.Point, mods input.Mods, u *gunim.UI) {
 	e.send(ed, u)
 }
 
+// The vertical zoom: its slider's width, and how far it goes, in
+// decibels.
+const (
+	zoomW   = 26
+	maxZoom = 60
+)
+
+// zoomTo sets the vertical zoom where the slider is pressed, at y.
+func (e *editor) zoomTo(y float32) {
+	top, laneH := e.lanes()
+	u := 1 - (y-top-8)/(2*laneH-16)
+	e.zoom.Animate(max(0, min(u, 1))*maxZoom, anim.Spring{Response: 0.12, Damping: 1})
+}
+
+// gain is how much louder the waveform is drawn than it is.
+func (e *editor) gain() float32 { return float32(math.Pow(10, float64(e.zoom.Value())/20)) }
+
 // Step implements [gunim.Animator]: the playhead moves while a track
-// plays, and the view follows it past the edge.
+// plays, and the view follows it as the album says: a page on as it
+// leaves the view, or with the sound sliding under it, still; and the
+// samples zoomed in on come in.
 func (e *editor) Step(dt time.Duration) bool {
 	moving := e.Group.Step(dt)
+	select {
+	case got := <-e.raw.loaded:
+		e.raw.file, e.raw.from, e.raw.data, e.raw.loading = got.file, got.from, got.data, false
+		moving = true
+	default:
+	}
+	moving = e.wantRaw() || moving
 	if !e.r.state.Playing {
 		return moving
 	}
 	if t, ok := e.playhead(); ok && e.held == gripNone {
 		v0, v1 := float64(e.v0.Target()), float64(e.v1.Target())
-		if t > v1 || t < v0 {
-			span := v1 - v0
-			to := t - span*0.1
-			e.v0.Animate(float32(to), anim.Gentle)
-			e.v1.Animate(float32(to+span), anim.Gentle)
+		span := v1 - v0
+		switch e.r.state.Follow {
+		case FollowJump:
+			if t > v1 || t < v0 {
+				to := t - span*0.1
+				e.v0.Animate(float32(to), anim.Gentle)
+				e.v1.Animate(float32(to+span), anim.Gentle)
+			}
+		case FollowScroll:
+			to := t - span*0.25
+			if math.Abs(float64(e.v0.Value())-to) > span*0.05 {
+				e.v0.Animate(float32(to), anim.Snappy)
+				e.v1.Animate(float32(to+span), anim.Snappy)
+			} else {
+				e.v0.Jump(float32(to))
+				e.v1.Jump(float32(to + span))
+			}
+		case FollowOff, followModes:
 		}
 	}
+	return true
+}
+
+// framesPerPixel is how many of the file's frames a column of the
+// editor spans.
+func (e *editor) framesPerPixel() float64 {
+	return float64(e.v1.Value()-e.v0.Value()) * float64(e.track.Format.SampleRate) / float64(max(e.size.W, 1))
+}
+
+// wantRaw reads the samples in view, and a view either side, where the
+// view is zoomed in past the waveform's finest level and they are not
+// read yet. It returns whether they are being read.
+func (e *editor) wantRaw() bool {
+	if !e.track.Scanned || e.framesPerPixel() >= finest {
+		return e.raw.loading
+	}
+	rate := float64(e.track.Format.SampleRate)
+	v0, v1 := float64(e.v0.Target()), float64(e.v1.Target())
+	from := max(0, int64((2*v0-v1)*rate))
+	to := min(e.track.Frames, int64((2*v1-v0)*rate)+1)
+	have := e.raw.file == e.track.File && e.raw.from <= max(0, int64(v0*rate)) &&
+		e.raw.from+int64(len(e.raw.data)/2) >= min(e.track.Frames, int64(v1*rate)+1)
+	if have || e.raw.loading {
+		return e.raw.loading
+	}
+	e.raw.loading = true
+	file, out := e.track.File, e.raw.loaded
+	go func() {
+		got := rawSamples{file: file, from: from}
+		if src, _, closer, err := openTrack(file); err == nil {
+			if src.SeekFrame(from) == nil {
+				got.data = make([]float32, 2*(to-from))
+				n := 0
+				for n < int(to-from) {
+					k, err := src.Read(got.data[2*n:])
+					n += k
+					if err != nil || k == 0 {
+						break
+					}
+				}
+				got.data = got.data[:2*n]
+			}
+			closer()
+		}
+		out <- got
+	}()
 	return true
 }
 
@@ -379,6 +502,7 @@ func (e *editor) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.C
 	e.paintFades(p, box)
 	e.paintCut(p, box)
 	e.paintPlayhead(p, box)
+	e.paintZoom(p, box)
 	if g := e.glow.Value(); g > 0.01 {
 		p.RRectStroke(whole.Inset(geom.Uniform(1)), 15, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 2, Color: faded(teal, g)})
 	}
@@ -438,44 +562,54 @@ func (e *editor) paintGap(p *paint.Painter, box geom.Size) {
 	}
 }
 
-// paintWave draws both channels' waveforms, a column a pixel: the file
-// faint, and the sound as edited bright over it.
+// paintWave draws both channels' waveforms, a column a pixel, from
+// the finest level of the waveform the zoom needs, or, zoomed in past
+// it, from the samples themselves, drawn as the line they make: the
+// file faint, and the sound as edited bright over it, all as loud as
+// the vertical zoom draws it.
 func (e *editor) paintWave(p *paint.Painter, box geom.Size) {
-	w := e.track.Wave
 	top, laneH := e.lanes()
-	length := e.length()
-	buckets := len(w.Peak[0])
 	start, end := e.span()
+	rate := float64(e.track.Format.SampleRate)
+	fpp := e.framesPerPixel()
+	raw := fpp < finest && e.raw.file == e.track.File && len(e.raw.data) > 0
 	for ch := range 2 {
 		mid := top + laneH*float32(ch) + laneH/2
 		half := laneH/2 - 4
 		p.RRect(geom.Rc(0, mid, box.W, 1), 0, paint.Solid(faded(ink, 0.06)))
+		if raw && fpp < 2 {
+			e.paintLine(p, ch, mid, half, box)
+			continue
+		}
+		lv := e.level(fpp)
+		k := e.gain()
+		clip := func(v float32) float32 { return max(-half, min(v*half*k, half)) }
 		for x := float32(0); x < box.W; x++ {
-			t0, t1 := e.tAt(x), e.tAt(x+1)
-			if t1 < 0 || t0 > length {
+			f0, f1 := int64(e.tAt(x)*rate), int64(e.tAt(x+1)*rate)
+			if f1 <= 0 || f0 >= e.track.Frames {
 				continue
 			}
-			b0 := max(0, int(t0/length*float64(buckets)))
-			b1 := min(buckets-1, max(b0, int(t1/length*float64(buckets))))
-			var peak, rms float32
-			for b := b0; b <= b1; b++ {
-				peak = max(peak, w.Peak[ch][b])
-				rms = max(rms, w.RMS[ch][b])
+			f0, f1 = max(0, f0), min(e.track.Frames, max(f1, f0+1))
+			var lo, hi, rms float32
+			if raw {
+				lo, hi, rms = e.raw.column(ch, f0, f1)
+			} else {
+				lo, hi, rms = lv.column(ch, f0, f1)
 			}
-			if peak <= 0 {
+			if hi <= lo {
 				continue
 			}
-			ph := max(0.5, peak*half)
-			p.RRect(geom.Rc(x, mid-ph, 1, 2*ph), 0, paint.Solid(faded(ink, 0.12)))
-			tm := (t0 + t1) / 2
+			y0, y1 := mid-clip(hi), mid-clip(lo)
+			p.RRect(geom.Rc(x, y0, 1, max(1, y1-y0)), 0, paint.Solid(faded(ink, 0.12)))
+			tm := (e.tAt(x) + e.tAt(x+1)) / 2
 			if tm < start || tm > end {
 				continue
 			}
 			g := float32(e.envelope(tm))
-			eh := min(ph*g, half)
-			rh := min(rms*half*g, half)
-			p.RRect(geom.Rc(x, mid-eh, 1, 2*eh), 0, paint.Solid(faded(teal, 0.55)))
-			p.RRect(geom.Rc(x, mid-rh, 1, 2*rh), 0, paint.Solid(faded(mix(teal, ink, 0.4), 0.85)))
+			ey0, ey1 := mid-clip(hi*g), mid-clip(lo*g)
+			r := clip(rms * g)
+			p.RRect(geom.Rc(x, ey0, 1, max(1, ey1-ey0)), 0, paint.Solid(faded(teal, 0.55)))
+			p.RRect(geom.Rc(x, mid-r, 1, 2*r), 0, paint.Solid(faded(mix(teal, ink, 0.4), 0.85)))
 		}
 	}
 	// Outside the cut, the file is shaded away.
@@ -485,6 +619,120 @@ func (e *editor) paintWave(p *paint.Painter, box geom.Size) {
 	}
 	if ex < box.W {
 		p.RRect(geom.Rc(ex, rulerH+1, box.W-ex, box.H-rulerH), 0, paint.Solid(faded(night, 0.45)))
+	}
+}
+
+// paintLine draws channel ch's samples in view as the line they make,
+// with a dot at each once they stand apart: the file faint, the sound
+// as edited bright.
+func (e *editor) paintLine(p *paint.Painter, ch int, mid, half float32, box geom.Size) {
+	rate := float64(e.track.Format.SampleRate)
+	k := e.gain()
+	start, end := e.span()
+	f0 := max(e.raw.from, int64(e.tAt(0)*rate)-1)
+	f1 := min(e.raw.from+int64(len(e.raw.data)/2), int64(e.tAt(box.W)*rate)+2)
+	apart := float64(box.W) / (float64(e.v1.Value()-e.v0.Value()) * rate)
+	y := func(v float32) float32 { return mid - max(-half, min(v*half*k, half)) }
+	var was, wasEd geom.Point
+	for f := f0; f < f1; f++ {
+		t := float64(f) / rate
+		v := e.raw.data[2*(f-e.raw.from)+int64(ch)]
+		x := e.xOf(t)
+		pt := geom.Pt(x, y(v))
+		g := float32(0)
+		if t >= start && t <= end {
+			g = float32(e.envelope(t))
+		}
+		ed := geom.Pt(x, y(v*g))
+		if f > f0 {
+			segment(p, was, pt, 1, faded(ink, 0.25))
+			segment(p, wasEd, ed, 1.5, teal)
+		}
+		if apart > 8 {
+			p.RRect(geom.Rc(ed.X-2, ed.Y-2, 4, 4), 2, paint.Solid(teal))
+		}
+		was, wasEd = pt, ed
+	}
+}
+
+// level returns the finest level of the waveform no finer than a column
+// of fpp frames.
+func (e *editor) level(fpp float64) *Level {
+	ls := e.track.Wave.Levels
+	if len(ls) == 0 {
+		return nil
+	}
+	lv := &ls[0]
+	for i := range ls {
+		if float64(ls[i].Per) <= fpp {
+			lv = &ls[i]
+		}
+	}
+	return lv
+}
+
+// column returns the lowest and highest sample of channel ch from frame
+// f0 to f1, and their RMS.
+func (l *Level) column(ch int, f0, f1 int64) (lo, hi, rms float32) {
+	if l == nil {
+		return 0, 0, 0
+	}
+	n := int64(len(l.Min[ch]))
+	b0 := min(f0/int64(l.Per), n-1)
+	b1 := min(max(b0, (f1-1)/int64(l.Per)), n-1)
+	var ms float32
+	for b := b0; b <= b1; b++ {
+		lo, hi = min(lo, l.Min[ch][b]), max(hi, l.Max[ch][b])
+		ms = max(ms, l.RMS[ch][b])
+	}
+	return lo, hi, ms
+}
+
+// column returns the lowest and highest sample of channel ch from frame
+// f0 to f1, and their RMS, from the samples read.
+func (r *rawSamples) column(ch int, f0, f1 int64) (lo, hi, rms float32) {
+	end := r.from + int64(len(r.data)/2)
+	f0, f1 = max(f0, r.from), min(f1, end)
+	if f1 <= f0 {
+		return 0, 0, 0
+	}
+	lo, hi = float32(math.Inf(1)), float32(math.Inf(-1))
+	var ss float32
+	for f := f0; f < f1; f++ {
+		v := r.data[2*(f-r.from)+int64(ch)]
+		lo, hi = min(lo, v), max(hi, v)
+		ss += v * v
+	}
+	lo, hi = min(lo, 0), max(hi, 0)
+	return lo, hi, float32(math.Sqrt(float64(ss / float32(f1-f0))))
+}
+
+// paintZoom draws the vertical zoom's slider up the editor's right edge:
+// filled to how far the waveform is drawn louder, with its knob, and how
+// many decibels, while it is under the pointer, held or up.
+func (e *editor) paintZoom(p *paint.Painter, box geom.Size) {
+	top, laneH := e.lanes()
+	x := box.W - zoomW/2
+	y0, y1 := top+8, top+2*laneH-8
+	z := e.zoom.Value() / maxZoom
+	on := e.hot == gripZoom || e.held == gripZoom
+	alpha := float32(0.35)
+	if on {
+		alpha = 0.9
+	}
+	p.RRect(geom.Rc(x-2, y0, 4, y1-y0), 2, paint.Solid(faded(ink, 0.12*alpha+0.04)))
+	ky := y1 - (y1-y0)*z
+	p.RRect(geom.Rc(x-2, ky, 4, y1-ky), 2, paint.Solid(faded(sky, alpha)))
+	r := float32(5)
+	if on {
+		r = 7
+	}
+	p.ShadowRRect(geom.Rc(x-r, ky-r, 2*r, 2*r), r, paint.Solid(faded(sky, max(alpha, 0.6))),
+		paint.Shadow{Blur: 8, Color: faded(sky, 0.4*alpha)})
+	if on || e.zoom.Value() > 0.5 {
+		words := fmt.Sprintf("+%.0f dB", e.zoom.Value())
+		run := shapedFace(words, 10, true, true)
+		run.Paint(p, geom.Pt(x-run.Advance-12, ky-6), faded(sky, max(alpha, 0.7)))
 	}
 }
 

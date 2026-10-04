@@ -22,6 +22,45 @@ type Wave struct {
 	// Frames is the file's length, and Rate its rate.
 	Frames int64
 	Rate   int
+	// Levels are the waveform finer, for the editor zoomed in: each
+	// stretch's lowest and highest sample and its RMS, the finest first,
+	// of finest frames a stretch, and each after four times coarser.
+	Levels []Level
+}
+
+// Level is a waveform at one fineness: Per frames a stretch.
+type Level struct {
+	Per           int
+	Min, Max, RMS [2][]float32
+}
+
+// finest is the frames of a stretch of a waveform's finest level:
+// past it, the editor reads the samples themselves.
+const finest = 128
+
+// levels builds the coarser levels from the finest, four stretches to
+// one, until a level is a few thousand stretches long.
+func levels(fine Level) []Level {
+	out := []Level{fine}
+	for prev := fine; len(prev.Min[0]) > 4096; {
+		n := (len(prev.Min[0]) + 3) / 4
+		l := Level{Per: prev.Per * 4}
+		for ch := range 2 {
+			l.Min[ch], l.Max[ch], l.RMS[ch] = make([]float32, n), make([]float32, n), make([]float32, n)
+			for b := range n {
+				lo, hi, ms, k := float32(0), float32(0), float32(0), 0
+				for j := 4 * b; j < min(4*b+4, len(prev.Min[ch])); j++ {
+					lo, hi = min(lo, prev.Min[ch][j]), max(hi, prev.Max[ch][j])
+					ms += prev.RMS[ch][j] * prev.RMS[ch][j]
+					k++
+				}
+				l.Min[ch][b], l.Max[ch][b], l.RMS[ch][b] = lo, hi, float32(math.Sqrt(float64(ms/float32(k))))
+			}
+		}
+		out = append(out, l)
+		prev = l
+	}
+	return out
 }
 
 // scan is what reading a track's file through tells, once: its format
@@ -68,6 +107,11 @@ func scanTrack(ctx context.Context, path string) (scan, error) {
 	}
 	counts := make([]int, waveBuckets)
 	per := max(float64(total)/waveBuckets, 1)
+	nFine := int(max(1, (total+finest-1)/finest))
+	fine := Level{Per: finest}
+	for ch := range 2 {
+		fine.Min[ch], fine.Max[ch], fine.RMS[ch] = make([]float32, nFine), make([]float32, nFine), make([]float32, nFine)
+	}
 	first, last := int64(-1), int64(0)
 	buf := make([]float32, 2*8192)
 	var at int64
@@ -78,9 +122,13 @@ func scanTrack(ctx context.Context, path string) (scan, error) {
 		n, err := src.Read(buf)
 		for i := range n {
 			b := min(int(float64(at+int64(i))/per), waveBuckets-1)
+			fb := min(int((at+int64(i))/finest), nFine-1)
 			loud := false
 			for ch := range 2 {
 				v := buf[2*i+ch]
+				fine.Min[ch][fb] = min(fine.Min[ch][fb], v)
+				fine.Max[ch][fb] = max(fine.Max[ch][fb], v)
+				fine.RMS[ch][fb] += v * v
 				a := float32(math.Abs(float64(v)))
 				w.Peak[ch][b] = max(w.Peak[ch][b], a)
 				w.RMS[ch][b] += v * v
@@ -106,6 +154,13 @@ func scanTrack(ctx context.Context, path string) (scan, error) {
 			}
 		}
 	}
+	for ch := range 2 {
+		for b := range fine.RMS[ch] {
+			k := min(int64(finest), total-int64(b)*finest)
+			fine.RMS[ch][b] = float32(math.Sqrt(float64(fine.RMS[ch][b] / float32(max(k, 1)))))
+		}
+	}
+	w.Levels = levels(fine)
 	sc := scan{Format: format, Frames: total, Wave: w, SoundEnd: duration(total, format.SampleRate)}
 	if first >= 0 {
 		sc.SoundStart, sc.SoundEnd = duration(first, format.SampleRate), duration(last+1, format.SampleRate)
