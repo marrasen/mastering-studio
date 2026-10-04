@@ -1,17 +1,17 @@
-// Command mastering masters an album: its tracks, each cut, faded, and
-// set apart from the one before by the same silence; played one at a
-// time, a key or a click switching to another at the same moment, to
-// compare; measured as they will be exported, loudness, its range and
-// true peak, when Calc LUFS asks, the tracks changed since marked; and
-// exported one at a time, each at its own
-// length, to WAV files of 16 or 24 bits, dithered, or 32-bit float.
+// Command mastering-studio is Marras Mastering Studio. It masters an
+// album: its tracks, each cut, faded, and set apart from the one before
+// by the same silence; played one at a time, a key or a click switching
+// to another at the same moment, to compare; measured as they will be
+// exported, loudness, its range and true peak, when Calc LUFS asks, the
+// tracks changed since marked; and exported, each at its own length,
+// to WAV files of 16 or 24 bits, dithered, or 32-bit float, and MP3.
 //
 // Each track runs through a chain of VST3 plugins of its own: only the
 // track heard has its plugins running, and a track is measured and
 // exported through a copy of its chain, run offline.
 //
-//	go run ./example/mastering
-//	go run ./example/mastering mix1.wav mix2.wav
+//	go run .
+//	go run . mix1.wav mix2.wav
 //
 // Files dropped on the list join the album, which is kept between runs;
 // a file dropped on the waveform replaces the track's, its edit and
@@ -43,6 +43,9 @@ import (
 	"github.com/marrasen/gunim/geom"
 )
 
+// version is the studio's version, set as a release is built.
+var version = "dev"
+
 func main() {
 	state := flag.String("project", "", "the album to open; by default the one open last, or the untitled one")
 	shot := flag.String("shot", "", "write the window to this PNG file after -after, and quit")
@@ -50,7 +53,23 @@ func main() {
 	play := flag.Bool("play", false, "start playing the track picked")
 	size := flag.String("size", "", "the window's size, as 1680x1040; by default where it was last, or 1680x1040")
 	plugins := flag.String("plugins", "", "more folders of VST3 plugins, beside the system's, as a list like PATH")
+	iconOut := flag.String("write-icon", "", "write the icon, 256 pixels square, to this PNG file, and quit")
+	demo := flag.String("demo", "", "write six demo songs and a project of them to this folder, and open it")
 	flag.Parse()
+	if *demo != "" {
+		path, err := writeDemo(*demo)
+		if err != nil {
+			log.Fatal(err)
+		}
+		*state = path
+	}
+	if *iconOut != "" {
+		if err := writeIcon(*iconOut, 256); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	moveSettings()
 	w, h := float32(1680), float32(1040)
 	if *size != "" {
 		if _, err := fmt.Sscanf(*size, "%gx%g", &w, &h); err != nil || w <= 0 || h <= 0 {
@@ -115,13 +134,13 @@ func run(o options) error {
 	d := newDeck(mix)
 	// Mastering wants no quick answer from the sound: a buffer that rides
 	// out a busy moment, the meters following it as heard.
-	if spk, err := speaker.Open(mix, speaker.Options{Name: "gunim mastering", Latency: 150 * time.Millisecond}); err != nil {
+	if spk, err := speaker.Open(mix, speaker.Options{Name: appName, Latency: 150 * time.Millisecond}); err != nil {
 		log.Printf("mastering: no sound: %v", err)
 	} else {
 		d.spk = spk
 	}
 	err := gunim.Main(ctx, func(a *gunim.App) error {
-		w, err := a.NewWindow(gunim.WindowOptions{Title: "Mastering", Size: o.size, Place: o.place,
+		w, err := a.NewWindow(gunim.WindowOptions{Title: appName, Size: o.size, Place: o.place, Icons: icons(),
 			AskToClose: Quit{}, ZoomKeys: true, Zoom: o.zoom})
 		if err != nil {
 			return fmt.Errorf("mastering: %w", err)

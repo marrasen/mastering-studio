@@ -389,7 +389,7 @@ func (h *header) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	if hv := h.hover.Value(); hv > 0.01 {
 		p.RRect(h.titleRect(), 10, paint.Solid(faded(ink, 0.06*hv)))
 	}
-	widget.PaintIcon(p, f.Theme, icon.Disc3, geom.Rc(18, (box.H-26)/2, 26, 26), teal)
+	p.Image(logo(), geom.Rc(15, (box.H-32)/2, 32, 32), paint.ImageOpts{Opacity: 1})
 	paintFit(p, h.name, 18, true, geom.Pt(54, 12), titleW-36, ink)
 	name := min(shaped(h.name, 18, true).Advance, titleW-36)
 	widget.PaintIcon(p, f.Theme, icon.ChevronDown, geom.Rc(54+name+4, 16, 14, 14), faded(ink, 0.4+0.4*h.hover.Value()))

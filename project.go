@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,6 +39,9 @@ type settings struct {
 	Zoom   float32           `json:",omitempty"`
 }
 
+// appName is the studio's name, as its window and its sound are titled.
+const appName = "Marras Mastering Studio"
+
 // configDir is where the program keeps its settings, and the untitled
 // album.
 func configDir() string {
@@ -45,7 +49,26 @@ func configDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(d, "gunim-mastering")
+	return filepath.Join(d, "marras-mastering-studio")
+}
+
+// moveSettings moves the settings and the untitled album to configDir
+// from where the studio kept them while it was gunim's mastering
+// example, the first time it runs under its own name.
+func moveSettings() {
+	d, err := os.UserConfigDir()
+	if err != nil {
+		return
+	}
+	old, now := filepath.Join(d, "gunim-mastering"), configDir()
+	if _, err := os.Stat(now); err == nil {
+		return
+	}
+	if _, err := os.Stat(old); err == nil {
+		if err := os.Rename(old, now); err != nil {
+			log.Printf("mastering: moving the settings from %s: %v", old, err)
+		}
+	}
 }
 
 // untitled is the album kept before one is saved anywhere.

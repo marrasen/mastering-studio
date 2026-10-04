@@ -1,0 +1,103 @@
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: none
+  exclusions:
+    paths:
+      # Copied from Ebitengine; see internal/README.md.
+      - internal/(glfw|gl|cocoa|exeicon|microsoftgdk|winver|windowsystem)/
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment   # readability of a struct beats its padding here
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    revive:
+      rules:
+        - name: exported
+          arguments: ["checkPrivateReceivers", "sayRepetitiveInsteadOfStutters"]
+        - name: package-comments
+        - name: indent-error-flow
+        - name: var-naming
+        - name: errorf
+        - name: context-as-argument
+        - name: range-val-address
+        - name: unexported-return
+        - name: early-return
+        - name: unnecessary-stmt
+        - name: superfluous-else
+        - name: confusing-naming
+        - name: bare-return
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - opinionated
+      disabled-checks:
+        - whyNoLint
+        - hugeParam        # geom.Size and Frame are meant to travel by value
+        - rangeValCopy
+  enable:
+    # Correctness
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - errorlint        # wrapped errors: demands errors.Is / errors.As over ==
+    - nilerr
+    - nilnesserr
+    - forcetypeassert
+    - exhaustive       # every case of an enum like Presence
+    - bodyclose
+    - noctx
+    - makezero
+    - durationcheck
+    - reassign
+    - recvcheck        # mixed value/pointer receivers
+    - protogetter
+    - zerologlint
+
+    # API and style for a library
+    - revive
+    - gocritic
+    - godot            # comments end in a period
+    - misspell
+    - predeclared
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - wastedassign
+    - whitespace
+    - copyloopvar
+    - intrange
+    - perfsprint
+    - prealloc
+    - iface
+    - nakedret
+    - dupword
+    # gochecknoinits stays off: registering an intent type for the wire
+    # in an init function is the pattern gunim documents, the same shape
+    # as image.RegisterFormat and a database/sql driver.
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    paths:
+      # Copied from Ebitengine; see internal/README.md.
+      - internal/(glfw|gl|cocoa|exeicon|microsoftgdk|winver|windowsystem)/
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

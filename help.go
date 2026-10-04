@@ -63,7 +63,8 @@ func (h *helpBody) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) 
 	for _, g := range helpGroups {
 		rows += float32(len(g.keys)) + 1.5
 	}
-	h.size = geom.Sz(c.Max.W, rows*helpRow)
+	// The studio's name and version, at the foot.
+	h.size = geom.Sz(c.Max.W, (rows+1)*helpRow)
 	return h.size
 }
 
@@ -82,6 +83,7 @@ func (h *helpBody) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim
 		}
 		y += helpRow / 2
 	}
+	shaped(appName+" "+version, 11, false).Paint(p, geom.Pt(0, y+4), faded(ink, 0.45))
 }
 
 // newHelp makes the help's dialog.

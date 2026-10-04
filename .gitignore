@@ -1,0 +1,6 @@
+# The program, as go build names it, and the release's leftovers.
+/mastering-studio
+*.exe
+*.syso
+/dist/
+/icon.png
