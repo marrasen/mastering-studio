@@ -24,6 +24,9 @@ import (
 type ioLevels struct {
 	peak, rms, hold [2]float32
 	held            [2]time.Duration
+	// ms is each channel's mean square over the last 300 ms or so, as a
+	// meter's RMS is taken: over a frame's sound alone it flickers.
+	ms [2]float64
 	// top is the highest peak since the track started, of each channel.
 	top [2]float32
 	lm  *audio.LoudnessMeter
@@ -57,14 +60,17 @@ func (l *ioLevels) take(frames []float32, rate int, dt time.Duration) {
 			n++
 		}
 		p := float32(-90)
-		r := float32(-90)
 		if n > 0 {
 			p = float32(dB(float64(peak)))
-			r = float32(dB(math.Sqrt(float64(ss / float32(n)))))
 		}
-		// The peak at once, falling at 20 dB a second; the RMS eased.
-		l.peak[ch] = max(p, l.peak[ch]-20*sec)
-		l.rms[ch] += (r - l.rms[ch]) * min(1, 8*sec)
+		// The peak at once, falling at 12 dB a second; the RMS over its
+		// window.
+		l.peak[ch] = max(p, l.peak[ch]-12*sec)
+		if n > 0 {
+			k := 1 - math.Exp(-dt.Seconds()/0.3)
+			l.ms[ch] += (float64(ss/float32(n)) - l.ms[ch]) * k
+		}
+		l.rms[ch] = float32(dB(math.Sqrt(l.ms[ch])))
 		l.top[ch] = max(l.top[ch], p)
 		// The hold, for a second and a half, then falling.
 		if p >= l.hold[ch] {
@@ -80,8 +86,9 @@ func (l *ioLevels) take(frames []float32, rate int, dt time.Duration) {
 func (l *ioLevels) quiet(dt time.Duration) {
 	sec := float32(dt.Seconds())
 	for ch := range 2 {
-		l.peak[ch] = max(-90, l.peak[ch]-20*sec)
-		l.rms[ch] += (-90 - l.rms[ch]) * min(1, 8*sec)
+		l.peak[ch] = max(-90, l.peak[ch]-12*sec)
+		l.ms[ch] *= math.Exp(-dt.Seconds() / 0.3)
+		l.rms[ch] = float32(dB(math.Sqrt(l.ms[ch])))
 		if l.held[ch] += dt; l.held[ch] > 1500*time.Millisecond {
 			l.hold[ch] = max(l.peak[ch], l.hold[ch]-30*sec)
 		}

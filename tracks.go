@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -253,12 +254,22 @@ func (l *trackList) openMenu(p geom.Point, u *gunim.UI) bool {
 		return false
 	}
 	id := l.order[i]
-	l.menu.Items = []string{"Rename", "Replace file…", "Show file in folder", "Export this track", "Remove from the album"}
-	l.menu.Icons = []*icon.Icon{icon.Pencil, icon.FileAudio, icon.FolderOpen, icon.Download, icon.Trash2}
-	l.menu.Breaks = []int{3, 4}
-	l.menu.Disabled, l.menu.Captions = nil, nil
+	// The track's file heads the menu, its folder after it.
+	var file string
+	for _, t := range l.r.state.Tracks {
+		if t.ID == id {
+			file = t.File
+		}
+	}
+	l.menu.Items = []string{filepath.Base(file), "Rename", "Replace file…", "Show file in folder", "Export this track",
+		"Remove from the album"}
+	l.menu.Icons = []*icon.Icon{nil, icon.Pencil, icon.FileAudio, icon.FolderOpen, icon.Download, icon.Trash2}
+	l.menu.Hints = []string{lastDirs(filepath.Dir(file)), "", "", "", "", ""}
+	l.menu.Captions = []int{0}
+	l.menu.Breaks = []int{1, 4, 5}
+	l.menu.Disabled = nil
 	l.menu.Picked = func(k int, u *gunim.UI) {
-		switch k {
+		switch k - 1 {
 		case 0:
 			// The title is renamed where the editor shows it.
 			if id != l.r.state.Current {
@@ -374,6 +385,11 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		widget.PaintIcon(p, f.Theme, icon.MessageSquareText, geom.Rc(at, row.Min.Y+11, 14, 14), faded(amber, 0.9*in))
 	}
 	paintFit(p, t.Title, 14, true, geom.Pt(textX, row.Min.Y+10), room, faded(ink, 0.92*in))
+	// How long it exports, the silence before it and all.
+	if t.Scanned {
+		shapedFace(clock(lengthOf(t, s.gapOf(&t))), 10, false, true).Paint(p, geom.Pt(textX, row.Min.Y+30),
+			faded(ink, 0.55*in))
+	}
 	// The waveform, small, under the title.
 	if lk.thumb != nil {
 		w := row.Max.X - textX - 96

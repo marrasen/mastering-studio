@@ -185,7 +185,7 @@ func (e *editor) paintOutside(p *paint.Painter, box geom.Size) {
 }
 
 // The loudness's scale over the lanes, in LUFS, the top and the bottom.
-const curveTop, curveBottom = 0, -42
+const curveTop, curveBottom = 0, -30
 
 // pink is the short-term loudness's colour, which no part of the
 // waveform or the spectrogram takes.
@@ -292,7 +292,7 @@ func (e *editor) paintCurves(p *paint.Painter, box geom.Size) {
 	if on&(CurveS|CurveM|CurveI) != 0 {
 		y := yOf(float64(e.r.state.Target))
 		p.RRect(geom.Rc(0, y, box.W, 1), 0, paint.Solid(faded(ink, 0.18*alpha)))
-		for l := -10; l >= -30; l -= 10 {
+		for l := -5; l >= -25; l -= 5 {
 			y := yOf(float64(l))
 			run := shapedFace(strconv.Itoa(l), 9, false, true)
 			x := box.W - zoomW - run.Advance - 6

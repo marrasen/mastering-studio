@@ -35,11 +35,12 @@ func newStrip(r *root) *strip {
 // lengthOf is how long a track plays, as measured, or as its file
 // suggests until it is.
 func lengthOf(t Track, gap time.Duration) time.Duration {
+	if t.Format.SampleRate > 0 && t.Frames > 0 {
+		start, end := t.Edit.span(t.Format.SampleRate, t.Frames)
+		return gap + duration(end-start, t.Format.SampleRate)
+	}
 	if t.Measured {
 		return t.Measure.Length
-	}
-	if t.Format.SampleRate > 0 {
-		return gap + duration(t.Frames, t.Format.SampleRate)
 	}
 	return gap + time.Minute
 }

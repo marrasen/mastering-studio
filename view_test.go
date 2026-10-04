@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -805,5 +806,25 @@ func TestTheOutputsFaderSetsTheGainAfterTheChain(t *testing.T) {
 	last := sent[len(sent)-1].Edit
 	if math.Abs(float64(last.Out-12)) > 0.2 || last.Gain != 0 {
 		t.Fatalf("the output's fader set the gain in %.1f and out %.1f, want out +12", last.Gain, last.Out)
+	}
+}
+
+func TestTheIOMetersRMSHoldsStillOnSteadyNoise(t *testing.T) {
+	l := newIOLevels()
+	rng := rand.New(rand.NewPCG(1, 2))
+	chunk := make([]float32, 2*800)
+	var last float32
+	for f := range 180 {
+		for i := range chunk {
+			chunk[i] = float32(rng.NormFloat64() * 0.1)
+		}
+		l.take(chunk, 48000, time.Second/60)
+		if f > 90 && math.Abs(float64(l.rms[0]-last)) > 0.3 {
+			t.Fatalf("frame %d: on steady noise the RMS moved %.2f dB", f, l.rms[0]-last)
+		}
+		last = l.rms[0]
+	}
+	if math.Abs(float64(last+20)) > 0.5 {
+		t.Fatalf("noise at an RMS of 0.1 reads %.1f dB, want -20", last)
 	}
 }
