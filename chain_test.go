@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -699,5 +700,21 @@ func TestTheTapHoldsWhatTheChainIsFed(t *testing.T) {
 	_, _ = st.Read(buf)
 	if got := tap.read(nil, 30000, 30700); len(got) != 2*700 {
 		t.Fatalf("after a seek to 30000 the tap holds %d frames from it", len(got)/2)
+	}
+}
+
+func TestMonoAndSideChangeWhatIsHeardAndNotWhatIsMetered(t *testing.T) {
+	m := &monitor{}
+	frames := []float32{0.6, 0.2}
+	for _, c := range []struct {
+		l    Listen
+		want [2]float32
+	}{{ListenStereo, [2]float32{0.6, 0.2}}, {ListenMono, [2]float32{0.4, 0.4}}, {ListenSide, [2]float32{0.2, 0.2}}} {
+		m.mode.Store(int32(c.l))
+		f := slices.Clone(frames)
+		m.Process(f)
+		if math.Abs(float64(f[0]-c.want[0])) > 1e-6 || math.Abs(float64(f[1]-c.want[1])) > 1e-6 {
+			t.Fatalf("listening as %s, a frame of %v plays as %v, want %v", listenNames[c.l], frames, f, c.want)
+		}
 	}
 }

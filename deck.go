@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/marrasen/gunim/anim"
@@ -33,6 +34,9 @@ type deck struct {
 	stage *chainStage
 	rate  int
 	tap   *ioTap
+	// monitor is how the sound is listened to: in stereo, mono, or its
+	// side alone; the meters read it as it is.
+	monitor *monitor
 	// id is the track playing, and volume the listening level, as a
 	// ratio, with match, the gain that brings the track to the target
 	// loudness while levels are matched.
@@ -43,7 +47,7 @@ type deck struct {
 
 func newDeck(mix *audio.Mixer) *deck {
 	an := audio.NewAnalyzer(mix, 32)
-	return &deck{mix: mix, an: an, volume: 0.8, match: 1, turns: make(chan int, 8), tap: &ioTap{}}
+	return &deck{mix: mix, an: an, volume: 0.8, match: 1, turns: make(chan int, 8), tap: &ioTap{}, monitor: &monitor{}}
 }
 
 // play plays track id, rendered from the file at path with the album's
@@ -62,7 +66,8 @@ func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at 
 	defer d.mu.Unlock()
 	d.stopLocked(fade)
 	r.setActive(true)
-	d.voice = d.mix.Play(out, audio.Options{Volume: max(d.volume*d.match, 1e-6), FadeIn: fade, Paused: paused})
+	d.voice = d.mix.Play(out, audio.Options{Volume: max(d.volume*d.match, 1e-6), FadeIn: fade, Paused: paused,
+		Insert: d.monitor})
 	// Seeking through the voice, so it says where it is from the start.
 	_ = d.voice.Seek(at)
 	d.sw, d.rack, d.id, d.stage, d.rate = sw, r, id, st, format.SampleRate
@@ -226,14 +231,14 @@ func (d *deck) setLevel(volume, matchDB float32) {
 func (d *deck) heard(dst []float32, from int64) (frames []float32, now int64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.an.Heard(dst, from)
+	return d.an.HeardBefore(dst, from)
 }
 
 // spectrum fills out with the level at each of freqs, as heard.
 func (d *deck) spectrum(freqs, out []float32) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.an.Spectrum(freqs, out, nil)
+	d.an.Spectrum(freqs, nil, out)
 }
 
 // switcher plays a track's render, and takes a new one for an edit,
@@ -394,3 +399,42 @@ func (d *deck) input(dst []float32, from, to int64) (frames []float32, rate int)
 	d.mu.Unlock()
 	return d.tap.read(dst, from, to), rate
 }
+
+// Listen is how the sound is listened to.
+type Listen int
+
+const (
+	// ListenStereo plays it as it is.
+	ListenStereo Listen = iota
+	// ListenMono plays its channels together, in both speakers, to hear
+	// it as a mono player would.
+	ListenMono
+	// ListenSide plays the difference of its channels, in both
+	// speakers: what differs between them, as reverb and width.
+	ListenSide
+)
+
+// monitor is the insert that plays the sound as listened to. Only the
+// speakers hear it: what is measured and exported is the sound as it
+// is.
+type monitor struct{ mode atomic.Int32 }
+
+// Process implements [audio.Insert].
+func (m *monitor) Process(frames []float32) {
+	switch Listen(m.mode.Load()) {
+	case ListenMono:
+		for i := 0; i+1 < len(frames); i += 2 {
+			v := (frames[i] + frames[i+1]) / 2
+			frames[i], frames[i+1] = v, v
+		}
+	case ListenSide:
+		for i := 0; i+1 < len(frames); i += 2 {
+			v := (frames[i] - frames[i+1]) / 2
+			frames[i], frames[i+1] = v, v
+		}
+	case ListenStereo:
+	}
+}
+
+// listen sets how the sound is listened to.
+func (d *deck) listen(l Listen) { d.monitor.mode.Store(int32(l)) }

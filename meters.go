@@ -58,8 +58,10 @@ type meters struct {
 	showGram bool
 	gramAt   time.Duration
 	column   []float32
-	// specHead is where the spectrum's heading is, which switches it.
-	specHead geom.Rect
+	// specHead is where the spectrum's heading is, which switches it,
+	// and listenRects where the ways to listen are.
+	specHead    geom.Rect
+	listenRects []geom.Rect
 	// in and out are the input's and output's levels, their faders the
 	// gains in and out, and inFrom the frame of the input read next.
 	in, out           ioLevels
@@ -353,6 +355,27 @@ func (m *meters) paintBar(p *paint.Painter, bar geom.Rect, v, target float32) {
 // under it.
 func (m *meters) paintScope(p *paint.Painter, box geom.Size, y float32) float32 {
 	shaped("STEREO", 10, true).Paint(p, geom.Pt(16, y), faded(teal, 0.85))
+	// How the sound is listened to, at the right: amber while it is
+	// other than stereo, so it is not forgotten.
+	m.listenRects = m.listenRects[:0]
+	x := box.W - 16
+	for i := len(listenNames) - 1; i >= 0; i-- {
+		run := shaped(listenNames[i], 10, true)
+		r := geom.Rc(x-run.Advance-16, y-5, run.Advance+16, 20)
+		x = r.Min.X - 4
+		m.listenRects = append([]geom.Rect{r}, m.listenRects...)
+		on := Listen(i) == m.r.state.Listen
+		c := faded(ink, 0.45)
+		if on {
+			lit := teal
+			if Listen(i) != ListenStereo {
+				lit = amber
+			}
+			p.RRect(r, 10, paint.Solid(faded(lit, 0.18)))
+			c = lit
+		}
+		run.Paint(p, geom.Pt(r.Min.X+8, r.Min.Y+4), c)
+	}
 	y += 20
 	side := min(box.W-32, 170)
 	area := geom.Rc((box.W-side)/2, y, side, side)
@@ -481,7 +504,18 @@ func (m *meters) paintPitches(p *paint.Painter, area geom.Rect, up bool) {
 // switches it to the spectrogram and back.
 func (m *meters) Handle(e input.Event, u *gunim.UI) bool {
 	d, ok := e.(input.PointerDown)
-	if !ok || d.Button != input.ButtonPrimary || !m.specHead.Contains(d.Pos) {
+	if !ok || d.Button != input.ButtonPrimary {
+		return false
+	}
+	for i, r := range m.listenRects {
+		if r.Contains(d.Pos) {
+			u.Cue(gunim.CueTick, m)
+			u.Send(m, SetListen{Listen: Listen(i)})
+			u.Invalidate()
+			return true
+		}
+	}
+	if !m.specHead.Contains(d.Pos) {
 		return false
 	}
 	m.showGram = !m.showGram
@@ -489,3 +523,6 @@ func (m *meters) Handle(e input.Event, u *gunim.UI) bool {
 	u.Invalidate()
 	return true
 }
+
+// listenNames name the ways to listen, in their order.
+var listenNames = []string{"Stereo", "Mono", "Side"}

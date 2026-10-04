@@ -59,6 +59,9 @@ type (
 		Follow Follow
 		View   View
 		Curves uint8
+		// Listen is how the sound is listened to: in stereo, mono, or
+		// its side alone.
+		Listen Listen
 		// Exporting says an export is running.
 		Exporting bool
 		// Note says what went wrong last, for the window to show.
@@ -185,6 +188,8 @@ type (
 	SetView struct{ View View }
 	// SetCurves sets the loudness curves the editor draws.
 	SetCurves struct{ Curves uint8 }
+	// SetListen sets how the sound is listened to.
+	SetListen struct{ Listen Listen }
 	// SetSilence sets the silence before a track, or, nil, gives it the
 	// album's.
 	SetSilence struct {
@@ -1042,6 +1047,9 @@ func (a *app) handle(in gunim.Intent) {
 	case SetCurves:
 		a.Curves = in.Curves
 		a.dirty = true
+	case SetListen:
+		a.Listen = in.Listen
+		a.d.listen(in.Listen)
 	case SetSilence:
 		t := a.track(in.ID)
 		if t == nil {
