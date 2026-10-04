@@ -187,15 +187,19 @@ func (e *editor) paintOutside(p *paint.Painter, box geom.Size) {
 // The loudness's scale over the lanes, in LUFS, the top and the bottom.
 const curveTop, curveBottom = 0, -42
 
+// pink is the short-term loudness's colour, which no part of the
+// waveform or the spectrogram takes.
+var pink = rgb(0xff, 0x6a, 0xd5)
+
 // curveRGBA is the colour of a curve, at alpha a: the momentary
-// loudness faint ink, the short-term teal, the integrated amber, and the
-// range sky blue, as the meters draw them.
+// loudness faint ink, the short-term pink, the integrated amber, and
+// the range sky blue.
 func curveRGBA(bit uint8, a float32) color.NRGBA {
 	switch bit {
 	case CurveM:
 		return faded(ink, 0.7*a)
 	case CurveS:
-		return faded(teal, a)
+		return faded(pink, a)
 	case CurveI:
 		return faded(amber, a)
 	}
@@ -233,39 +237,49 @@ func (e *editor) paintCurves(p *paint.Painter, box geom.Size) {
 	// The render's time, of the curves, as the file's.
 	start, _ := e.span()
 	fileT := func(rt float64) float64 { return start + rt - e.gap() }
-	line := func(bit uint8, powers []float64, lead int, width float32) {
+	// line draws a curve of loudness, each point step seconds after the
+	// last, the first at lead, over a dark edge so it reads on any
+	// ground.
+	line := func(bit uint8, ls []float64, lead, step float64, width float32) {
 		var prev geom.Point
 		was := false
 		lastX := float32(-1e9)
-		for k, pw := range powers {
-			t := fileT(float64(k+lead) * 0.1)
+		for k, l := range ls {
+			t := fileT(lead + float64(k)*step)
 			x := e.xOf(t)
 			if x < -20 || x > box.W+20 {
 				was = false
 				continue
 			}
-			if x-lastX < 1 && k+1 < len(powers) {
+			if x-lastX < 1 && k+1 < len(ls) {
 				continue
 			}
-			l := lufsOf(pw)
 			if l < curveBottom {
 				was = false
 				continue
 			}
 			pt := geom.Pt(x, yOf(l))
 			if was {
+				segment(p, prev, pt, width+2, faded(night, 0.55*alpha))
 				segment(p, prev, pt, width, curveRGBA(bit, alpha))
 			}
 			prev, was, lastX = pt, true, x
 		}
 	}
 	if on&CurveM != 0 {
-		line(CurveM, m.blocks, 4, 1)
+		line(CurveM, loudnesses(m.blocks), 0.4, 0.1, 1)
 	}
 	if on&CurveS != 0 {
-		line(CurveS, m.shorts, 30, 2)
+		line(CurveS, loudnesses(m.shorts), 3, 0.1, 2)
 	}
 	if on&CurveI != 0 && m.Loud {
+		// The integrated loudness as it grows, from the start to each
+		// second: a passage that lifts it shows as a rise.
+		grown := make([]float64, len(m.running))
+		for i, l := range m.running {
+			grown[i] = float64(l)
+		}
+		line(CurveI, grown, 1, 1, 2)
 		y := yOf(float64(m.LUFS))
 		for x := float32(0); x < box.W; x += 10 {
 			p.RRect(geom.Rc(x, y-0.75, 6, 1.5), 0.75, paint.Solid(curveRGBA(CurveI, alpha)))
@@ -286,6 +300,15 @@ func (e *editor) paintCurves(p *paint.Painter, box geom.Size) {
 			run.Paint(p, geom.Pt(x, y-11), faded(ink, 0.45))
 		}
 	}
+}
+
+// loudnesses are powers' loudnesses.
+func loudnesses(powers []float64) []float64 {
+	out := make([]float64, len(powers))
+	for i, pw := range powers {
+		out[i] = lufsOf(pw)
+	}
+	return out
 }
 
 // lufsOf is the loudness of a mean weighted power.

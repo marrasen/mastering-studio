@@ -190,14 +190,31 @@ type Measure struct {
 	LRA, Low, High float32
 	Ranged         bool
 	// blocks and shorts are the powers the loudness and its range are
-	// measured from, for the album's, measured over every track; the
-	// window has no need of them.
+	// measured from, for the album's, measured over every track, and
+	// for the editor's curves; running is the integrated loudness from
+	// the start to each second, for its curve of it.
 	blocks, shorts []float64
+	running        []float32
+}
+
+// runningLoudness is the integrated loudness of the 400 ms blocks'
+// powers from the first to each second's, -inf before there is any.
+func runningLoudness(blocks []float64) []float32 {
+	out := make([]float32, 0, len(blocks)/10+1)
+	for k := 10; k <= len(blocks)+9; k += 10 {
+		l, ok := audio.Integrated(blocks[:min(k, len(blocks))])
+		if !ok {
+			l = math.Inf(-1)
+		}
+		out = append(out, float32(l))
+	}
+	return out
 }
 
 // reading is what the meters measured of a sound length long.
 func reading(lm *audio.LoudnessMeter, tp *audio.TruePeakMeter, length time.Duration) Measure {
 	m := Measure{TruePeak: float32(tp.Peak()), Peak: lm.Peak(), Length: length, blocks: lm.Blocks(), shorts: lm.ShortTerms()}
+	m.running = runningLoudness(m.blocks)
 	if l, ok := lm.Integrated(); ok {
 		m.LUFS, m.Loud = float32(l), true
 	}
@@ -272,6 +289,7 @@ func (k *keptMeasure) measure(path string) (Measure, bool) {
 	}
 	m := k.Measure
 	m.blocks, m.shorts = unfloats(k.Blocks), unfloats(k.Shorts)
+	m.running = runningLoudness(m.blocks)
 	return m, true
 }
 
