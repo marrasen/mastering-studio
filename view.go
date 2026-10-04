@@ -20,6 +20,8 @@ func registerViews(w *gunim.Window, d *deck) {
 		func(Album) *root { return newRoot(d) },
 		func(r *root, s Album, u *gunim.UI) { r.show(s, u) })
 	gunim.RegisterView(w, "release", newReleaseDialog, nil)
+	gunim.RegisterView(w, "export", newExportDialog,
+		func(e *exportDialog, d ExportDraft, u *gunim.UI) { e.show(d, u) })
 }
 
 // root is the whole window: the header along the top; the tracks down
@@ -222,8 +224,6 @@ type header struct {
 	name   string
 	gap    *valueChip
 	target *valueChip
-	format *pill
-	dir    *pill
 	add    *pill
 	export *pill
 	// calc measures the tracks changed since they were measured.
@@ -246,25 +246,8 @@ func newHeader(r *root) *header {
 		0.01, 0.1, 0, 10, 1, func(v float64, u *gunim.UI) { u.Send(r, SetGap{Gap: time.Duration(v * float64(time.Second))}) })
 	h.target = newValueChip("TARGET", func(v float64) string { return fmt.Sprintf("%.1f LUFS", v) },
 		0.05, 0.5, -30, -5, -14, func(v float64, u *gunim.UI) { u.Send(r, SetTarget{LUFS: float32(v)}) })
-	h.format = newPill("16-bit · dither", func(u *gunim.UI) {
-		s := r.state
-		// 16 dithered, 16 plain, 24 dithered, 24 plain, 32 float.
-		switch {
-		case s.Bits == 16 && s.Dither:
-			u.Send(r, SetExport{Bits: 16})
-		case s.Bits == 16:
-			u.Send(r, SetExport{Bits: 24, Dither: true})
-		case s.Bits == 24 && s.Dither:
-			u.Send(r, SetExport{Bits: 24})
-		case s.Bits == 24:
-			u.Send(r, SetExport{Bits: 32})
-		default:
-			u.Send(r, SetExport{Bits: 16, Dither: true})
-		}
-	})
-	h.dir = newPill("Export to…", func(u *gunim.UI) { u.Send(r, ChooseExportDir{}) })
 	h.add = newPill("Add tracks", func(u *gunim.UI) { u.Send(r, ChooseFiles{}) })
-	h.export = newPill("Export album", func(u *gunim.UI) { u.Send(r, Export{}) })
+	h.export = newPill("Export…", func(u *gunim.UI) { u.Send(r, OpenExport{}) })
 	h.export.primary = true
 	h.calc = newPill("Calc LUFS", func(u *gunim.UI) { u.Send(r, CalcLoudness{}) })
 	return h
@@ -280,20 +263,7 @@ func (h *header) show(s Album) {
 	}
 	h.gap.value = s.Gap.Seconds()
 	h.target.value = float64(s.Target)
-	words := fmt.Sprintf("%d-bit", s.Bits)
-	switch {
-	case s.Bits == 32:
-		words = "32-bit float"
-	case s.Dither:
-		words += " · dither"
-	}
-	h.format.words = words
-	if s.ExportDir != "" {
-		h.dir.words = "→ " + lastDirs(s.ExportDir)
-	} else {
-		h.dir.words = "Export to…"
-	}
-	h.export.words = "Export album"
+	h.export.words = "Export…"
 	if s.Exporting {
 		h.export.words = "Exporting…"
 	}
@@ -352,7 +322,7 @@ func lastDirs(path string) string {
 
 // Children implements [gunim.Composite].
 func (h *header) Children() []gunim.Node {
-	return []gunim.Node{h.gap, h.target, h.format, h.dir, h.add, h.export, h.calc}
+	return []gunim.Node{h.gap, h.target, h.add, h.export, h.calc}
 }
 
 // Layout implements [gunim.Node]: the settings right of the name, the
@@ -368,20 +338,13 @@ func (h *header) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children)
 	}
 	// The button that measures, after the album's reading.
 	cw := pillWidth(h.calc.words)
-	kids.At(6).Layout(gunim.Tight(geom.Sz(cw, 32)))
-	kids.At(6).Place(geom.Pt(540+max(shaped(h.album, 14, true).Advance, 110)+16, (size.H-32)/2))
+	kids.At(4).Layout(gunim.Tight(geom.Sz(cw, 32)))
+	kids.At(4).Place(geom.Pt(540+max(shaped(h.album, 14, true).Advance, 110)+16, (size.H-32)/2))
 	right := size.W - 16
-	for _, i := range []int{5, 4, 3, 2} {
-		var words string
-		switch i {
-		case 5:
+	for _, i := range []int{3, 2} {
+		words := h.add.words
+		if i == 3 {
 			words = h.export.words
-		case 4:
-			words = h.add.words
-		case 3:
-			words = h.dir.words
-		case 2:
-			words = h.format.words
 		}
 		w := max(pillWidth(words), 96)
 		right -= w

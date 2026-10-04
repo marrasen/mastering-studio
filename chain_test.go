@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -577,5 +579,54 @@ func TestTheReleasesDialogSaysWhatWasWritten(t *testing.T) {
 	r := Release{Artist: "The Oscillators", Title: "Night Drive", Year: "2026", Genre: "Synthwave"}
 	if got := newReleaseDialog(r).OnAccept(); got != (SetRelease{Release: r}) {
 		t.Fatalf("the dialog, saved as it opened, says %v", got)
+	}
+}
+
+func TestAnExportRunsTracksSideBySideAndTagsThem(t *testing.T) {
+	a := measuredApp(t)
+	a.Release = Release{Artist: "The Oscillators", Title: "Night Drive", Year: "2026"}
+	a.ExportDir = t.TempDir()
+	start := time.Now()
+	a.handle(Export{})
+	running := 0
+	settle(t, a, func() bool {
+		n := 0
+		for _, tr := range a.Tracks {
+			if tr.Progress > 0 {
+				n++
+			}
+		}
+		running = max(running, n)
+		return !a.Exporting
+	})
+	if runtime.NumCPU() >= 4 && running < 2 {
+		t.Errorf("the tracks exported one at a time, %v in all", time.Since(start))
+	}
+	b, err := os.ReadFile(filepath.Join(a.ExportDir, "02 b.wav"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"INAM", "b\x00", "IART", "The Oscillators", "IPRD", "Night Drive", "ITRK", "2/3", "ICRD", "2026"} {
+		if !bytes.Contains(b, []byte(want)) {
+			t.Fatalf("the second track's file is not tagged %q", want)
+		}
+	}
+}
+
+func TestTheExportDialogSendsWhatIsTicked(t *testing.T) {
+	d := ExportDraft{Dir: "/x", Bits: 24, Dither: true, WAV: true, MP3Rates: mp3Rates, MP3Rate: 256,
+		Tracks: []ExportTrack{{ID: 1, Number: 1, Title: "One", Ticked: true}, {ID: 2, Number: 2, Title: "Two"}}}
+	e := newExportDialog(d)
+	got := e.OnAccept()
+	want := StartExport{IDs: []int{1}, Bits: 24, Dither: true, WAV: true, MP3Rate: 256}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the dialog, as it opened, sends %+v, want %+v", got, want)
+	}
+	if e.Check() != "" {
+		t.Fatalf("the dialog, as it opened, says %q", e.Check())
+	}
+	d.Tracks[0].Ticked = false
+	if newExportDialog(d).Check() == "" {
+		t.Fatal("with no track ticked the dialog exports")
 	}
 }

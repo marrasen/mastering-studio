@@ -270,7 +270,7 @@ func (l *trackList) openMenu(p geom.Point, u *gunim.UI) bool {
 		case 2:
 			u.Send(l, ShowFile{ID: id})
 		case 3:
-			u.Send(l, Export{IDs: []int{id}})
+			u.Send(l, OpenExport{IDs: []int{id}})
 		case 4:
 			u.Send(l, RemoveTrack{ID: id})
 		}

@@ -37,6 +37,10 @@ type (
 		Bits      int
 		Dither    bool
 		ExportDir string
+		// ExportWAV and ExportMP3 say which files an export writes, the
+		// MP3 at MP3Rate kbps.
+		ExportWAV, ExportMP3 bool
+		MP3Rate              int
 		// Current is the track picked, which plays; Playing says it
 		// does, and Starts counts the starts, so the window can tell a
 		// new play from one going on.
@@ -223,7 +227,12 @@ type project struct {
 	ExportDir string
 	// ExportAt is the export folder whole, as it was last saved, where
 	// ExportDir is from the album's folder.
-	ExportAt  string `json:",omitempty"`
+	ExportAt string `json:",omitempty"`
+	// ExportWAV and ExportMP3 say which files an export writes; nil is
+	// a WAV, as before either was kept.
+	ExportWAV *bool `json:",omitempty"`
+	ExportMP3 bool  `json:",omitempty"`
+	MP3Rate   int   `json:",omitempty"`
 	Volume    float32
 	Match     bool
 	Current   int
@@ -315,6 +324,8 @@ type app struct {
 	// dialog is open.
 	c         *gunim.Client
 	releasing bool
+	// exportOpen says the export's dialog is open.
+	exportOpen bool
 }
 
 type scanned struct {
@@ -351,6 +362,7 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 		replacing: make(chan ReplaceFile, 1), matches: make(chan matched, 4),
 		albums: make(chan albumChoice, 1)}
 	a.Gap, a.Target, a.Bits, a.Dither, a.Volume = time.Second, -14, 16, true, 0.8
+	a.ExportWAV, a.MP3Rate = true, 320
 	return a
 }
 
@@ -366,6 +378,10 @@ func (a *app) load() {
 	}
 	a.Gap, a.Target, a.Bits, a.Dither = p.Gap, p.Target, p.Bits, p.Dither
 	a.ExportDir = found(a.file, p.ExportDir, p.ExportAt)
+	a.ExportWAV, a.ExportMP3 = p.ExportWAV == nil || *p.ExportWAV, p.ExportMP3
+	if p.MP3Rate > 0 {
+		a.MP3Rate = p.MP3Rate
+	}
 	a.Release = p.Release
 	if p.Volume > 0 {
 		a.Volume = p.Volume
@@ -402,8 +418,9 @@ func (a *app) save() {
 	a.dirty = false
 	a.readStates()
 	p := project{Release: a.Release, Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither,
-		ExportDir: relative(a.file, a.ExportDir), ExportAt: a.ExportDir,
-		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
+		ExportDir: relative(a.file, a.ExportDir), ExportAt: a.ExportDir, ExportWAV: &a.ExportWAV, ExportMP3: a.ExportMP3,
+		MP3Rate: a.MP3Rate,
+		Volume:  a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
 		Follow: a.Follow}
 	for _, t := range a.Tracks {
 		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Edit: t.Edit, Stale: t.Stale}
@@ -649,6 +666,9 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		case dir := <-a.dirs:
 			a.ExportDir = dir
 			a.dirty = true
+			if a.exportOpen {
+				_ = c.Publish(exportTopic, a.exportDraft(nil))
+			}
 		case p := <-a.progress:
 			a.exportProgress(p)
 		case ps := <-a.found:
@@ -887,6 +907,21 @@ func (a *app) handle(in gunim.Intent) {
 		a.Dither = in.Dither
 		a.dirty = true
 	case Export:
+		a.export(in.IDs)
+	case OpenExport:
+		a.openExport(true, in.IDs)
+	case ExportClosed:
+		a.openExport(false, nil)
+	case StartExport:
+		if in.Bits == 16 || in.Bits == 24 || in.Bits == 32 {
+			a.Bits = in.Bits
+		}
+		a.Dither, a.ExportWAV, a.ExportMP3 = in.Dither, in.WAV, in.MP3
+		if in.MP3Rate > 0 {
+			a.MP3Rate = in.MP3Rate
+		}
+		a.dirty = true
+		a.openExport(false, nil)
 		a.export(in.IDs)
 	case CalcLoudness:
 		a.calcLoudness()

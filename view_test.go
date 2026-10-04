@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -255,7 +256,7 @@ func TestAnAlbumExportsEachTrackAtItsOwnLength(t *testing.T) {
 	settle(t, a, func() bool { return !a.Exporting })
 	want := []time.Duration{4 * time.Second, 2700 * time.Millisecond, 3600*time.Millisecond + time.Second}
 	for i, tr := range a.Tracks {
-		if tr.Exported == "" || filepath.Base(tr.Exported) != exportName(i+1, tr.Title) {
+		if tr.Exported == "" || filepath.Base(tr.Exported) != exportName(i+1, tr.Title)+".wav" {
 			t.Fatalf("track %d exported to %q", i+1, tr.Exported)
 		}
 		if d := tr.Out.Length - want[i]; d.Abs() > time.Millisecond {
@@ -666,5 +667,17 @@ func TestTheSpectrumsHeadingSwitchesToTheSpectrogram(t *testing.T) {
 		if r.meters.showGram != want {
 			t.Fatalf("a click on the heading left the spectrogram shown %v, want %v", r.meters.showGram, want)
 		}
+	}
+}
+
+func TestTheExportButtonOpensTheDialog(t *testing.T) {
+	w, r, run := stage(t, album())
+	b := boundsOf(t, w, run, r.header.export)
+	w.Input(input.PointerMove{Pos: b.Center()})
+	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || !reflect.DeepEqual(rest[0], OpenExport{}) {
+		t.Fatalf("the export button sent %v", rest)
 	}
 }
