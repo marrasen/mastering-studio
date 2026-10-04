@@ -324,8 +324,11 @@ type app struct {
 	// dialog is open.
 	c         *gunim.Client
 	releasing bool
-	// exportOpen says the export's dialog is open.
+	// exportOpen says the export's dialog is open, and lame is where
+	// LAME was located, for MP3s.
 	exportOpen bool
+	lame       string
+	lames      chan string
 }
 
 type scanned struct {
@@ -360,7 +363,7 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 		chosen: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
 		racks: map[int]*rack{}, version: map[int]int{}, measuringVersion: map[int]int{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1),
 		replacing: make(chan ReplaceFile, 1), matches: make(chan matched, 4),
-		albums: make(chan albumChoice, 1)}
+		albums: make(chan albumChoice, 1), lames: make(chan string, 1)}
 	a.Gap, a.Target, a.Bits, a.Dither, a.Volume = time.Second, -14, 16, true, 0.8
 	a.ExportWAV, a.MP3Rate = true, 320
 	return a
@@ -614,7 +617,8 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.saveDialog = func(o driver.SaveOptions) (string, error) { return c.SaveFile(ctx, o) }
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
-	a.RecentAlbums, a.Recent = st.Albums, st.Plugins
+	a.RecentAlbums, a.Recent, a.lame = st.Albums, st.Plugins, st.LAME
+	useLAME(findLAME(a.lame))
 	a.load()
 	a.opened(a.file)
 	for _, p := range o.paths {
@@ -654,6 +658,17 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			a.matchedGain(m)
 		case c := <-a.albums:
 			a.chosenAlbum(c)
+		case p := <-a.lames:
+			if found := findLAME(p); found != "" {
+				a.lame = found
+				useLAME(found)
+				a.writeSettings()
+			} else {
+				a.Note = p + " is no program to run"
+			}
+			if a.exportOpen {
+				_ = c.Publish(exportTopic, a.exportDraft(nil))
+			}
 		case <-a.nextSettle():
 			a.startMeasures()
 		case <-a.replay:
@@ -908,6 +923,14 @@ func (a *app) handle(in gunim.Intent) {
 		a.dirty = true
 	case Export:
 		a.export(in.IDs)
+	case LocateLAME:
+		go func() {
+			paths, err := a.choose(driver.ChooseOptions{Title: "Locate LAME",
+				Filters: []driver.FileFilter{{Name: "LAME", Patterns: []string{"lame.exe", "lame"}}}})
+			if err == nil && len(paths) > 0 {
+				a.lames <- paths[0]
+			}
+		}()
 	case OpenExport:
 		a.openExport(true, in.IDs)
 	case ExportClosed:

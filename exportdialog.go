@@ -24,6 +24,7 @@ type (
 		WAV, MP3     bool
 		MP3Rate      int
 		HaveMP3      bool
+		LAME         string
 		MP3Rates     []int
 		Measuring    int
 		ExportingNow bool
@@ -40,6 +41,8 @@ type (
 	OpenExport struct{ IDs []int }
 	// ExportClosed says the export's dialog closed.
 	ExportClosed struct{}
+	// LocateLAME asks, with the system's dialog, where LAME is.
+	LocateLAME struct{}
 	// StartExport exports the tracks ticked, as the dialog says.
 	StartExport struct {
 		IDs      []int
@@ -67,6 +70,11 @@ type exportDialog struct {
 	dir  *widget.Label
 	bits *widget.Dropdown
 	rate *widget.Dropdown
+	mp3  *widget.Checkbox
+	// note says MP3s need LAME, with locate to say where it is, while
+	// it is not found.
+	note   *widget.Label
+	locate *widget.Button
 }
 
 func newExportDialog(d ExportDraft) *exportDialog {
@@ -106,26 +114,26 @@ func newExportDialog(d ExportDraft) *exportDialog {
 	dither := widget.NewCheckbox("Dither")
 	dither.On = d.Dither
 	mp3 := widget.NewCheckbox("MP3")
+	e.mp3 = mp3
 	mp3.On = d.MP3 && d.HaveMP3
-	mp3.Disabled = !d.HaveMP3
 	rates := make([]string, len(d.MP3Rates))
 	for i, r := range d.MP3Rates {
 		rates[i] = fmt.Sprintf("%d kbps", r)
 	}
 	e.rate = widget.NewDropdown(rates...)
 	e.rate.Selected = max(0, slices.Index(d.MP3Rates, d.MP3Rate))
-	e.rate.Disabled = !d.HaveMP3
+	e.note = widget.NewLabel("MP3s are encoded by LAME, which is not found.")
+	e.note.Color, e.note.MaxLines = widget.PaletteHint, 2
+	e.locate = widget.NewButton("Locate LAME…")
+	e.locate.On = LocateLAME{}
+	e.lame(d.LAME)
 	mp3Row := widget.Row(mp3, e.rate)
 	form := widget.NewForm()
 	form.Add("Folder", widget.Column(e.dir, change)).
 		Add("Tracks", widget.Column(col...)).
 		Add("Format", widget.Row(wav, e.bits, dither)).
-		Add("", mp3Row)
-	if !d.HaveMP3 {
-		note := widget.NewLabel("No MP3 encoder is built in yet.")
-		note.Color = widget.PaletteHint
-		form.Add("", note)
-	}
+		Add("", mp3Row).
+		Add("", widget.Column(e.note, e.locate))
 	dlg.Body = form
 	dlg.SetButtons("Export", "Cancel")
 	dlg.Dismiss = ExportClosed{}
@@ -158,10 +166,23 @@ func newExportDialog(d ExportDraft) *exportDialog {
 	return e
 }
 
-// show takes the draft anew, as the folder changes.
+// show takes the draft anew, as the folder changes, or LAME is found.
 func (e *exportDialog) show(d ExportDraft, u *gunim.UI) {
 	e.dir.SetText(d.Dir)
+	e.lame(d.LAME)
 	u.Invalidate()
+}
+
+// lame shows MP3 as LAME is found, at path, or not.
+func (e *exportDialog) lame(path string) {
+	found := path != ""
+	e.mp3.Disabled, e.rate.Disabled = !found, !found
+	if found {
+		e.note.SetText("Encoded by LAME, at " + path)
+		return
+	}
+	e.mp3.On = false
+	e.note.SetText("MP3s are encoded by LAME, which is not found.")
 }
 
 // The app's half of the dialog.
@@ -173,7 +194,7 @@ var mp3Rates = []int{320, 256, 192}
 // every one.
 func (a *app) exportDraft(ids []int) ExportDraft {
 	d := ExportDraft{Dir: a.exportDir(), Bits: a.Bits, Dither: a.Dither, WAV: a.ExportWAV, MP3: a.ExportMP3,
-		MP3Rate: a.MP3Rate, HaveMP3: encodeMP3 != nil, MP3Rates: mp3Rates}
+		MP3Rate: a.MP3Rate, HaveMP3: encodeMP3 != nil, MP3Rates: mp3Rates, LAME: lamePath}
 	for i, t := range a.Tracks {
 		d.Tracks = append(d.Tracks, ExportTrack{ID: t.ID, Number: i + 1, Title: t.Title,
 			Ticked: len(ids) == 0 || slices.Contains(ids, t.ID)})

@@ -47,7 +47,7 @@ type soundWriter interface {
 
 // encodeMP3, where an encoder is at hand, makes one writing w, of sound
 // at rate, at kbps, tagged.
-var encodeMP3 func(w io.WriteSeeker, rate, kbps int, tags trackTags) (soundWriter, error)
+var encodeMP3 func(ctx context.Context, w io.WriteSeeker, rate, kbps int, tags trackTags) (soundWriter, error)
 
 // exportJob is a track to export: what to render, and where to.
 type exportJob struct {
@@ -198,7 +198,7 @@ func exportTrack(ctx context.Context, j exportJob, progress func(float32)) (Meas
 	}
 	if j.mp3 && encodeMP3 != nil {
 		if err := open(".mp3", func(f *os.File) (soundWriter, error) {
-			return encodeMP3(f, format.SampleRate, j.kbps, j.tags)
+			return encodeMP3(ctx, f, format.SampleRate, j.kbps, j.tags)
 		}); err != nil {
 			return fail(err)
 		}
