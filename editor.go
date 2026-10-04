@@ -64,7 +64,7 @@ type editor struct {
 	zoom *anim.Float
 	// raw is the samples of the file in view, read for a view zoomed in
 	// past the waveform's finest level.
-	raw  rawSamples
+	raw rawSamples
 	// clock is the playhead, in seconds of the file, run on by the
 	// frames' time and drawn gently toward where the speakers are, as
 	// they tell it in uneven steps; clockID is the track it runs for.
