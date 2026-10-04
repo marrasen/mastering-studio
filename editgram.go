@@ -211,14 +211,27 @@ func curveRGBA(bit uint8, a float32) color.NRGBA {
 // lines, the integrated as a line across, and the range as a band;
 // faint where the track changed since.
 func (e *editor) paintCurves(p *paint.Painter, box geom.Size) {
-	m, on := e.track.Measure, e.r.state.Curves
-	if !e.track.Measured || on == 0 {
+	m := e.track.Measure
+	if !e.track.Measured {
 		return
 	}
-	alpha := float32(1)
+	stale := float32(1)
 	if e.track.Stale {
-		alpha = 0.4
+		stale = 0.4
 	}
+	// Each curve as it fades in or out.
+	var on uint8
+	var fade [4]float32
+	for i, c := range loudCurves {
+		fade[i] = min(max(e.curves[i].Value(), 0), 1)
+		if fade[i] > 0.01 {
+			on |= c.bit
+		}
+	}
+	if on == 0 {
+		return
+	}
+	var alpha float32
 	top, laneH := e.lanes()
 	area := geom.Rc(0, top, box.W, 2*laneH)
 	yOf := func(l float64) float32 {
@@ -227,6 +240,7 @@ func (e *editor) paintCurves(p *paint.Painter, box geom.Size) {
 	}
 	end := p.Layer(paint.LayerOpts{Bounds: area, Opacity: 1, Clip: true})
 	defer end()
+	alpha = stale * fade[3]
 	if on&CurveLRA != 0 && m.Ranged {
 		y0, y1 := yOf(float64(m.High)), yOf(float64(m.Low))
 		p.RRect(geom.Rc(0, y0, box.W, y1-y0), 0, paint.Solid(curveRGBA(CurveLRA, 0.12*alpha)))
@@ -267,11 +281,14 @@ func (e *editor) paintCurves(p *paint.Painter, box geom.Size) {
 		}
 	}
 	if on&CurveM != 0 {
+		alpha = stale * fade[0]
 		line(CurveM, loudnesses(m.blocks), 0.4, 0.1, 1)
 	}
 	if on&CurveS != 0 {
+		alpha = stale * fade[1]
 		line(CurveS, loudnesses(m.shorts), 3, 0.1, 2)
 	}
+	alpha = stale * fade[2]
 	if on&CurveI != 0 && m.Loud {
 		// The integrated loudness as it grows, from the start to each
 		// second: a passage that lifts it shows as a rise.
@@ -290,6 +307,7 @@ func (e *editor) paintCurves(p *paint.Painter, box geom.Size) {
 	// The target, faint, for the loudness to be read against, and the
 	// scale, at the right.
 	if on&(CurveS|CurveM|CurveI) != 0 {
+		alpha = stale * max(fade[0], fade[1], fade[2])
 		y := yOf(float64(e.r.state.Target))
 		p.RRect(geom.Rc(0, y, box.W, 1), 0, paint.Solid(faded(ink, 0.18*alpha)))
 		for l := -5; l >= -25; l -= 5 {

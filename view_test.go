@@ -828,3 +828,65 @@ func TestTheIOMetersRMSHoldsStillOnSteadyNoise(t *testing.T) {
 		t.Fatalf("noise at an RMS of 0.1 reads %.1f dB, want -20", last)
 	}
 }
+
+func TestTheViewsFadeIntoEachOther(t *testing.T) {
+	w, r, run := stage(t, album())
+	ed := r.editor
+	if ed.gram.Value() != 0 {
+		t.Fatal("the waveform view starts faded")
+	}
+	a := album()
+	a.View = ViewGram
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
+	last := float32(0)
+	for f := range 40 {
+		run(1)
+		g := ed.gram.Value()
+		if g < last-1e-6 {
+			t.Fatalf("frame %d: the spectrogram faded back, %.3f to %.3f", f, last, g)
+		}
+		last = g
+	}
+	if last < 0.99 {
+		t.Fatalf("after 40 frames the spectrogram is %.2f in", last)
+	}
+}
+
+func TestAFlickOfTheRulerGlidesTheViewOnAndSlows(t *testing.T) {
+	w, r, run := stage(t, album())
+	ed := r.editor
+	ed.v0.Jump(4)
+	ed.v1.Jump(6)
+	b := boundsOf(t, w, run, ed)
+	at := b.Min.Add(geom.Pt(ed.size.W/2, rulerH/2))
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	run(1)
+	for range 6 {
+		at = at.Add(geom.Pt(-30, 0))
+		w.Input(input.PointerMove{Pos: at})
+		run(1)
+	}
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	let := ed.v0.Value()
+	var lastStep float32 = 1e9
+	moved := false
+	for f := range 120 {
+		was := ed.v0.Value()
+		run(1)
+		step := ed.v0.Value() - was
+		if step < 0 {
+			t.Fatalf("frame %d: the view glides back", f)
+		}
+		if step > lastStep+1e-5 {
+			t.Fatalf("frame %d: the glide sped up, %.4f to %.4f", f, lastStep, step)
+		}
+		moved = moved || step > 0
+		lastStep = step
+	}
+	if !moved || ed.v0.Value()-let < 0.1 || ed.fling != 0 {
+		t.Fatalf("let go moving, the view glided %.3f s and is still flinging %v", ed.v0.Value()-let, ed.fling != 0)
+	}
+}

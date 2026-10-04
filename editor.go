@@ -73,12 +73,26 @@ type editor struct {
 	// they tell it in uneven steps; clockID is the track it runs for.
 	clock   float64
 	clockID int
+	// synced says the view and curves have been set from the album once.
+	synced bool
 	// grams are the spectrograms drawn, of the tracks seen last.
 	grams map[*Gram]*gramTiles
 	// silence is the silence before the track as a drag sets it, ahead
 	// of the application's answer, or -1.
 	silence float64
-	size    geom.Size
+	// gram runs from 0, the waveform shown, to 1, the spectrogram, the
+	// one fading into the other; curves fade each loudness curve in and
+	// out, in the legend's order.
+	gram   *anim.Float
+	curves [4]*anim.Float
+	// fling is how fast the view glides on after a flick of the ruler,
+	// in seconds of the file a second; dragV is how fast a drag moves
+	// it, wasV0 where it started the frame, and still how long since it
+	// moved.
+	fling, dragV float64
+	wasV0        float32
+	still        time.Duration
+	size         geom.Size
 }
 
 // rawSamples is a stretch of a file's samples, read in the background.
@@ -96,6 +110,13 @@ func newEditor(r *root) *editor {
 	e.Add(e.v0, e.v1, e.inMorph, e.outMorph, e.glow, e.zoom)
 	e.raw.loaded = make(chan rawSamples, 1)
 	e.silence = -1
+	e.gram = anim.NewFloat(0)
+	e.Add(e.gram)
+	for i := range e.curves {
+		e.curves[i] = anim.NewFloat(0)
+		e.Add(e.curves[i])
+	}
+	e.synced = false
 	return e
 }
 
@@ -126,6 +147,21 @@ func (e *editor) fit() (v0, v1 float64) {
 }
 
 func (e *editor) show(was Album, t Track) {
+	// The view and the curves glide to what the album says; the first
+	// time, they are there at once.
+	s := e.r.state
+	move := func(f *anim.Float, to float32) {
+		if !e.synced {
+			f.Jump(to)
+		} else {
+			f.Animate(to, anim.Spring{Response: 0.35, Damping: 1})
+		}
+	}
+	move(e.gram, onOff(s.View == ViewGram))
+	for i, c := range loudCurves {
+		move(e.curves[i], onOff(s.Curves&c.bit != 0))
+	}
+	e.synced = true
 	fresh := t.ID != e.track.ID || t.Scanned != e.track.Scanned || t.File != e.track.File
 	e.track = t
 	// The window's own edits are newer than the application's answers.
@@ -305,6 +341,7 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 		}
 		e.held = e.gripAt(ev.Pos)
 		e.heldAt = e.tAt(ev.Pos.X)
+		e.fling, e.dragV = 0, 0
 		e.pressed, e.dragged = ev.Pos, false
 		if e.held == gripZoom {
 			e.zoomTo(ev.Pos.Y)
@@ -313,6 +350,10 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 			u.Send(e, SeekTo{At: e.renderTime(e.tAt(ev.Pos.X))})
 		}
 	case input.PointerUp:
+		// A ruler let go while it moves flings the view on.
+		if e.held == gripRuler && e.dragged && e.still < 80*time.Millisecond && math.Abs(e.dragV) > 0.05 {
+			e.fling = e.dragV
+		}
 		if e.held == gripSilence {
 			e.silence = -1
 		}
@@ -458,10 +499,12 @@ func (e *editor) Step(dt time.Duration) bool {
 	}
 	moving = e.wantRaw() || moving
 	e.runClock(dt)
+	flinging := e.stepFling(dt)
+	moving = moving || flinging
 	if !e.r.state.Playing {
 		return moving
 	}
-	if t, ok := e.playhead(); ok && e.held == gripNone {
+	if t, ok := e.playhead(); ok && e.held == gripNone && !flinging {
 		v0, v1 := float64(e.v0.Target()), float64(e.v1.Target())
 		span := v1 - v0
 		switch e.r.state.Follow {
@@ -595,10 +638,17 @@ func (e *editor) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.C
 	}
 	e.paintRuler(p, box)
 	e.paintGap(p, box)
-	if e.r.state.View == ViewGram {
-		e.paintGram(p, box)
-	} else {
+	// The waveform and the spectrogram, the one fading into the other.
+	whole2 := geom.Rect{Max: box.Point()}
+	if g := e.gram.Value(); g < 0.99 {
+		end := p.Layer(paint.LayerOpts{Bounds: whole2, Opacity: 1 - max(0, g)})
 		e.paintWave(p, box)
+		end()
+	}
+	if g := e.gram.Value(); g > 0.01 {
+		end := p.Layer(paint.LayerOpts{Bounds: whole2, Opacity: min(1, g)})
+		e.paintGram(p, box)
+		end()
 	}
 	e.paintCurves(p, box)
 	e.paintFades(p, box)
@@ -984,4 +1034,44 @@ func (e *editor) Cursor(p geom.Point) input.Cursor {
 	case gripNone, gripFadeIn, gripFadeOut, gripSeek:
 	}
 	return input.CursorInherit
+}
+
+// stepFling follows a drag of the ruler, how fast it moves the view,
+// and, once it is let go moving, glides the view on, slowing, to a stop
+// or the sound's end. It returns whether the view glides.
+func (e *editor) stepFling(dt time.Duration) bool {
+	sec := dt.Seconds()
+	if e.held == gripRuler && sec > 0 {
+		v0 := e.v0.Value()
+		if v0 != e.wasV0 {
+			v := float64(v0-e.wasV0) / sec
+			e.dragV = 0.6*e.dragV + 0.4*v
+			e.still = 0
+		} else {
+			e.still += dt
+		}
+		e.wasV0 = v0
+		return false
+	}
+	e.wasV0 = e.v0.Value()
+	if e.fling == 0 || sec <= 0 {
+		return false
+	}
+	span := float64(e.v1.Value() - e.v0.Value())
+	lo, hi := e.fit()
+	shift := e.fling * sec
+	v0 := float64(e.v0.Value()) + shift
+	// The sound's ends stop it.
+	if v0 < lo || v0+span > hi {
+		v0 = max(lo, min(v0, hi-span))
+		e.fling = 0
+	}
+	e.v0.Jump(float32(v0))
+	e.v1.Jump(float32(v0 + span))
+	e.fling *= math.Exp(-4 * sec)
+	if math.Abs(e.fling) < span*0.02 {
+		e.fling = 0
+	}
+	e.wasV0 = e.v0.Value()
+	return e.fling != 0
 }
