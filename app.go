@@ -341,6 +341,8 @@ type app struct {
 	// dialog is open.
 	c         *gunim.Client
 	releasing bool
+	// stopExport cancels the export running.
+	stopExport context.CancelFunc
 	// exportOpen says the export's dialog is open, and lame is where
 	// LAME was located, for MP3s.
 	exportOpen bool
@@ -363,7 +365,9 @@ type measured struct {
 }
 
 type exported struct {
-	id       int
+	id int
+	// finished says the track's export is over, done or not.
+	finished bool
 	version  int
 	progress float32
 	path     string
@@ -657,6 +661,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	watch := time.NewTicker(time.Second)
 	defer watch.Stop()
 	_ = c.Focus("album")
+	_ = c.SetTheme(themeName)
 	if o.play {
 		a.play(0, 10*time.Millisecond)
 	}
@@ -954,6 +959,10 @@ func (a *app) handle(in gunim.Intent) {
 				a.lames <- paths[0]
 			}
 		}()
+	case CancelExport:
+		if a.stopExport != nil {
+			a.stopExport()
+		}
 	case OpenExport:
 		a.openExport(true, in.IDs)
 	case ExportClosed:

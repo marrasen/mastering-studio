@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -108,8 +109,11 @@ func (a *app) export(ids []int) {
 		}
 	}
 	a.Exporting = true
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.stopExport = cancel
 	a.work.Add(1)
 	go func() {
+		defer cancel()
 		defer a.work.Done()
 		send := func(e exported) {
 			select {
@@ -128,16 +132,17 @@ func (a *app) export(ids []int) {
 				defer wg.Done()
 				select {
 				case slots <- struct{}{}:
-				case <-a.ctx.Done():
+				case <-ctx.Done():
+					send(exported{id: j.id, finished: true, err: ctx.Err()})
 					return
 				}
 				defer func() { <-slots }()
-				out, path, err := exportTrack(a.ctx, j, func(p float32) { send(exported{id: j.id, progress: p}) })
-				send(exported{id: j.id, version: j.version, progress: 1, path: path, out: out, err: err})
+				out, path, err := exportTrack(ctx, j, func(p float32) { send(exported{id: j.id, progress: p}) })
+				send(exported{id: j.id, version: j.version, finished: true, path: path, out: out, err: err})
 			}()
 		}
 		wg.Wait()
-		send(exported{done: true})
+		send(exported{done: true, err: ctx.Err()})
 	}()
 }
 
@@ -243,8 +248,11 @@ func exportTrack(ctx context.Context, j exportJob, progress func(float32)) (Meas
 // exportProgress takes the export's progress.
 func (a *app) exportProgress(e exported) {
 	if e.done {
-		a.Exporting = false
-		if e.err != nil {
+		a.Exporting, a.stopExport = false, nil
+		switch {
+		case errors.Is(e.err, context.Canceled):
+			a.Note = "The export was cancelled; its files half written are removed."
+		case e.err != nil:
 			a.Note = e.err.Error()
 		}
 		return
@@ -254,8 +262,11 @@ func (a *app) exportProgress(e exported) {
 		return
 	}
 	t.Progress = e.progress
-	if e.path != "" {
+	if e.finished {
 		t.Progress = 0
+		if errors.Is(e.err, context.Canceled) {
+			return
+		}
 		if e.err != nil {
 			a.Note = fmt.Sprintf("%s: %v", t.Title, e.err)
 			return

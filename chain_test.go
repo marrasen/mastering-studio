@@ -630,3 +630,20 @@ func TestTheExportDialogSendsWhatIsTicked(t *testing.T) {
 		t.Fatal("with no track ticked the dialog exports")
 	}
 }
+
+func TestACancelledExportLeavesNoFilesHalfWritten(t *testing.T) {
+	a := measuredApp(t)
+	a.ExportDir = t.TempDir()
+	a.handle(Export{})
+	a.handle(CancelExport{})
+	settle(t, a, func() bool { return !a.Exporting })
+	left, _ := os.ReadDir(a.ExportDir)
+	if len(left) != 0 || !strings.Contains(a.Note, "cancelled") {
+		t.Fatalf("cancelled, the export left %d files, and says %q", len(left), a.Note)
+	}
+	for _, tr := range a.Tracks {
+		if tr.Progress != 0 {
+			t.Fatalf("cancelled, %s shows progress %.2f", tr.Title, tr.Progress)
+		}
+	}
+}

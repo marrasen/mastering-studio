@@ -11,6 +11,7 @@ import (
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -19,6 +20,10 @@ func registerViews(w *gunim.Window, d *deck) {
 	gunim.RegisterView(w, "album",
 		func(Album) *root { return newRoot(d) },
 		func(r *root, s Album, u *gunim.UI) { r.show(s, u) })
+	// The window's own widgets, as its dialogs', in the studio's teal.
+	w.RegisterTheme(theme.Make(themeName, theme.Set(widget.Accent, teal),
+		theme.Set(widget.ButtonPrimaryFill, rgb(0x1f, 0x8f, 0x80)),
+		theme.Set(widget.ButtonPrimaryHover, rgb(0x2a, 0xa3, 0x92))))
 	gunim.RegisterView(w, "release", newReleaseDialog, nil)
 	gunim.RegisterView(w, "export", newExportDialog,
 		func(e *exportDialog, d ExportDraft, u *gunim.UI) { e.show(d, u) })
@@ -247,7 +252,13 @@ func newHeader(r *root) *header {
 	h.target = newValueChip("TARGET", func(v float64) string { return fmt.Sprintf("%.1f LUFS", v) },
 		0.05, 0.5, -30, -5, -14, func(v float64, u *gunim.UI) { u.Send(r, SetTarget{LUFS: float32(v)}) })
 	h.add = newPill("Add tracks", func(u *gunim.UI) { u.Send(r, ChooseFiles{}) })
-	h.export = newPill("Export…", func(u *gunim.UI) { u.Send(r, OpenExport{}) })
+	h.export = newPill("Export…", func(u *gunim.UI) {
+		if r.state.Exporting {
+			u.Send(r, CancelExport{})
+			return
+		}
+		u.Send(r, OpenExport{})
+	})
 	h.export.primary = true
 	h.calc = newPill("Calc LUFS", func(u *gunim.UI) { u.Send(r, CalcLoudness{}) })
 	return h
@@ -264,8 +275,9 @@ func (h *header) show(s Album) {
 	h.gap.value = s.Gap.Seconds()
 	h.target.value = float64(s.Target)
 	h.export.words = "Export…"
+	h.export.primary = !s.Exporting
 	if s.Exporting {
-		h.export.words = "Exporting…"
+		h.export.words = "Cancel export"
 	}
 	var total time.Duration
 	for _, t := range s.Tracks {
@@ -457,3 +469,6 @@ func (h *header) openMenu(u *gunim.UI) {
 	}
 	m.Open(geom.Pt(16, headerH-6), u)
 }
+
+// themeName is the window's theme: dark, with the studio's teal.
+const themeName = "mastering"
