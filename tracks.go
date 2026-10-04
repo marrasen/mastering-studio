@@ -1,0 +1,414 @@
+package main
+
+import (
+	"fmt"
+	"image/color"
+	"math"
+	"strconv"
+	"time"
+
+	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/icon"
+	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/widget"
+)
+
+// rowH is the height of a track's row.
+const rowH = 74
+
+// rowLook is a row's animated state, by its track's ID: where it is,
+// how lit, how picked, and its readings as they count to new ones.
+type rowLook struct {
+	y, lit, picked, in *anim.Float
+	lufs, peak         *anim.Float
+	progress           *anim.Float
+	gone               bool
+	thumb              []float32
+	thumbOf            *Wave
+}
+
+// trackList is the album's tracks, a row each, in order: its number,
+// title and length, its waveform small, its loudness against the target
+// and its true peak, and its export's progress. A row picked plays; a
+// row dragged moves; files dropped on the list join the album.
+type trackList struct {
+	anim.Group
+	r     *root
+	rows  map[int]*rowLook
+	order []int
+	hot   int
+	down  int
+	// moving is the track dragged to a new place, from where it was
+	// pressed: grab is how far down its row, and y where the pointer is.
+	moving  int
+	press   geom.Point
+	grab, y float32
+	spin    float64
+	menu    *widget.ContextMenu
+	size    geom.Size
+}
+
+func newTrackList(r *root) *trackList {
+	return &trackList{r: r, rows: map[int]*rowLook{}}
+}
+
+func (l *trackList) look(id int) *rowLook {
+	if lk := l.rows[id]; lk != nil {
+		return lk
+	}
+	lk := &rowLook{y: anim.NewFloat(float32(len(l.order)) * rowH), lit: anim.NewFloat(0), picked: anim.NewFloat(0),
+		in: anim.NewFloat(0), lufs: anim.NewFloat(0), peak: anim.NewFloat(0), progress: anim.NewFloat(0)}
+	lk.in.Animate(1, anim.Spring{Response: 0.4, Damping: 0.8})
+	l.Add(lk.y, lk.lit, lk.picked, lk.in, lk.lufs, lk.peak, lk.progress)
+	l.rows[id] = lk
+	return lk
+}
+
+func (l *trackList) show(s Album, u *gunim.UI) {
+	live := map[int]bool{}
+	l.order = l.order[:0]
+	for i, t := range s.Tracks {
+		live[t.ID] = true
+		l.order = append(l.order, t.ID)
+		lk := l.look(t.ID)
+		lk.gone = false
+		if t.ID != l.moving {
+			lk.y.Animate(float32(i)*rowH, anim.Spring{Response: 0.35, Damping: 0.85})
+		}
+		lk.picked.Animate(map[bool]float32{false: 0, true: 1}[t.ID == s.Current], anim.Snappy)
+		if t.Measured {
+			if lk.lufs.Value() == 0 {
+				lk.lufs.Jump(t.Measure.LUFS)
+				lk.peak.Jump(float32(dB(float64(t.Measure.TruePeak))))
+			}
+			lk.lufs.Animate(t.Measure.LUFS, anim.Spring{Response: 0.5, Damping: 1})
+			lk.peak.Animate(float32(dB(float64(t.Measure.TruePeak))), anim.Spring{Response: 0.5, Damping: 1})
+		}
+		lk.progress.Animate(t.Progress, anim.Snappy)
+		if t.Wave != lk.thumbOf && t.Wave != nil {
+			lk.thumb, lk.thumbOf = thumbnail(t.Wave, 64), t.Wave
+		}
+	}
+	for id, lk := range l.rows {
+		if !live[id] && !lk.gone {
+			lk.gone = true
+			lk.in.Animate(0, anim.Spring{Response: 0.3, Damping: 1})
+		}
+	}
+	u.Invalidate()
+}
+
+// thumbnail is a waveform in n columns: each the loudest of both
+// channels across its stretch.
+func thumbnail(w *Wave, n int) []float32 {
+	out := make([]float32, n)
+	per := float64(len(w.Peak[0])) / float64(n)
+	for i := range out {
+		for b := int(float64(i) * per); b < int(float64(i+1)*per) && b < len(w.Peak[0]); b++ {
+			out[i] = max(out[i], w.RMS[0][b], w.RMS[1][b])
+		}
+	}
+	return out
+}
+
+// Step implements [gunim.Animator]: rows gone drop away once faded, and
+// a spinner turns while a track is measured.
+func (l *trackList) Step(dt time.Duration) bool {
+	moving := l.Group.Step(dt)
+	for id, lk := range l.rows {
+		if lk.gone && lk.in.Value() < 0.01 && !lk.in.Active() {
+			l.Remove(lk.y, lk.lit, lk.picked, lk.in, lk.lufs, lk.peak, lk.progress)
+			delete(l.rows, id)
+		}
+	}
+	measuring := false
+	for _, t := range l.r.state.Tracks {
+		measuring = measuring || t.Measuring || !t.Scanned || t.Progress > 0
+	}
+	if measuring {
+		l.spin += dt.Seconds() * 5
+	}
+	return moving || measuring || l.r.state.Playing
+}
+
+// rowAt returns the place of the row at p, or -1.
+func (l *trackList) rowAt(p geom.Point) int {
+	if p.X < 0 || p.X > l.size.W || p.Y < 0 {
+		return -1
+	}
+	i := int(p.Y / rowH)
+	if i >= len(l.order) {
+		return -1
+	}
+	return i
+}
+
+func (l *trackList) hover(i int) {
+	id := 0
+	if i >= 0 {
+		id = l.order[i]
+	}
+	if id == l.hot {
+		return
+	}
+	if lk := l.rows[l.hot]; lk != nil {
+		lk.lit.Animate(0, anim.Gentle)
+	}
+	l.hot = id
+	if lk := l.rows[id]; lk != nil {
+		lk.lit.Animate(1, anim.Snappy)
+	}
+}
+
+// Handle implements [gunim.Handler]: a click picks a track, a drag moves
+// it, and the secondary button opens its menu.
+func (l *trackList) Handle(e input.Event, u *gunim.UI) bool {
+	switch e := e.(type) {
+	case input.PointerMove:
+		if l.moving != 0 {
+			l.y = e.Pos.Y
+			l.rows[l.moving].y.Jump(l.y - l.grab)
+			l.makeWay()
+			break
+		}
+		l.hover(l.rowAt(e.Pos))
+		if i := l.down; i >= 0 && i < len(l.order) && !e.Touch {
+			if d := e.Pos.Sub(l.press); d.Y*d.Y > 64 {
+				l.moving = l.order[i]
+				l.grab = l.press.Y - float32(i)*rowH
+				l.y = e.Pos.Y
+			}
+		}
+	case input.PointerLeave:
+		l.hover(-1)
+	case input.PointerDown:
+		switch e.Button {
+		case input.ButtonPrimary:
+			l.down, l.press = l.rowAt(e.Pos), e.Pos
+		case input.ButtonSecondary:
+			return l.openMenu(e.Pos, u)
+		default:
+			return false
+		}
+	case input.PointerUp:
+		switch {
+		case l.moving != 0:
+			from := indexOf(l.r.state.Tracks, l.moving)
+			to := max(0, min(int((l.y-l.grab+rowH/2)/rowH), len(l.order)-1))
+			l.moving = 0
+			if from >= 0 && from != to {
+				u.Cue(gunim.CueTick, l)
+				u.Send(l, MoveTrack{From: from, To: to})
+			} else {
+				l.show(l.r.state, u)
+			}
+		case l.down >= 0 && l.rowAt(e.Pos) == l.down:
+			u.Cue(gunim.CueSelect, l)
+			u.Send(l, Pick{ID: l.order[l.down]})
+		}
+		l.down = -1
+	default:
+		return false
+	}
+	u.Invalidate()
+	return true
+}
+
+func indexOf(ts []Track, id int) int {
+	for i, t := range ts {
+		if t.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// makeWay moves the rows between a track dragged and where it would
+// land a place, to make way.
+func (l *trackList) makeWay() {
+	from := indexOf(l.r.state.Tracks, l.moving)
+	to := max(0, min(int((l.y-l.grab+rowH/2)/rowH), len(l.order)-1))
+	for i, id := range l.order {
+		if id == l.moving {
+			continue
+		}
+		at := i
+		switch {
+		case from < i && i <= to:
+			at = i - 1
+		case to <= i && i < from:
+			at = i + 1
+		}
+		l.rows[id].y.Animate(float32(at)*rowH, anim.Spring{Response: 0.25, Damping: 0.85})
+	}
+}
+
+// openMenu opens the menu of the track at p.
+func (l *trackList) openMenu(p geom.Point, u *gunim.UI) bool {
+	i := l.rowAt(p)
+	if i < 0 || l.menu == nil {
+		return false
+	}
+	id := l.order[i]
+	l.menu.Items = []string{"Export this track", "Remove from the album"}
+	l.menu.Icons = []*icon.Icon{icon.Download, icon.Trash2}
+	l.menu.Picked = func(k int, u *gunim.UI) {
+		switch k {
+		case 0:
+			u.Send(l, Export{IDs: []int{id}})
+		case 1:
+			u.Send(l, RemoveTrack{ID: id})
+		}
+	}
+	l.menu.Open(p, u)
+	return true
+}
+
+// Layout implements [gunim.Node]: as tall as its rows, and the list's
+// view at least.
+func (l *trackList) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+	l.size = c.Constrain(geom.Sz(c.Max.W, max(float32(len(l.order))*rowH+24, c.Min.H)))
+	return l.size
+}
+
+// Paint implements [gunim.Node].
+func (l *trackList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	if len(l.order) == 0 {
+		lines := []string{"Drop your mixes here", "WAV, FLAC, MP3 or Ogg, or a folder of them", "or press Add tracks"}
+		y := float32(120)
+		for i, s := range lines {
+			size, alpha := float32(13), float32(0.5)
+			if i == 0 {
+				size, alpha = 17, 0.85
+			}
+			run := shaped(s, size, i == 0)
+			run.Paint(p, geom.Pt((box.W-run.Advance)/2, y), faded(ink, alpha))
+			y += size + 12
+		}
+		return
+	}
+	for id, lk := range l.rows {
+		if lk.gone {
+			l.paintRow(p, f, id, lk, box)
+		}
+	}
+	for i, id := range l.order {
+		if id != l.moving {
+			l.paintRow(p, f, id, l.rows[id], box)
+		}
+		_ = i
+	}
+	if l.moving != 0 {
+		l.paintRow(p, f, l.moving, l.rows[l.moving], box)
+	}
+}
+
+// paintRow draws track id's row.
+func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLook, box geom.Size) {
+	s := l.r.state
+	t, ok := Track{}, false
+	number := 0
+	for i, tr := range s.Tracks {
+		if tr.ID == id {
+			t, ok, number = tr, true, i+1
+		}
+	}
+	if !ok {
+		return
+	}
+	in := min(max(lk.in.Value(), 0), 1)
+	if in < 0.01 {
+		return
+	}
+	y := lk.y.Value()
+	row := geom.Rc(10, y+4, box.W-20, rowH-8)
+	mid := row.Min.Add(geom.Pt(row.Size().W/2, row.Size().H/2))
+	defer p.Push(paint.Scale(0.92+0.08*in, mid))()
+	picked := lk.picked.Value()
+	if id == l.moving {
+		p.ShadowRRect(row, 14, paint.Solid(raised), paint.Shadow{Blur: 18, Offset: geom.Pt(0, 6), Color: faded(night, 0.7)})
+	}
+	p.RRect(row, 14, paint.Solid(faded(mix(raised, teal, 0.14*picked), (0.55+0.45*picked)*in)))
+	if lit := lk.lit.Value(); lit > 0.01 {
+		p.RRect(row, 14, paint.Solid(faded(ink, 0.05*lit*in)))
+	}
+	if picked > 0.01 {
+		p.RRectStroke(row, 14, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1.5, Color: faded(teal, 0.8*picked*in)})
+	}
+	// The number, in a ring that spins while the track is read.
+	ring := geom.Rc(row.Min.X+12, mid.Y-15, 30, 30)
+	numColor := mix(faded(ink, 0.7), teal, picked)
+	if !t.Scanned || t.Measuring {
+		l.paintSpin(p, ring, faded(teal, 0.8*in))
+	} else {
+		p.RRectStroke(ring, 15, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1.5, Color: faded(numColor, 0.5*in)})
+	}
+	if t.ID == s.Current && s.Playing {
+		// The track playing shows bars moving with it in its ring.
+		paintBars(p, l.r.meters, geom.Pt(ring.Min.X+17, ring.Min.Y+15), faded(teal, in))
+	} else {
+		run := shaped(strconv.Itoa(number), 13, true)
+		run.Paint(p, geom.Pt(ring.Min.X+(30-run.Advance)/2, ring.Min.Y+7), faded(numColor, in))
+	}
+	textX := ring.Max.X + 12
+	paintFit(p, t.Title, 14, true, geom.Pt(textX, row.Min.Y+10), row.Max.X-textX-92, faded(ink, 0.92*in))
+	// The waveform, small, under the title.
+	if lk.thumb != nil {
+		w := row.Max.X - textX - 96
+		cw := w / float32(len(lk.thumb))
+		base := row.Min.Y + 48
+		for i, v := range lk.thumb {
+			h := max(1, 16*min(float32(math.Sqrt(float64(v)))*1.4, 1))
+			p.RRect(geom.Rc(textX+float32(i)*cw, base-h/2, max(cw-1, 1), h), 0.5,
+				paint.Solid(faded(mix(ink, teal, picked), 0.35*in)))
+		}
+	}
+	// The readings, right: loudness against the target, and true peak.
+	right := row.Max.X - 12
+	switch {
+	case t.Progress > 0:
+		l.paintProgress(p, geom.Rc(right-76, mid.Y-4, 76, 8), lk.progress.Value(), in)
+	case t.Measured && t.Measure.Loud:
+		off := t.Measure.LUFS - s.Target
+		c := loudnessColor(off)
+		lufs := shapedFace(fmt.Sprintf("%.1f", lk.lufs.Value()), 15, true, true)
+		lufs.Paint(p, geom.Pt(right-lufs.Advance, row.Min.Y+9), faded(c, in))
+		tp := lk.peak.Value()
+		sub := fmt.Sprintf("%+.1f · TP %.1f", off, tp)
+		tpColor := faded(ink, 0.5*in)
+		if tp > -1 {
+			tpColor = faded(coral, in)
+		}
+		subRun := shapedFace(sub, 10, false, true)
+		subRun.Paint(p, geom.Pt(right-subRun.Advance, row.Min.Y+32), tpColor)
+		if t.Exported != "" {
+			widget.PaintIcon(p, f.Theme, icon.Check, geom.Rc(right-14, row.Min.Y+46, 14, 14), faded(teal, in))
+		}
+	case t.Measured:
+		run := shaped("silent", 12, false)
+		run.Paint(p, geom.Pt(right-run.Advance, row.Min.Y+12), faded(ink, 0.4*in))
+	}
+}
+
+// paintSpin draws an arc turning round ring, for a track being read.
+func (l *trackList) paintSpin(p *paint.Painter, ring geom.Rect, c color.NRGBA) {
+	mid := ring.Min.Add(geom.Pt(ring.Size().W/2, ring.Size().H/2))
+	r := ring.Size().W / 2
+	for i := range 10 {
+		a := l.spin + float64(i)*0.22
+		pt := geom.Pt(mid.X+r*float32(math.Cos(a)), mid.Y+r*float32(math.Sin(a)))
+		d := 1.2 + 0.18*float32(i)
+		p.RRect(geom.Rc(pt.X-d, pt.Y-d, 2*d, 2*d), d, paint.Solid(faded(c, float32(i+1)/10)))
+	}
+}
+
+// paintProgress draws an export's bar, filled to v.
+func (l *trackList) paintProgress(p *paint.Painter, bar geom.Rect, v, alpha float32) {
+	p.RRect(bar, 4, paint.Solid(faded(ink, 0.1*alpha)))
+	fill := bar
+	fill.Max.X = bar.Min.X + bar.Size().W*min(max(v, 0), 1)
+	p.ShadowRRect(fill, 4, paint.Solid(faded(teal, alpha)), paint.Shadow{Blur: 8, Color: faded(teal, 0.5*alpha)})
+}

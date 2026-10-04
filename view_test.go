@@ -1,0 +1,267 @@
+package main
+
+import (
+	"context"
+	"math"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/input"
+)
+
+// album returns an album of one track, ten seconds of a file read, with
+// its sound from the second second.
+func album() Album {
+	w := &Wave{Frames: 10 * rate, Rate: rate}
+	for ch := range 2 {
+		w.Peak[ch] = make([]float32, waveBuckets)
+		w.RMS[ch] = make([]float32, waveBuckets)
+		for b := waveBuckets / 5; b < waveBuckets; b++ {
+			w.Peak[ch][b], w.RMS[ch][b] = 0.5, 0.3
+		}
+	}
+	t := Track{ID: 1, Title: "One", Scanned: true, Format: audio.Format{SampleRate: rate}, Frames: 10 * rate,
+		Wave: w, SoundStart: 2 * time.Second, SoundEnd: 10 * time.Second}
+	return Album{Tracks: []Track{t}, Gap: time.Second, Target: -14, Bits: 16, Dither: true, Current: 1, Volume: 0.8}
+}
+
+// stage mounts the window's view of a, offscreen, and returns the
+// window, its root, and a way to step frames.
+func stage(t *testing.T, a Album) (*gunim.Window, *root, func(int)) {
+	t.Helper()
+	d := newDeck(audio.NewMixer())
+	var r *root
+	w := gunim.NewOffscreen(geom.Sz(1440, 900), nil)
+	gunim.RegisterView(w, "album",
+		func(Album) *root { r = newRoot(d); return r },
+		func(r *root, s Album, u *gunim.UI) { r.show(s, u) })
+	if err := w.Client().Mount(gunim.Root, "album", "album", a, albumTopic); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Client().Focus("album")
+	run := func(n int) {
+		for range n {
+			w.Frame(time.Second / 60)
+		}
+	}
+	run(30)
+	return w, r, run
+}
+
+// boundsOf returns where n is in the window.
+func boundsOf(t *testing.T, w *gunim.Window, run func(int), n gunim.Node) geom.Rect {
+	t.Helper()
+	var b geom.Rect
+	gunim.RegisterPatch(w, "album", func(_ *root, _ struct{}, u *gunim.UI) { b, _ = u.Bounds(n) })
+	if err := w.Client().Patch("album", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	return b
+}
+
+// edits returns the edits the window sent, the last last.
+func edits(w *gunim.Window) (out []SetEdit, rest []gunim.Intent) {
+	for len(w.Client().Intents()) > 0 {
+		in := (<-w.Client().Intents()).Intent
+		if e, ok := in.(SetEdit); ok {
+			out = append(out, e)
+		} else {
+			rest = append(rest, in)
+		}
+	}
+	return out, rest
+}
+
+func TestTheCutsStartDragsWithThePointerEveryFrame(t *testing.T) {
+	w, r, run := stage(t, album())
+	ed := r.editor
+	b := boundsOf(t, w, run, ed)
+	from := b.Min.Add(geom.Pt(ed.xOf(0), b.Size().H/2))
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	run(1)
+	for i := 1; i <= 12; i++ {
+		to := b.Min.Add(geom.Pt(ed.xOf(float64(i)*0.15), b.Size().H/2))
+		w.Input(input.PointerMove{Pos: to})
+		run(1)
+		got := ed.edit.Start.Seconds()
+		if math.Abs(got-float64(i)*0.15) > 0.02 {
+			t.Fatalf("step %d: the cut starts at %.3f s, want %.3f, under the pointer", i, got, float64(i)*0.15)
+		}
+	}
+	w.Input(input.PointerUp{Pos: from, Button: input.ButtonPrimary})
+	run(1)
+	sent, _ := edits(w)
+	if len(sent) == 0 || math.Abs(sent[len(sent)-1].Edit.Start.Seconds()-1.8) > 0.02 {
+		t.Fatalf("the edits sent end at %v, want the start at 1.8 s", sent)
+	}
+	for i := 1; i < len(sent); i++ {
+		if sent[i].Seq <= sent[i-1].Seq {
+			t.Fatal("the edits' sequence numbers do not rise")
+		}
+	}
+}
+
+func TestAFadeHandleSetsTheFadesLength(t *testing.T) {
+	a := album()
+	a.Tracks[0].Edit = Edit{Start: 2 * time.Second}
+	w, r, run := stage(t, a)
+	ed := r.editor
+	b := boundsOf(t, w, run, ed)
+	in, _ := ed.handles()
+	from := b.Min.Add(in)
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	to := b.Min.Add(geom.Pt(ed.xOf(2.5), in.Y))
+	w.Input(input.PointerMove{Pos: to})
+	w.Input(input.PointerUp{Pos: to, Button: input.ButtonPrimary})
+	run(1)
+	if l := ed.edit.FadeIn.Length.Seconds(); math.Abs(l-0.5) > 0.02 {
+		t.Fatalf("the fade in is %.3f s, want 0.5", l)
+	}
+	// Half way through a linear fade, the sound is at half.
+	if g := ed.envelope(2.25); math.Abs(g-0.5) > 0.02 {
+		t.Fatalf("half way through the fade the gain is %.3f", g)
+	}
+}
+
+func TestACurveTurnsIntoTheNextAndTheFadeMorphsWithIt(t *testing.T) {
+	a := album()
+	a.Tracks[0].Edit = Edit{Start: 2 * time.Second, FadeIn: Fade{Length: time.Second}}
+	w, r, run := stage(t, a)
+	b := boundsOf(t, w, run, r.tools.inCurve)
+	w.Input(input.PointerMove{Pos: b.Min.Add(geom.Pt(10, 10))})
+	w.Input(input.PointerDown{Pos: b.Min.Add(geom.Pt(10, 10)), Button: input.ButtonPrimary, Clicks: 1})
+	run(1)
+	ed := r.editor
+	if ed.edit.FadeIn.Curve != Natural {
+		t.Fatalf("a click made the curve %v, want Natural, the next", curveNames[ed.edit.FadeIn.Curve])
+	}
+	// The fade's gain at its middle walks from Linear's to Natural's.
+	last := ed.envelope(2.5)
+	for f := range 30 {
+		g := ed.envelope(2.5)
+		if g > last+1e-6 {
+			t.Fatalf("frame %d: the fade's middle rose from %.4f to %.4f, turning toward Natural's lower", f, last, g)
+		}
+		last = g
+		run(1)
+	}
+	if want := Natural.at(0.5); math.Abs(last-want) > 0.01 {
+		t.Fatalf("after half a second the middle is %.3f, want Natural's %.3f", last, want)
+	}
+}
+
+func TestNumberKeysPickTracks(t *testing.T) {
+	a := album()
+	two := a.Tracks[0]
+	two.ID, two.Title = 2, "Two"
+	a.Tracks = append(a.Tracks, two)
+	w, _, run := stage(t, a)
+	w.Input(input.KeyPress{Key: input.Key2})
+	run(1)
+	_, rest := edits(w)
+	if len(rest) != 1 || rest[0] != (Pick{ID: 2}) {
+		t.Fatalf("2 sent %v, want the second track picked", rest)
+	}
+}
+
+// writeAlbum writes three tracks of different loudness.
+func writeAlbum(t *testing.T) []string {
+	t.Helper()
+	paths := make([]string, 0, 3)
+	for i, amp := range []float64{0.1, 0.3, 0.05} {
+		p := writeTrack(t, time.Duration(i)*300*time.Millisecond, 3*time.Second, 0, amp)
+		renamed := filepath.Join(filepath.Dir(p), []string{"a.wav", "b.wav", "c.wav"}[i])
+		if err := os.Rename(p, renamed); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, renamed)
+	}
+	return paths
+}
+
+// settle runs the application's loop work until cond holds.
+func settle(t *testing.T, a *app, cond func() bool) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for !cond() {
+		select {
+		case s := <-a.scans:
+			a.scanned(s)
+		case m := <-a.measures:
+			if tr := a.track(m.id); tr != nil && m.seq == tr.Seq {
+				tr.Measuring, tr.Measure, tr.Measured = false, m.m, m.err == nil
+			}
+		case p := <-a.progress:
+			a.exportProgress(p)
+		case <-time.After(20 * time.Millisecond):
+			a.startMeasures()
+		case <-deadline:
+			t.Fatal("the application never settled")
+		}
+	}
+}
+
+func TestPickingAnotherTrackWhilePlayingKeepsTheMoment(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	mix := audio.NewMixer()
+	a := newApp(ctx, newDeck(mix), "")
+	for _, p := range writeAlbum(t) {
+		a.add(p, "", Edit{})
+	}
+	a.handle(TogglePlay{})
+	// Two seconds in.
+	mix.Mix(make([]float32, 2*2*audio.SampleRate))
+	before, _, _ := a.d.position()
+	a.handle(Pick{ID: a.Tracks[1].ID})
+	after, _, id := a.d.position()
+	if id != a.Tracks[1].ID || (after-before).Abs() > 20*time.Millisecond {
+		t.Fatalf("picked at %v, the second track plays at %v (track %d), want the same moment", before, after, id)
+	}
+}
+
+func TestMatchingLevelsBringsEachTrackToTheTarget(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	for _, p := range writeAlbum(t) {
+		a.add(p, "", Edit{})
+	}
+	settle(t, a, func() bool { return a.Tracks[2].Measured && a.Tracks[0].Measured })
+	a.handle(SetMatch{On: true})
+	want := math.Pow(10, float64(a.Target-a.Tracks[0].Measure.LUFS)/20)
+	if math.Abs(float64(a.d.match)-want) > 1e-3 {
+		t.Fatalf("matched by %.3f, want %.3f: the target over the track's loudness", a.d.match, want)
+	}
+}
+
+func TestAnAlbumExportsEachTrackAtItsOwnLength(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	paths := writeAlbum(t)
+	for _, p := range paths {
+		a.add(p, "", Edit{})
+	}
+	a.Tracks[1].Edit = Edit{Start: 300 * time.Millisecond, End: 2 * time.Second}
+	a.ExportDir = t.TempDir()
+	a.handle(Export{})
+	settle(t, a, func() bool { return !a.Exporting })
+	want := []time.Duration{4 * time.Second, 2700 * time.Millisecond, 3600*time.Millisecond + time.Second}
+	for i, tr := range a.Tracks {
+		if tr.Exported == "" || filepath.Base(tr.Exported) != exportName(i+1, tr.Title) {
+			t.Fatalf("track %d exported to %q", i+1, tr.Exported)
+		}
+		if d := tr.Out.Length - want[i]; d.Abs() > time.Millisecond {
+			t.Fatalf("track %d exported %v long, want %v: a second of silence and its own cut", i+1, tr.Out.Length, want[i])
+		}
+	}
+}
