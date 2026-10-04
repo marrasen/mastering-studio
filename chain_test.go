@@ -523,3 +523,59 @@ func TestAnAlbumGoneIsLeftOutOfTheRecent(t *testing.T) {
 		t.Fatalf("opening an album gone left recent %v, note %q, %d tracks", a.RecentAlbums, a.Note, len(a.Tracks))
 	}
 }
+
+func TestAnAlbumFindsItsTracksOutsideItsFolderAsTheyMoveTogether(t *testing.T) {
+	a := measuredApp(t)
+	// A cloud folder: the album in Albums, the mixes beside it in Mixes.
+	cloud := t.TempDir()
+	for _, d := range []string{"Albums", "Mixes"} {
+		if err := os.Mkdir(filepath.Join(cloud, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range a.Tracks {
+		to := filepath.Join(cloud, "Mixes", filepath.Base(a.Tracks[i].File))
+		if err := os.Rename(a.Tracks[i].File, to); err != nil {
+			t.Fatal(err)
+		}
+		a.Tracks[i].File = to
+	}
+	a.Release = Release{Artist: "The Oscillators", Title: "Night Drive", Year: "2026"}
+	album := filepath.Join(cloud, "Albums", "Night"+albumExt)
+	a.saveAs(album)
+	b, _ := os.ReadFile(album)
+	if !strings.Contains(string(b), `"File": "../Mixes/a.wav"`) {
+		t.Fatalf("the album keeps its tracks as %s", b)
+	}
+	// The cloud folder, found at another path on another computer.
+	elsewhere := filepath.Join(t.TempDir(), "Cloud")
+	if err := os.Rename(cloud, elsewhere); err != nil {
+		t.Fatal(err)
+	}
+	c := newApp(a.ctx, newDeck(audio.NewMixer()), filepath.Join(elsewhere, "Albums", "Night"+albumExt))
+	c.load()
+	if c.Tracks[0].File != filepath.Join(elsewhere, "Mixes", "a.wav") || c.Release != a.Release {
+		t.Fatalf("elsewhere, the first track is %q and the release %+v", c.Tracks[0].File, c.Release)
+	}
+	// The album alone, copied away from its mixes, finds them where they
+	// were when it was saved.
+	if err := os.Rename(elsewhere, cloud); err != nil {
+		t.Fatal(err)
+	}
+	alone := filepath.Join(t.TempDir(), "Night"+albumExt)
+	if err := os.WriteFile(alone, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := newApp(a.ctx, newDeck(audio.NewMixer()), alone)
+	d.load()
+	if d.Tracks[0].File != filepath.Join(cloud, "Mixes", "a.wav") {
+		t.Fatalf("copied alone, the album's first track is %q", d.Tracks[0].File)
+	}
+}
+
+func TestTheReleasesDialogSaysWhatWasWritten(t *testing.T) {
+	r := Release{Artist: "The Oscillators", Title: "Night Drive", Year: "2026", Genre: "Synthwave"}
+	if got := newReleaseDialog(r).OnAccept(); got != (SetRelease{Release: r}) {
+		t.Fatalf("the dialog, saved as it opened, says %v", got)
+	}
+}

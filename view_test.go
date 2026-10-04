@@ -616,7 +616,7 @@ func TestTheAlbumsNameOpensTheMenuOfAlbums(t *testing.T) {
 	w.Input(input.KeyPress{Key: input.KeyDown})
 	w.Input(input.KeyPress{Key: input.KeyEnter})
 	run(5)
-	if _, rest := edits(w); len(rest) != 1 || rest[0] != (NewAlbum{}) {
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (EditRelease{}) {
 		t.Fatalf("the menu's first item sent %v", rest)
 	}
 }

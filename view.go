@@ -19,6 +19,7 @@ func registerViews(w *gunim.Window, d *deck) {
 	gunim.RegisterView(w, "album",
 		func(Album) *root { return newRoot(d) },
 		func(r *root, s Album, u *gunim.UI) { r.show(s, u) })
+	gunim.RegisterView(w, "release", newReleaseDialog, nil)
 }
 
 // root is the whole window: the header along the top; the tracks down
@@ -270,7 +271,10 @@ func newHeader(r *root) *header {
 }
 
 func (h *header) show(s Album) {
-	h.name = s.AlbumName
+	h.name = s.Release.Title
+	if h.name == "" {
+		h.name = s.AlbumName
+	}
 	if h.name == "" {
 		h.name = "Untitled album"
 	}
@@ -298,6 +302,9 @@ func (h *header) show(s Album) {
 		total += t.Measure.Length
 	}
 	h.sum = fmt.Sprintf("%d tracks · %s", len(s.Tracks), short(total))
+	if s.Release.Artist != "" {
+		h.sum = s.Release.Artist + " · " + h.sum
+	}
 	h.album = "measuring…"
 	if l := s.Loudness; l.Loud {
 		h.album = fmt.Sprintf("%.1f LUFS", l.LUFS)
@@ -454,33 +461,35 @@ func (h *header) openMenu(u *gunim.UI) {
 			recent = append(recent, p)
 		}
 	}
-	m.Items = []string{"New album…", "Open album…", "Save album as…"}
-	m.Icons = []*icon.Icon{icon.FilePlus, icon.FolderOpen, icon.Save}
+	m.Items = []string{"Release…", "New album…", "Open album…", "Save album as…"}
+	m.Icons = []*icon.Icon{icon.Disc3, icon.FilePlus, icon.FolderOpen, icon.Save}
 	m.Hints, m.Checked, m.Disabled, m.Breaks, m.Captions = nil, nil, nil, nil, nil
 	if len(recent) > 0 {
 		m.Items = append(m.Items, "Recent")
 		m.Icons = append(m.Icons, nil)
-		m.Captions = []int{3}
-		m.Breaks = []int{3}
+		m.Captions = []int{4}
+		m.Breaks = []int{1, 4}
 		for _, p := range recent {
 			m.Items = append(m.Items, albumName(p))
 			m.Icons = append(m.Icons, icon.Disc3)
 		}
 		m.Hints = make([]string, len(m.Items))
 		for i, p := range recent {
-			m.Hints[4+i] = lastDirs(filepath.Dir(p))
+			m.Hints[5+i] = lastDirs(filepath.Dir(p))
 		}
 	}
 	m.Picked = func(i int, u *gunim.UI) {
 		switch {
 		case i == 0:
-			u.Send(h, NewAlbum{})
+			u.Send(h, EditRelease{})
 		case i == 1:
-			u.Send(h, OpenAlbum{})
+			u.Send(h, NewAlbum{})
 		case i == 2:
+			u.Send(h, OpenAlbum{})
+		case i == 3:
 			u.Send(h, SaveAlbumAs{})
-		case i >= 4 && i-4 < len(recent):
-			u.Send(h, OpenAlbumPath{Path: recent[i-4]})
+		case i >= 5 && i-5 < len(recent):
+			u.Send(h, OpenAlbumPath{Path: recent[i-5]})
 		}
 	}
 	m.Open(geom.Pt(16, headerH-6), u)

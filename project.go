@@ -100,25 +100,40 @@ func withExt(path string) string {
 	return path
 }
 
-// relative is the track file path as an album at album keeps it: from
-// the album's folder, where it is within it, so the folder moves whole.
+// relative is the path as an album at album keeps it: from the album's
+// folder, up out of it where need be, as "../Mixes/a.wav", so the album
+// opens wherever its folders are found together, as a cloud folder
+// mounted at another path on another computer. A path the album's
+// cannot reach, as on another drive, stays whole.
 func relative(album, path string) string {
-	if album == "" || album == untitled() {
+	if album == "" || album == untitled() || path == "" {
 		return path
 	}
 	rel, err := filepath.Rel(filepath.Dir(album), path)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil || filepath.IsAbs(rel) {
 		return path
 	}
 	return filepath.ToSlash(rel)
 }
 
-// absolute is the track file path an album at album keeps, as a path.
+// absolute is the path an album at album keeps, as a path.
 func absolute(album, path string) string {
-	if filepath.IsAbs(path) || album == "" {
+	if path == "" || filepath.IsAbs(path) || album == "" {
 		return path
 	}
 	return filepath.Join(filepath.Dir(album), filepath.FromSlash(path))
+}
+
+// found is the path an album at album keeps as rel, or, as it was
+// whole, abs: the first that is there, or rel's.
+func found(album, rel, abs string) string {
+	p := absolute(album, rel)
+	if _, err := os.Stat(p); err != nil && abs != "" {
+		if _, err := os.Stat(abs); err == nil {
+			return abs
+		}
+	}
+	return p
 }
 
 // switchTo leaves the album open, kept, for the one at path: opened from

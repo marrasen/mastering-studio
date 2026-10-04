@@ -22,6 +22,9 @@ import (
 type (
 	// Album is what the window shows.
 	Album struct {
+		// Release is what the album is released as, as its exports are
+		// tagged.
+		Release
 		// Tracks are the album's tracks, in order.
 		Tracks []Track
 		// Gap is the silence before every track.
@@ -211,12 +214,16 @@ const albumTopic = "album"
 
 // project is the album as kept between runs.
 type project struct {
+	Release
 	Tracks    []keptTrack
 	Gap       time.Duration
 	Target    float32
 	Bits      int
 	Dither    bool
 	ExportDir string
+	// ExportAt is the export folder whole, as it was last saved, where
+	// ExportDir is from the album's folder.
+	ExportAt  string `json:",omitempty"`
 	Volume    float32
 	Match     bool
 	Current   int
@@ -228,6 +235,10 @@ type keptTrack struct {
 	Title, File string
 	Edit        Edit
 	Chain       []keptSlot `json:",omitempty"`
+	// At is File whole, as it was last saved, where File is from the
+	// album's folder: the album opens on the computer it was saved on
+	// even where the folders do not move together.
+	At string `json:",omitempty"`
 	// Measure is the track as last measured, of its file as it was then,
 	// and Stale says it changed since.
 	Measure *keptMeasure `json:",omitempty"`
@@ -300,6 +311,10 @@ type app struct {
 	settingsFile string
 	saveDialog   func(driver.SaveOptions) (string, error)
 	albums       chan albumChoice
+	// c is the window's client, and releasing says the release's
+	// dialog is open.
+	c         *gunim.Client
+	releasing bool
 }
 
 type scanned struct {
@@ -349,13 +364,15 @@ func (a *app) load() {
 	if json.Unmarshal(b, &p) != nil {
 		return
 	}
-	a.Gap, a.Target, a.Bits, a.Dither, a.ExportDir = p.Gap, p.Target, p.Bits, p.Dither, p.ExportDir
+	a.Gap, a.Target, a.Bits, a.Dither = p.Gap, p.Target, p.Bits, p.Dither
+	a.ExportDir = found(a.file, p.ExportDir, p.ExportAt)
+	a.Release = p.Release
 	if p.Volume > 0 {
 		a.Volume = p.Volume
 	}
 	a.Match, a.AlbumPlay, a.Follow = p.Match, p.AlbumPlay, p.Follow
 	for i, k := range p.Tracks {
-		k.File = absolute(a.file, k.File)
+		k.File = found(a.file, k.File, k.At)
 		id := a.add(k.File, k.Title, k.Edit)
 		if i == p.Current {
 			a.Current = id
@@ -384,11 +401,12 @@ func (a *app) save() {
 	}
 	a.dirty = false
 	a.readStates()
-	p := project{Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither, ExportDir: a.ExportDir,
+	p := project{Release: a.Release, Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither,
+		ExportDir: relative(a.file, a.ExportDir), ExportAt: a.ExportDir,
 		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
 		Follow: a.Follow}
 	for _, t := range a.Tracks {
-		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), Edit: t.Edit, Stale: t.Stale}
+		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Edit: t.Edit, Stale: t.Stale}
 		if t.Measured {
 			k.Measure = keep(t.File, t.Measure)
 		}
@@ -575,6 +593,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.pluginDirs = o.plugins
 	a.choose = func(o driver.ChooseOptions) ([]string, error) { return c.ChooseFiles(ctx, o) }
 	a.reveal = c.Reveal
+	a.c = &c
 	a.saveDialog = func(o driver.SaveOptions) (string, error) { return c.SaveFile(ctx, o) }
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
@@ -873,6 +892,14 @@ func (a *app) handle(in gunim.Intent) {
 		a.calcLoudness()
 	case MatchTarget:
 		a.match(in.ID)
+	case EditRelease:
+		a.editRelease(true)
+	case ReleaseClosed:
+		a.editRelease(false)
+	case SetRelease:
+		a.Release = in.Release
+		a.dirty = true
+		a.editRelease(false)
 	case NewAlbum, OpenAlbum, SaveAlbumAs:
 		a.chooseAlbum(in)
 	case OpenAlbumPath:
