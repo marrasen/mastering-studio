@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -428,5 +429,97 @@ func TestThePluginsAddedLastComeFirst(t *testing.T) {
 	a.used(PluginChoice{Path: "p", Class: "4"})
 	if len(a.Recent) != recentPlugins || a.Recent[0].Class != "4" || a.Recent[1].Class != "9" {
 		t.Fatalf("recent are %v", a.Recent)
+	}
+}
+
+func TestToTargetFindsTheGainThatBringsATrackThere(t *testing.T) {
+	path := writeTrack(t, 0, 6*time.Second, 0, 0.3)
+	// Plain, the gain is found at once; through a limiter, in a few
+	// measures.
+	g, m, err := matchGain(context.Background(), path, 0, Edit{}, nil, nil, -20)
+	if err != nil || math.Abs(float64(m.LUFS+20)) > matchWithin {
+		t.Fatalf("plain: gain %.2f measures %.2f LUFS (%v), want -20", g, m.LUFS, err)
+	}
+	// Through a compressor, the loudness follows the gain less than one
+	// for one.
+	s := lspSlot(t, 1, "Compressor Stereo")
+	plain, _, _ := matchGain(context.Background(), path, 0, Edit{}, nil, nil, -12)
+	g, m, err = matchGain(context.Background(), path, 0, Edit{}, []Slot{s}, nil, -12)
+	if err != nil || math.Abs(float64(m.LUFS+12)) > matchWithin {
+		t.Fatalf("compressed: gain %.2f measures %.2f LUFS (%v), want -12", g, m.LUFS, err)
+	}
+	if g-plain < 0.2 {
+		t.Fatalf("compressed, the gain is %.2f, plain %.2f: the compressor took no part", g, plain)
+	}
+}
+
+func TestAMatchAppliesItsGainAndMeasure(t *testing.T) {
+	a := measuredApp(t)
+	tr := &a.Tracks[1]
+	a.Target = -20
+	a.handle(MatchTarget{ID: tr.ID})
+	var r matched
+	select {
+	case r = <-a.matches:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no match")
+	}
+	a.matchedGain(r)
+	if tr.Matching || tr.Stale || math.Abs(float64(tr.Measure.LUFS+20)) > matchWithin || tr.Edit.Gain != r.gain {
+		t.Fatalf("matched, the track has gain %.2f, %.2f LUFS, stale %v", tr.Edit.Gain, tr.Measure.LUFS, tr.Stale)
+	}
+	// A track changed while it is matched keeps its change.
+	a.handle(MatchTarget{ID: tr.ID})
+	a.handle(SetEdit{ID: tr.ID, Edit: Edit{Gain: 3}, Seq: 99})
+	r = <-a.matches
+	a.matchedGain(r)
+	if tr.Edit.Gain != 3 {
+		t.Fatalf("a match overwrote a change made meanwhile: gain %.2f", tr.Edit.Gain)
+	}
+}
+
+func TestAnAlbumMovesWithItsFolderAndSwitchesBack(t *testing.T) {
+	a := measuredApp(t)
+	// The album saved beside its tracks keeps them by their names.
+	dir := filepath.Dir(a.Tracks[0].File)
+	album := filepath.Join(dir, "Night"+albumExt)
+	a.saveAs(album)
+	b, err := os.ReadFile(album)
+	if err != nil || !strings.Contains(string(b), `"File": "a.wav"`) {
+		t.Fatalf("the album keeps its tracks as %s", b)
+	}
+	if a.AlbumName != "Night" {
+		t.Fatalf("the album is called %q", a.AlbumName)
+	}
+	// Another album, made empty, then this one again.
+	a.switchTo(filepath.Join(t.TempDir(), "Other"+albumExt), true)
+	if len(a.Tracks) != 0 || a.AlbumName != "Other" || a.Loudness.Loud {
+		t.Fatalf("a new album opened with %d tracks, called %q", len(a.Tracks), a.AlbumName)
+	}
+	a.handle(OpenAlbumPath{Path: album})
+	if len(a.Tracks) != 3 || a.Tracks[0].File != filepath.Join(dir, "a.wav") || !a.Tracks[0].Measured || a.Tracks[0].Measuring {
+		t.Fatalf("back, the album has %d tracks, the first %+v", len(a.Tracks), a.Tracks)
+	}
+	// Moved whole, it finds its tracks where it is.
+	moved := filepath.Join(t.TempDir(), "moved")
+	if err := os.Rename(dir, moved); err != nil {
+		t.Fatal(err)
+	}
+	c := newApp(a.ctx, newDeck(audio.NewMixer()), filepath.Join(moved, "Night"+albumExt))
+	c.load()
+	// The track in its folder moved with it; one elsewhere is kept where
+	// it is.
+	if len(c.Tracks) != 3 || c.Tracks[0].File != filepath.Join(moved, "a.wav") || c.Tracks[1].File != a.Tracks[1].File {
+		t.Fatalf("moved, the album's tracks are in %q and %q", c.Tracks[0].File, c.Tracks[1].File)
+	}
+}
+
+func TestAnAlbumGoneIsLeftOutOfTheRecent(t *testing.T) {
+	a := measuredApp(t)
+	gone := filepath.Join(t.TempDir(), "gone"+albumExt)
+	a.RecentAlbums = []string{gone}
+	a.handle(OpenAlbumPath{Path: gone})
+	if len(a.RecentAlbums) != 0 || a.Note == "" || len(a.Tracks) != 3 {
+		t.Fatalf("opening an album gone left recent %v, note %q, %d tracks", a.RecentAlbums, a.Note, len(a.Tracks))
 	}
 }

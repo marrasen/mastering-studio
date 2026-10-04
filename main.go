@@ -42,7 +42,7 @@ import (
 )
 
 func main() {
-	state := flag.String("project", projectFile(), "the file the album is kept in; empty keeps nothing")
+	state := flag.String("project", "", "the album to open; by default the one open last, or the untitled one")
 	shot := flag.String("shot", "", "write the window to this PNG file after -after, and quit")
 	after := flag.Duration("after", 2*time.Second, "how long -shot waits")
 	play := flag.Bool("play", false, "start playing the track picked")
@@ -54,6 +54,18 @@ func main() {
 		log.Fatalf("mastering: -size %q: want a width and a height, as 1440x900", *size)
 	}
 	o := options{file: *state, paths: flag.Args(), play: *play, shot: *shot, after: *after, size: geom.Sz(w, h)}
+	if d := configDir(); d != "" {
+		o.settings = filepath.Join(d, "settings.json")
+	}
+	if o.file == "" {
+		// The album open last, where it still is.
+		o.file = untitled()
+		if s := readSettings(o.settings); len(s.Albums) > 0 {
+			if _, err := os.Stat(s.Albums[0]); err == nil {
+				o.file = s.Albums[0]
+			}
+		}
+	}
 	if *plugins != "" {
 		o.plugins = filepath.SplitList(*plugins)
 	}
@@ -75,6 +87,8 @@ type options struct {
 	size  geom.Size
 	// plugins are more folders of plugins.
 	plugins []string
+	// settings is the file of what is kept across albums.
+	settings string
 }
 
 func run(o options) error {

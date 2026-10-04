@@ -573,3 +573,24 @@ func TestCalcLUFSCountsTheTracksChangedAndMeasuresThem(t *testing.T) {
 		t.Fatalf("the button sent %v", rest)
 	}
 }
+
+func TestTheAlbumsNameOpensTheMenuOfAlbums(t *testing.T) {
+	a := album()
+	a.AlbumName = "Night"
+	w, r, run := stage(t, a)
+	b := boundsOf(t, w, run, r.header)
+	at := b.Min.Add(geom.Pt(80, 24))
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(10)
+	if !r.headerMenu.Focusable() {
+		t.Fatal("a press on the album's name opened no menu")
+	}
+	w.Input(input.KeyPress{Key: input.KeyDown})
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	run(5)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (NewAlbum{}) {
+		t.Fatalf("the menu's first item sent %v", rest)
+	}
+}

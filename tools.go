@@ -21,7 +21,9 @@ type editTools struct {
 	inCurve, outCurve *curveChip
 	start, end, gain  *valueChip
 	toSound, endSound *pill
-	scanned           bool
+	// toTarget sets the gain that brings the track to the target.
+	toTarget *pill
+	scanned  bool
 }
 
 func newEditTools(r *root) *editTools {
@@ -90,6 +92,11 @@ func newEditTools(r *root) *editTools {
 		e.End = min(duration(tr.Frames, tr.Format.SampleRate), tr.SoundEnd+50*time.Millisecond)
 		send(e, u)
 	})
+	t.toTarget = newPill("To target", func(u *gunim.UI) {
+		if tr, ok := r.track(); ok && tr.Scanned && !tr.Matching {
+			u.Send(r, MatchTarget{ID: tr.ID})
+		}
+	})
 	return t
 }
 
@@ -106,18 +113,23 @@ func (t *editTools) show(tr Track) {
 	t.inCurve.show(e.FadeIn.Curve)
 	t.outCurve.show(e.FadeOut.Curve)
 	t.scanned = tr.Scanned
+	t.toTarget.words = "To target"
+	if tr.Matching {
+		t.toTarget.words = "Matching…"
+	}
+	t.toTarget.setLit(tr.Matching)
 }
 
 // Children implements [gunim.Composite].
 func (t *editTools) Children() []gunim.Node {
-	return []gunim.Node{t.fadeIn, t.inCurve, t.start, t.toSound, t.end, t.endSound, t.fadeOut, t.outCurve, t.gain}
+	return []gunim.Node{t.fadeIn, t.inCurve, t.start, t.toSound, t.end, t.endSound, t.fadeOut, t.outCurve, t.gain, t.toTarget}
 }
 
 // Layout implements [gunim.Node]: in a row, as the track's time runs:
 // the fade in, the start, the end, the fade out, the gain.
 func (t *editTools) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	size := c.Max
-	widths := []float32{92, 44, 96, pillWidth("Trim to sound"), 96, pillWidth("End at sound"), 92, 44, 92}
+	widths := []float32{92, 44, 96, pillWidth("Trim to sound"), 96, pillWidth("End at sound"), 92, 44, 92, pillWidth("Matching…")}
 	var total float32
 	for _, w := range widths {
 		total += w + 8
@@ -128,7 +140,7 @@ func (t *editTools) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 		w *= scale
 		h := float32(44)
 		y := (size.H - h) / 2
-		if i == 3 || i == 5 {
+		if i == 3 || i == 5 || i == 9 {
 			h, y = 32, (size.H-32)/2
 		}
 		kids.At(i).Layout(gunim.Tight(geom.Sz(w, h)))

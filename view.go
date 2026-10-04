@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -29,10 +30,12 @@ type root struct {
 	d      *deck
 	state  Album
 	header *header
-	list   *trackList
-	scroll *widget.Scroll
-	drop   *widget.DropTarget
-	editor *editor
+	// headerMenu is the album's menu, around the header.
+	headerMenu *widget.ContextMenu
+	list       *trackList
+	scroll     *widget.Scroll
+	drop       *widget.DropTarget
+	editor     *editor
 	// edDrop takes a file dropped on the editor, as the track's new
 	// file.
 	edDrop *widget.DropTarget
@@ -50,6 +53,8 @@ type root struct {
 func newRoot(d *deck) *root {
 	r := &root{d: d}
 	r.header = newHeader(r)
+	r.headerMenu = widget.NewContextMenu(r.header)
+	r.header.menu = r.headerMenu
 	r.list = newTrackList(r)
 	r.list.menu = widget.NewContextMenu(r.list)
 	r.scroll = widget.NewScroll(r.list.menu)
@@ -105,7 +110,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 
 // Children implements [gunim.Composite].
 func (r *root) Children() []gunim.Node {
-	return []gunim.Node{r.header, r.drop, r.edDrop, r.tools, r.trans, r.strip, r.meters, r.chainMenu, r.head}
+	return []gunim.Node{r.headerMenu, r.drop, r.edDrop, r.tools, r.trans, r.strip, r.meters, r.chainMenu, r.head}
 }
 
 // Focusable implements [gunim.Focusable]: the window's keys come here.
@@ -209,7 +214,11 @@ func (r *root) step(by int, u *gunim.UI) {
 // settings: the silence before each track, the target, and how tracks
 // are exported, where, and the buttons to add tracks and export.
 type header struct {
+	anim.Group
 	r      *root
+	menu   *widget.ContextMenu
+	hover  *anim.Float
+	name   string
 	gap    *valueChip
 	target *valueChip
 	format *pill
@@ -230,7 +239,8 @@ type header struct {
 }
 
 func newHeader(r *root) *header {
-	h := &header{r: r}
+	h := &header{r: r, hover: anim.NewFloat(0)}
+	h.Add(h.hover)
 	h.gap = newValueChip("SILENCE BEFORE", func(v float64) string { return fmt.Sprintf("%.2f s", v) },
 		0.01, 0.1, 0, 10, 1, func(v float64, u *gunim.UI) { u.Send(r, SetGap{Gap: time.Duration(v * float64(time.Second))}) })
 	h.target = newValueChip("TARGET", func(v float64) string { return fmt.Sprintf("%.1f LUFS", v) },
@@ -260,6 +270,10 @@ func newHeader(r *root) *header {
 }
 
 func (h *header) show(s Album) {
+	h.name = s.AlbumName
+	if h.name == "" {
+		h.name = "Untitled album"
+	}
 	h.gap.value = s.Gap.Seconds()
 	h.target.value = float64(s.Target)
 	words := fmt.Sprintf("%d-bit", s.Bits)
@@ -373,8 +387,14 @@ func (h *header) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children)
 
 // Paint implements [gunim.Node].
 func (h *header) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	// The album's name, a menu of albums under it.
+	if hv := h.hover.Value(); hv > 0.01 {
+		p.RRect(h.titleRect(), 10, paint.Solid(faded(ink, 0.06*hv)))
+	}
 	widget.PaintIcon(p, f.Theme, icon.Disc3, geom.Rc(18, (box.H-26)/2, 26, 26), teal)
-	shaped("Mastering", 18, true).Paint(p, geom.Pt(54, 12), ink)
+	paintFit(p, h.name, 18, true, geom.Pt(54, 12), titleW-36, ink)
+	name := min(shaped(h.name, 18, true).Advance, titleW-36)
+	widget.PaintIcon(p, f.Theme, icon.ChevronDown, geom.Rc(54+name+4, 16, 14, 14), faded(ink, 0.4+0.4*h.hover.Value()))
 	shaped(h.sum, 12, false).Paint(p, geom.Pt(54, 36), faded(ink, 0.5))
 	if len(h.r.state.Tracks) > 0 {
 		// The album's loudness, by the target's chip, as a chip reads.
@@ -392,4 +412,76 @@ func (h *header) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	for k := range kids.All {
 		k.Paint(p)
 	}
+}
+
+// titleW is how wide the album's name and its menu may be.
+const titleW = 196
+
+// titleRect is where the album's name is, which opens its menu.
+func (h *header) titleRect() geom.Rect { return geom.Rc(8, 6, titleW+40, headerH-12) }
+
+// Handle implements [gunim.Handler]: a press on the album's name opens
+// the menu of albums.
+func (h *header) Handle(e input.Event, u *gunim.UI) bool {
+	switch e := e.(type) {
+	case input.PointerMove:
+		on := h.titleRect().Contains(e.Pos)
+		h.hover.Animate(map[bool]float32{false: 0, true: 1}[on], anim.Snappy)
+	case input.PointerLeave:
+		h.hover.Animate(0, anim.Gentle)
+	case input.PointerDown:
+		if e.Button != input.ButtonPrimary || !h.titleRect().Contains(e.Pos) {
+			return false
+		}
+		h.openMenu(u)
+	default:
+		return false
+	}
+	u.Invalidate()
+	return true
+}
+
+// Focusable implements [gunim.Focusable].
+func (h *header) Focusable() bool { return false }
+
+// openMenu opens the menu of albums: a new one, one opened, this one
+// saved elsewhere, and those opened last.
+func (h *header) openMenu(u *gunim.UI) {
+	m := h.menu
+	recent := []string{}
+	for _, p := range h.r.state.RecentAlbums {
+		if p != h.r.state.AlbumFile {
+			recent = append(recent, p)
+		}
+	}
+	m.Items = []string{"New album…", "Open album…", "Save album as…"}
+	m.Icons = []*icon.Icon{icon.FilePlus, icon.FolderOpen, icon.Save}
+	m.Hints, m.Checked, m.Disabled, m.Breaks, m.Captions = nil, nil, nil, nil, nil
+	if len(recent) > 0 {
+		m.Items = append(m.Items, "Recent")
+		m.Icons = append(m.Icons, nil)
+		m.Captions = []int{3}
+		m.Breaks = []int{3}
+		for _, p := range recent {
+			m.Items = append(m.Items, albumName(p))
+			m.Icons = append(m.Icons, icon.Disc3)
+		}
+		m.Hints = make([]string, len(m.Items))
+		for i, p := range recent {
+			m.Hints[4+i] = lastDirs(filepath.Dir(p))
+		}
+	}
+	m.Picked = func(i int, u *gunim.UI) {
+		switch {
+		case i == 0:
+			u.Send(h, NewAlbum{})
+		case i == 1:
+			u.Send(h, OpenAlbum{})
+		case i == 2:
+			u.Send(h, SaveAlbumAs{})
+		case i >= 4 && i-4 < len(recent):
+			u.Send(h, OpenAlbumPath{Path: recent[i-4]})
+		}
+	}
+	m.Open(geom.Pt(16, headerH-6), u)
 }

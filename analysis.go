@@ -215,21 +215,7 @@ func measure(ctx context.Context, path string, gap time.Duration, e Edit, chain 
 		return Measure{}, err
 	}
 	defer done()
-	lm := audio.NewLoudnessMeter(format.SampleRate)
-	var tp audio.TruePeakMeter
-	buf := make([]float32, 2*8192)
-	for {
-		if ctx.Err() != nil {
-			return Measure{}, ctx.Err()
-		}
-		n, err := r.Read(buf)
-		lm.Write(buf[:2*n])
-		tp.Write(buf[:2*n])
-		if err != nil || n == 0 {
-			break
-		}
-	}
-	return reading(lm, &tp, duration(r.Len(), format.SampleRate)), nil
+	return measureOf(ctx, r, format.SampleRate)
 }
 
 // dB is a level, 1 at full scale, in decibels.

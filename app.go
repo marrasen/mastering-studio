@@ -59,9 +59,15 @@ type (
 		// Plugins are the effects this computer has, once found, which
 		// Scanning says is under way; Recent are those added last, the
 		// latest first.
-		Recent   []PluginChoice
-		Plugins  []PluginChoice
-		Scanning bool
+		Recent  []PluginChoice
+		Plugins []PluginChoice
+		// AlbumFile is the file the album is kept in, AlbumName what it
+		// is called, and RecentAlbums the albums opened last, the latest
+		// first.
+		AlbumFile    string
+		AlbumName    string
+		RecentAlbums []string
+		Scanning     bool
 	}
 	// Track is one of the album's tracks.
 	Track struct {
@@ -90,6 +96,9 @@ type (
 		// Stale says the track changed since it was last measured, to be
 		// measured again with CalcLoudness.
 		Stale bool
+		// Matching says its gain is being found to bring it to the
+		// target.
+		Matching bool
 		// Progress is how far its export is, from 0 to 1, while it is
 		// exported, and Exported where it went once it is, with Out its
 		// reading as written.
@@ -162,6 +171,16 @@ type (
 	// CalcLoudness measures every track changed since it was last
 	// measured.
 	CalcLoudness struct{}
+	// MatchTarget sets a track's gain so it measures at the target.
+	MatchTarget struct{ ID int }
+	// NewAlbum asks where to make a new album, and opens it, empty.
+	NewAlbum struct{}
+	// OpenAlbum asks for an album to open.
+	OpenAlbum struct{}
+	// OpenAlbumPath opens the album at Path.
+	OpenAlbumPath struct{ Path string }
+	// SaveAlbumAs asks where to keep the album from now on.
+	SaveAlbumAs struct{}
 
 	// AddPlugin adds an effect to the end of a track's chain.
 	AddPlugin struct {
@@ -203,7 +222,6 @@ type project struct {
 	Current   int
 	AlbumPlay bool
 	Follow    Follow
-	Recent    []PluginChoice `json:",omitempty"`
 }
 
 type keptTrack struct {
@@ -222,15 +240,6 @@ type keptSlot struct {
 	Name, Vendor string
 	Bypass       bool
 	State        []byte
-}
-
-// projectFile returns where the album is kept, in the user's settings.
-func projectFile() string {
-	d, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(d, "gunim-mastering", "album.json")
 }
 
 // app is the application half.
@@ -284,6 +293,13 @@ type app struct {
 	version map[int]int
 	// measuringVersion is the version of each track being measured.
 	measuringVersion map[int]int
+	// matches carries the gains found to bring tracks to the target.
+	matches chan matched
+	// settingsFile keeps what the program keeps across albums, and
+	// saveDialog asks where to save; albums carries albums chosen.
+	settingsFile string
+	saveDialog   func(driver.SaveOptions) (string, error)
+	albums       chan albumChoice
 }
 
 type scanned struct {
@@ -317,7 +333,8 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 		measurer: map[int]context.CancelFunc{}, settle: map[int]time.Time{},
 		chosen: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
 		racks: map[int]*rack{}, version: map[int]int{}, measuringVersion: map[int]int{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1),
-		replacing: make(chan ReplaceFile, 1)}
+		replacing: make(chan ReplaceFile, 1), matches: make(chan matched, 4),
+		albums: make(chan albumChoice, 1)}
 	a.Gap, a.Target, a.Bits, a.Dither, a.Volume = time.Second, -14, 16, true, 0.8
 	return a
 }
@@ -336,8 +353,9 @@ func (a *app) load() {
 	if p.Volume > 0 {
 		a.Volume = p.Volume
 	}
-	a.Match, a.AlbumPlay, a.Follow, a.Recent = p.Match, p.AlbumPlay, p.Follow, p.Recent
+	a.Match, a.AlbumPlay, a.Follow = p.Match, p.AlbumPlay, p.Follow
 	for i, k := range p.Tracks {
+		k.File = absolute(a.file, k.File)
 		id := a.add(k.File, k.Title, k.Edit)
 		if i == p.Current {
 			a.Current = id
@@ -368,9 +386,9 @@ func (a *app) save() {
 	a.readStates()
 	p := project{Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither, ExportDir: a.ExportDir,
 		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
-		Follow: a.Follow, Recent: a.Recent}
+		Follow: a.Follow}
 	for _, t := range a.Tracks {
-		k := keptTrack{Title: t.Title, File: t.File, Edit: t.Edit, Stale: t.Stale}
+		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), Edit: t.Edit, Stale: t.Stale}
 		if t.Measured {
 			k.Measure = keep(t.File, t.Measure)
 		}
@@ -557,7 +575,12 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.pluginDirs = o.plugins
 	a.choose = func(o driver.ChooseOptions) ([]string, error) { return c.ChooseFiles(ctx, o) }
 	a.reveal = c.Reveal
+	a.saveDialog = func(o driver.SaveOptions) (string, error) { return c.SaveFile(ctx, o) }
+	a.settingsFile = o.settings
+	st := readSettings(a.settingsFile)
+	a.RecentAlbums, a.Recent = st.Albums, st.Plugins
 	a.load()
+	a.opened(a.file)
 	for _, p := range o.paths {
 		a.add(p, "", Edit{})
 	}
@@ -591,6 +614,10 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			a.scanned(s)
 		case m := <-a.measures:
 			a.measured(m)
+		case m := <-a.matches:
+			a.matchedGain(m)
+		case c := <-a.albums:
+			a.chosenAlbum(c)
 		case <-a.nextSettle():
 			a.startMeasures()
 		case <-a.replay:
@@ -844,6 +871,18 @@ func (a *app) handle(in gunim.Intent) {
 		a.export(in.IDs)
 	case CalcLoudness:
 		a.calcLoudness()
+	case MatchTarget:
+		a.match(in.ID)
+	case NewAlbum, OpenAlbum, SaveAlbumAs:
+		a.chooseAlbum(in)
+	case OpenAlbumPath:
+		if _, err := os.Stat(in.Path); err != nil {
+			a.Note = err.Error()
+			a.RecentAlbums = slices.DeleteFunc(a.RecentAlbums, func(p string) bool { return p == in.Path })
+			a.writeSettings()
+			return
+		}
+		a.switchTo(in.Path, false)
 	case ReplaceFile:
 		a.replace(in.ID, in.Path)
 	case ChooseReplacement:

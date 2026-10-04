@@ -457,4 +457,5 @@ func (a *app) used(c PluginChoice) {
 		a.Recent = a.Recent[:recentPlugins]
 	}
 	a.dirty = true
+	a.writeSettings()
 }
