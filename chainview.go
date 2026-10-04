@@ -8,6 +8,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
@@ -395,7 +396,7 @@ func (c *chainRow) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gu
 	addX := c.addX
 	if addX > chainLabelW {
 		line := faded(ink, 0.12)
-		segment(p, geom.Pt(chainLabelW-10, mid), geom.Pt(addX-4, mid), 1.5, line)
+		audioui.Segment(p, geom.Pt(chainLabelW-10, mid), geom.Pt(addX-4, mid), 1.5, line)
 		if c.r.state.Playing {
 			for x := chainLabelW - 10 + float32(math.Mod(float64(c.flow), 18)); x < addX-4; x += 18 {
 				p.RRect(geom.Rc(x-1.5, mid-1.5, 3, 3), 1.5, paint.Solid(faded(teal, 0.7)))

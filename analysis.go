@@ -8,63 +8,8 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audioui"
 )
-
-// waveBuckets is how many stretches a track's waveform is kept in: some
-// 20 ms each for a five-minute track, fine enough to cut by.
-const waveBuckets = 16384
-
-// Wave is a track's file drawn as its loudness along it: for each
-// stretch, each channel's peak and its RMS, from 0 to 1. It is made
-// once and never changed, so the window may read it as the application
-// shares it.
-type Wave struct {
-	Peak, RMS [2][]float32
-	// Frames is the file's length, and Rate its rate.
-	Frames int64
-	Rate   int
-	// Gram is its spectrogram.
-	Gram *Gram
-	// Levels are the waveform finer, for the editor zoomed in: each
-	// stretch's lowest and highest sample and its RMS, the finest first,
-	// of finest frames a stretch, and each after four times coarser.
-	Levels []Level
-}
-
-// Level is a waveform at one fineness: Per frames a stretch.
-type Level struct {
-	Per           int
-	Min, Max, RMS [2][]float32
-}
-
-// finest is the frames of a stretch of a waveform's finest level:
-// past it, the editor reads the samples themselves.
-const finest = 128
-
-// levels builds the coarser levels from the finest, four stretches to
-// one, until a level is a few thousand stretches long.
-func levels(fine Level) []Level {
-	out := []Level{fine}
-	for prev := fine; len(prev.Min[0]) > 4096; {
-		n := (len(prev.Min[0]) + 3) / 4
-		l := Level{Per: prev.Per * 4}
-		for ch := range 2 {
-			l.Min[ch], l.Max[ch], l.RMS[ch] = make([]float32, n), make([]float32, n), make([]float32, n)
-			for b := range n {
-				lo, hi, ms, k := float32(0), float32(0), float32(0), 0
-				for j := 4 * b; j < min(4*b+4, len(prev.Min[ch])); j++ {
-					lo, hi = min(lo, prev.Min[ch][j]), max(hi, prev.Max[ch][j])
-					ms += prev.RMS[ch][j] * prev.RMS[ch][j]
-					k++
-				}
-				l.Min[ch][b], l.Max[ch][b], l.RMS[ch][b] = lo, hi, float32(math.Sqrt(float64(ms/float32(k))))
-			}
-		}
-		out = append(out, l)
-		prev = l
-	}
-	return out
-}
 
 // scan is what reading a track's file through tells, once: its format
 // and length, its waveform, and where its sound starts and ends, past
@@ -72,7 +17,7 @@ func levels(fine Level) []Level {
 type scan struct {
 	Format     audio.Format
 	Frames     int64
-	Wave       *Wave
+	Wave       *audioui.Wave
 	SoundStart time.Duration
 	SoundEnd   time.Duration
 }
@@ -103,19 +48,7 @@ func scanTrack(ctx context.Context, path string) (scan, error) {
 	}
 	defer closer()
 	total := src.Len()
-	w := &Wave{Frames: total, Rate: format.SampleRate}
-	for ch := range 2 {
-		w.Peak[ch] = make([]float32, waveBuckets)
-		w.RMS[ch] = make([]float32, waveBuckets)
-	}
-	counts := make([]int, waveBuckets)
-	per := max(float64(total)/waveBuckets, 1)
-	nFine := int(max(1, (total+finest-1)/finest))
-	gs := newGramScan(format.SampleRate)
-	fine := Level{Per: finest}
-	for ch := range 2 {
-		fine.Min[ch], fine.Max[ch], fine.RMS[ch] = make([]float32, nFine), make([]float32, nFine), make([]float32, nFine)
-	}
+	ws := audioui.NewWaveScan(total, format.SampleRate)
 	first, last := int64(-1), int64(0)
 	buf := make([]float32, 2*8192)
 	var at int64
@@ -124,23 +57,9 @@ func scanTrack(ctx context.Context, path string) (scan, error) {
 			return scan{}, ctx.Err()
 		}
 		n, err := src.Read(buf)
-		gs.write(buf[:2*n])
+		ws.Write(buf[:2*n])
 		for i := range n {
-			b := min(int(float64(at+int64(i))/per), waveBuckets-1)
-			fb := min(int((at+int64(i))/finest), nFine-1)
-			loud := false
-			for ch := range 2 {
-				v := buf[2*i+ch]
-				fine.Min[ch][fb] = min(fine.Min[ch][fb], v)
-				fine.Max[ch][fb] = max(fine.Max[ch][fb], v)
-				fine.RMS[ch][fb] += v * v
-				a := float32(math.Abs(float64(v)))
-				w.Peak[ch][b] = max(w.Peak[ch][b], a)
-				w.RMS[ch][b] += v * v
-				loud = loud || a > silence
-			}
-			counts[b]++
-			if loud {
+			if max(math.Abs(float64(buf[2*i])), math.Abs(float64(buf[2*i+1]))) > silence {
 				if first < 0 {
 					first = at + int64(i)
 				}
@@ -152,22 +71,7 @@ func scanTrack(ctx context.Context, path string) (scan, error) {
 			break
 		}
 	}
-	for ch := range 2 {
-		for b, c := range counts {
-			if c > 0 {
-				w.RMS[ch][b] = float32(math.Sqrt(float64(w.RMS[ch][b] / float32(c))))
-			}
-		}
-	}
-	for ch := range 2 {
-		for b := range fine.RMS[ch] {
-			k := min(int64(finest), total-int64(b)*finest)
-			fine.RMS[ch][b] = float32(math.Sqrt(float64(fine.RMS[ch][b] / float32(max(k, 1)))))
-		}
-	}
-	w.Levels = levels(fine)
-	w.Gram = gs.done()
-	sc := scan{Format: format, Frames: total, Wave: w, SoundEnd: duration(total, format.SampleRate)}
+	sc := scan{Format: format, Frames: total, Wave: ws.Done(), SoundEnd: duration(total, format.SampleRate)}
 	if first >= 0 {
 		sc.SoundStart, sc.SoundEnd = duration(first, format.SampleRate), duration(last+1, format.SampleRate)
 	}
@@ -201,24 +105,10 @@ type Measure struct {
 	running        []float32
 }
 
-// runningLoudness is the integrated loudness of the 400 ms blocks'
-// powers from the first to each second's, -inf before there is any.
-func runningLoudness(blocks []float64) []float32 {
-	out := make([]float32, 0, len(blocks)/10+1)
-	for k := 10; k <= len(blocks)+9; k += 10 {
-		l, ok := audio.Integrated(blocks[:min(k, len(blocks))])
-		if !ok {
-			l = math.Inf(-1)
-		}
-		out = append(out, float32(l))
-	}
-	return out
-}
-
 // reading is what the meters measured of a sound length long.
 func reading(lm *audio.LoudnessMeter, tp *audio.TruePeakMeter, length time.Duration) Measure {
 	m := Measure{TruePeak: float32(tp.Peak()), Peak: lm.Peak(), Length: length, blocks: lm.Blocks(), shorts: lm.ShortTerms()}
-	m.running = runningLoudness(m.blocks)
+	m.running = audioui.RunningLoudness(m.blocks)
 	if l, ok := lm.Integrated(); ok {
 		m.LUFS, m.Loud = float32(l), true
 	}
@@ -266,6 +156,13 @@ func rendered(src audio.Seeker, rate int, gap time.Duration, e Edit, chain []Slo
 	return st, done, nil
 }
 
+// curves are the loudness along the track, as measured, for the
+// editor to draw.
+func (m *Measure) curves() audioui.Curves {
+	return audioui.Curves{Blocks: m.blocks, Shorts: m.shorts, Running: m.running, LUFS: m.LUFS, Loud: m.Loud,
+		Low: m.Low, High: m.High, LRA: m.LRA, Ranged: m.Ranged}
+}
+
 // keptMeasure is a track's measure as the project keeps it, with what
 // the album's is measured from, and the file it measured as it was:
 // a file changed since is measured anew.
@@ -297,7 +194,7 @@ func (k *keptMeasure) measure(path string) (Measure, bool) {
 	}
 	m := k.Measure
 	m.blocks, m.shorts = unfloats(k.Blocks), unfloats(k.Shorts)
-	m.running = runningLoudness(m.blocks)
+	m.running = audioui.RunningLoudness(m.blocks)
 	return m, true
 }
 

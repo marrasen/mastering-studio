@@ -259,7 +259,7 @@ func (e *editor) paintMarks(p *paint.Painter, f gunim.Frame, box geom.Size) {
 		m := e.track.Marks[i]
 		card, remove := e.cardOf(i)
 		p.ShadowRRect(card, 10, paint.Solid(raised), paint.Shadow{Blur: 14, Color: faded(night, 0.7)})
-		shapedFace(clock(m.At), 9, false, true).Paint(p, geom.Pt(card.Min.X+10, card.Min.Y+3), faded(amber, 0.9))
+		shapedFace(clock(m.At), 9, false).Paint(p, geom.Pt(card.Min.X+10, card.Min.Y+3), faded(amber, 0.9))
 		paintFit(p, m.Text, 12, false, geom.Pt(card.Min.X+10, card.Min.Y+15), card.Size().W-48, ink)
 		widget.PaintIcon(p, f.Theme, icon.Trash2, remove.Inset(geom.Uniform(5)), faded(coral, 0.9))
 	}

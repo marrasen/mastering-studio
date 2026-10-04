@@ -8,6 +8,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
@@ -40,37 +41,13 @@ func faded(c color.NRGBA, a float32) color.NRGBA {
 // mix blends a toward b by t.
 func mix(a, b color.NRGBA, t float32) color.NRGBA { return anim.Mix(anim.ColorCodec, a, b, t) }
 
-// runs holds text shaped already, for nodes that paint every frame. It
-// is reached from the UI goroutine alone.
-var runs = map[runKey]text.Run{}
-
-type runKey struct {
-	s    string
-	size float32
-	bold bool
-	mono bool
-}
-
 // shaped is s shaped at size, from the cache.
-func shaped(s string, size float32, bold bool) text.Run { return shapedFace(s, size, bold, false) }
+func shaped(s string, size float32, bold bool) text.Run { return audioui.Shaped(s, size, bold, false) }
 
 // shapedFace is s shaped at size, in the monospaced face for figures
 // that change, so they hold still.
-func shapedFace(s string, size float32, bold, mono bool) text.Run {
-	k := runKey{s, size, bold, mono}
-	if r, ok := runs[k]; ok {
-		return r
-	}
-	if len(runs) > 4000 {
-		clear(runs)
-	}
-	face := text.GoSans(bold, false)
-	if mono {
-		face = text.GoMono(bold, false)
-	}
-	r := face.Shape(s, size)
-	runs[k] = r
-	return r
+func shapedFace(s string, size float32, bold bool) text.Run {
+	return audioui.Shaped(s, size, bold, true)
 }
 
 // paintFit draws s at size, its top left at at, cut short with an
@@ -105,18 +82,7 @@ func short(d time.Duration) string {
 
 // loudnessColor colours a reading by how far it is from the target:
 // teal within half a unit, amber within one and a half, coral past.
-func loudnessColor(off float32) color.NRGBA {
-	a := math.Abs(float64(off))
-	switch {
-	case a <= 0.5:
-		return teal
-	case a <= 1.5:
-		return mix(teal, amber, float32((a-0.5)/1))
-	case a <= 3:
-		return mix(amber, coral, float32((a-1.5)/1.5))
-	}
-	return coral
-}
+func loudnessColor(off float32) color.NRGBA { return audioui.LoudnessColor(nil, off) }
 
 // iconButton is a round button with an icon, lit as the pointer comes
 // over it, squashed as it is pressed; primary fills it with its colour.

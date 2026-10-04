@@ -317,9 +317,9 @@ func (l *exportList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 			alpha = 0.45
 		}
 		paintTick(p, f, geom.Pt(10, y+8), l.on[i], false)
-		shapedFace(fmt.Sprintf("%02d", t.Number), 12, false, true).Paint(p, geom.Pt(38, y+9), faded(ink, 0.5*alpha))
+		shapedFace(fmt.Sprintf("%02d", t.Number), 12, false).Paint(p, geom.Pt(38, y+9), faded(ink, 0.5*alpha))
 		paintFit(p, t.Title, 13, false, geom.Pt(66, y+8), box.W-66-exColLen-12, faded(ink, alpha))
-		shapedFace(clock(t.Length), 12, false, true).Paint(p, geom.Pt(box.W-exColLen, y+9), faded(ink, 0.6*alpha))
+		shapedFace(clock(t.Length), 12, false).Paint(p, geom.Pt(box.W-exColLen, y+9), faded(ink, 0.6*alpha))
 		lufs, c := "—", faded(ink, 0.4*alpha)
 		if t.Measured {
 			lufs = fmt.Sprintf("%.1f", t.LUFS)
@@ -329,7 +329,7 @@ func (l *exportList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 				lufs += "*"
 			}
 		}
-		shapedFace(lufs, 12, true, true).Paint(p, geom.Pt(box.W-exColLUFS, y+9), c)
+		shapedFace(lufs, 12, true).Paint(p, geom.Pt(box.W-exColLUFS, y+9), c)
 	}
 }
 

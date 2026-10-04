@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audioui"
 )
 
 const rate = 44100
@@ -75,7 +76,7 @@ func TestAScanFindsWhereTheSoundStartsAndEnds(t *testing.T) {
 	// Each stretch holds a few samples of the sine's cycle of 44: the
 	// highest of a cycle's worth of them reaches its crest.
 	var peak float32
-	for b := waveBuckets / 2; b < waveBuckets/2+8; b++ {
+	for b := audioui.WaveBuckets / 2; b < audioui.WaveBuckets/2+8; b++ {
 		peak = max(peak, sc.Wave.Peak[0][b])
 	}
 	if math.Abs(float64(peak)-0.5) > 0.01 {
@@ -184,8 +185,8 @@ func TestAWaveformsCoarserLevelsHoldTheFinersExtremes(t *testing.T) {
 		t.Fatal(err)
 	}
 	ls := sc.Wave.Levels
-	if len(ls) < 2 || ls[0].Per != finest {
-		t.Fatalf("the waveform has %d levels, the finest of %d frames", len(ls), ls[0].Per)
+	if len(ls) < 2 || ls[0].Per != audioui.WaveFinest {
+		t.Fatalf("the waveform has %d levels, the audioui.WaveFinest of %d frames", len(ls), ls[0].Per)
 	}
 	for i := 1; i < len(ls); i++ {
 		fine, coarse := ls[i-1], ls[i]
@@ -213,18 +214,18 @@ func TestAScanDrawsTheFilesPitchesOverItsLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := sc.Wave.Gram
-	if want := int(4*rate/gramHop) + 1; g.Cols < want-1 || g.Cols > want+1 {
+	if want := int(4*rate/audioui.GramHop) + 1; g.Cols < want-1 || g.Cols > want+1 {
 		t.Fatalf("four seconds made %d columns, want about %d", g.Cols, want)
 	}
-	col := func(at float64) int { return int(at * rate / gramHop) }
-	row := func(hz float64) int { return int(math.Log(hz/20) / math.Log(1000) * gramRows) }
-	if db := g.at(col(2), row(1000)); math.Abs(db-(-10.5)) > 1.5 {
+	col := func(at float64) int { return int(at * rate / audioui.GramHop) }
+	row := func(hz float64) int { return int(math.Log(hz/20) / math.Log(1000) * audioui.GramRows) }
+	if db := g.At(col(2), row(1000)); math.Abs(db-(-10.5)) > 1.5 {
 		t.Fatalf("in the tone, its pitch reads %.1f dB, want -10.5", db)
 	}
-	if db := g.at(col(2), row(100)); db > -60 {
+	if db := g.At(col(2), row(100)); db > -60 {
 		t.Fatalf("in the tone, 100 Hz reads %.1f dB", db)
 	}
-	if db := g.at(col(0.5), row(1000)); db > -90 {
+	if db := g.At(col(0.5), row(1000)); db > -90 {
 		t.Fatalf("in the silence before, 1 kHz reads %.1f dB", db)
 	}
 }

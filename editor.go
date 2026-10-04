@@ -8,6 +8,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
@@ -79,7 +80,7 @@ type editor struct {
 	// synced says the view and curves have been set from the album once.
 	synced bool
 	// grams are the spectrograms drawn, of the tracks seen last.
-	grams map[*Gram]*gramTiles
+	grams map[*audioui.Gram]*audioui.GramTiles
 	// silence is the silence before the track as a drag sets it, ahead
 	// of the application's answer, or -1.
 	silence float64
@@ -88,13 +89,8 @@ type editor struct {
 	// out, in the legend's order.
 	gram   *anim.Float
 	curves [4]*anim.Float
-	// fling is how fast the view glides on after a flick of the ruler,
-	// in seconds of the file a second; dragV is how fast a drag moves
-	// it, wasV0 where it started the frame, and still how long since it
-	// moved.
-	fling, dragV float64
-	wasV0        float32
-	still        time.Duration
+	// fling glides the view on after a flick of the ruler.
+	fling audioui.Fling
 	// markField writes a note at a time, at writeAt, or over the note
 	// writeID, while writing; hotMark is the note under the pointer.
 	markField *markField
@@ -113,9 +109,8 @@ type editor struct {
 
 // rawSamples is a stretch of a file's samples, read in the background.
 type rawSamples struct {
-	file    string
-	from    int64
-	data    []float32
+	file string
+	audioui.Samples
 	loading bool
 	loaded  chan rawSamples
 }
@@ -176,8 +171,8 @@ func (e *editor) show(was Album, t Track) {
 		}
 	}
 	move(e.gram, onOff(s.View == ViewGram))
-	for i, c := range loudCurves {
-		move(e.curves[i], onOff(s.Curves&c.bit != 0))
+	for i, c := range audioui.CurveNames {
+		move(e.curves[i], onOff(s.Curves&c.Bit != 0))
 	}
 	e.synced = true
 	fresh := t.ID != e.track.ID || t.Scanned != e.track.Scanned || t.File != e.track.File
@@ -365,7 +360,7 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 		}
 		e.held = e.gripAt(ev.Pos)
 		e.heldAt = e.tAt(ev.Pos.X)
-		e.fling, e.dragV = 0, 0
+		e.fling.Grab(float64(e.v0.Value()))
 		e.pressed, e.dragged = ev.Pos, false
 		if e.held == gripZoom {
 			e.zoomTo(ev.Pos.Y)
@@ -376,8 +371,8 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 	case input.PointerUp:
 		e.dragLoop = nil
 		// A ruler let go while it moves flings the view on.
-		if e.held == gripRuler && e.dragged && e.still < 80*time.Millisecond && math.Abs(e.dragV) > 0.05 {
-			e.fling = e.dragV
+		if e.held == gripRuler && e.dragged {
+			e.fling.Release(0.05)
 		}
 		if e.held == gripSilence {
 			e.silence = -1
@@ -527,7 +522,7 @@ func (e *editor) Step(dt time.Duration) bool {
 	moving := e.Group.Step(dt)
 	select {
 	case got := <-e.raw.loaded:
-		e.raw.file, e.raw.from, e.raw.data, e.raw.loading = got.file, got.from, got.data, false
+		e.raw.file, e.raw.Samples, e.raw.loading = got.file, got.Samples, false
 		moving = true
 	default:
 	}
@@ -577,34 +572,34 @@ func (e *editor) framesPerPixel() float64 {
 // view is zoomed in past the waveform's finest level and they are not
 // read yet. It returns whether they are being read.
 func (e *editor) wantRaw() bool {
-	if !e.track.Scanned || e.framesPerPixel() >= finest {
+	if !e.track.Scanned || e.framesPerPixel() >= audioui.WaveFinest {
 		return e.raw.loading
 	}
 	rate := float64(e.track.Format.SampleRate)
 	v0, v1 := float64(e.v0.Target()), float64(e.v1.Target())
 	from := max(0, int64((2*v0-v1)*rate))
 	to := min(e.track.Frames, int64((2*v1-v0)*rate)+1)
-	have := e.raw.file == e.track.File && e.raw.from <= max(0, int64(v0*rate)) &&
-		e.raw.from+int64(len(e.raw.data)/2) >= min(e.track.Frames, int64(v1*rate)+1)
+	have := e.raw.file == e.track.File && e.raw.From <= max(0, int64(v0*rate)) &&
+		e.raw.End() >= min(e.track.Frames, int64(v1*rate)+1)
 	if have || e.raw.loading {
 		return e.raw.loading
 	}
 	e.raw.loading = true
 	file, out := e.track.File, e.raw.loaded
 	go func() {
-		got := rawSamples{file: file, from: from}
+		got := rawSamples{file: file, Samples: audioui.Samples{From: from}}
 		if src, _, closer, err := openTrack(file); err == nil {
 			if src.SeekFrame(from) == nil {
-				got.data = make([]float32, 2*(to-from))
+				got.Data = make([]float32, 2*(to-from))
 				n := 0
 				for n < int(to-from) {
-					k, err := src.Read(got.data[2*n:])
+					k, err := src.Read(got.Data[2*n:])
 					n += k
 					if err != nil || k == 0 {
 						break
 					}
 				}
-				got.data = got.data[:2*n]
+				got.Data = got.Data[:2*n]
 			}
 			closer()
 		}
@@ -686,22 +681,22 @@ func (e *editor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 	whole2 := geom.Rect{Max: box.Point()}
 	if g := e.gram.Value(); g < 0.99 {
 		end := p.Layer(paint.LayerOpts{Bounds: whole2, Opacity: 1 - max(0, g)})
-		e.paintWave(p, box)
+		e.paintWave(p, f, box)
 		end()
 	}
 	if g := e.gram.Value(); g > 0.01 {
 		end := p.Layer(paint.LayerOpts{Bounds: whole2, Opacity: min(1, g)})
-		e.paintGram(p, box)
+		e.paintGram(p, f, box)
 		end()
 	}
-	e.paintCurves(p, box)
+	e.paintCurves(p, f, box)
 	e.paintFades(p, box)
 	e.paintCut(p, box)
 	e.paintPlayhead(p, box)
 	if e.r.state.View == ViewWave {
 		e.paintZoom(p, box)
 	}
-	e.paintLegend(p)
+	audioui.PaintLegend(p, f.Theme, e.legendRects(), e.r.state.Curves)
 	e.paintLoop(p, f, box)
 	e.paintMarks(p, f, box)
 	if e.writing {
@@ -739,7 +734,7 @@ func (e *editor) paintRuler(p *paint.Painter, box geom.Size) {
 		if t < 0 {
 			continue
 		}
-		shapedFace(label, 10, false, true).Paint(p, geom.Pt(x+4, 5), faded(ink, 0.45))
+		shapedFace(label, 10, false).Paint(p, geom.Pt(x+4, 5), faded(ink, 0.45))
 	}
 	p.RRect(geom.Rc(0, rulerH, box.W, 1), 0, paint.Solid(faded(ink, 0.08)))
 }
@@ -758,7 +753,7 @@ func (e *editor) paintGap(p *paint.Painter, box geom.Size) {
 		// Stripes across the band, cut to it.
 		a, b := max(x, x0), min(x+box.H-top, x1)
 		if b > a {
-			segment(p, geom.Pt(a, top+(a-x)), geom.Pt(b, top+(b-x)), 1, faded(sky, 0.12))
+			audioui.Segment(p, geom.Pt(a, top+(a-x)), geom.Pt(b, top+(b-x)), 1, faded(sky, 0.12))
 		}
 	}
 	label := fmt.Sprintf("%.2f s silence", e.gap())
@@ -781,150 +776,29 @@ func (e *editor) paintGap(p *paint.Painter, box geom.Size) {
 	}
 }
 
-// paintWave draws both channels' waveforms, a column a pixel, from
-// the finest level of the waveform the zoom needs, or, zoomed in past
-// it, from the samples themselves, drawn as the line they make: the
-// file faint, and the sound as edited bright over it, all as loud as
-// the vertical zoom draws it.
-func (e *editor) paintWave(p *paint.Painter, box geom.Size) {
+// paintWave draws both channels' waveforms: the file faint, and the
+// sound as edited bright over it, all as loud as the vertical zoom
+// draws it; zoomed in past the waveform's finest level, from the
+// samples themselves.
+func (e *editor) paintWave(p *paint.Painter, f gunim.Frame, box geom.Size) {
 	top, laneH := e.lanes()
 	start, end := e.span()
-	rate := float64(e.track.Format.SampleRate)
-	fpp := e.framesPerPixel()
-	raw := fpp < finest && e.raw.file == e.track.File && len(e.raw.data) > 0
+	v := audioui.WaveView{V0: float64(e.v0.Value()), V1: float64(e.v1.Value()), Width: box.W, Gain: e.gain(),
+		Shape: func(t float64) (float32, bool) {
+			if t < start || t > end {
+				return 0, false
+			}
+			return float32(e.envelope(t)), true
+		}}
+	var raw *audioui.Samples
+	if e.raw.file == e.track.File {
+		raw = &e.raw.Samples
+	}
 	for ch := range 2 {
-		mid := top + laneH*float32(ch) + laneH/2
-		half := laneH/2 - 4
-		p.RRect(geom.Rc(0, mid, box.W, 1), 0, paint.Solid(faded(ink, 0.06)))
-		if raw && fpp < 2 {
-			e.paintLine(p, ch, mid, half, box)
-			continue
-		}
-		lv := e.level(fpp)
-		k := e.gain()
-		clip := func(v float32) float32 { return max(-half, min(v*half*k, half)) }
-		// The columns keep to a grid in time, so each shows the same
-		// stretch of sound as the view scrolls, by whole columns: off
-		// it, a stretch's loudest moment falls now in one column, now
-		// in the next, and the waveform shimmers.
-		per := float64(e.v1.Value()-e.v0.Value()) / float64(box.W)
-		first := math.Floor(float64(e.v0.Value()) / per)
-		colT := func(x float32) float64 { return (first + float64(x)) * per }
-		for x := float32(0); x < box.W; x++ {
-			f0, f1 := int64(math.Round(colT(x)*rate)), int64(math.Round(colT(x+1)*rate))
-			if f1 <= 0 || f0 >= e.track.Frames {
-				continue
-			}
-			f0, f1 = max(0, f0), min(e.track.Frames, max(f1, f0+1))
-			var lo, hi, rms float32
-			if raw {
-				lo, hi, rms = e.raw.column(ch, f0, f1)
-			} else {
-				lo, hi, rms = lv.column(ch, f0, f1)
-			}
-			if hi <= lo {
-				continue
-			}
-			y0, y1 := mid-clip(hi), mid-clip(lo)
-			p.RRect(geom.Rc(x, y0, 1, max(1, y1-y0)), 0, paint.Solid(faded(ink, 0.12)))
-			tm := (colT(x) + colT(x+1)) / 2
-			if tm < start || tm > end {
-				continue
-			}
-			g := float32(e.envelope(tm))
-			ey0, ey1 := mid-clip(hi*g), mid-clip(lo*g)
-			r := clip(rms * g)
-			p.RRect(geom.Rc(x, ey0, 1, max(1, ey1-ey0)), 0, paint.Solid(faded(teal, 0.55)))
-			p.RRect(geom.Rc(x, mid-r, 1, 2*r), 0, paint.Solid(faded(mix(teal, ink, 0.4), 0.85)))
-		}
+		e.track.Wave.PaintChannel(p, f.Theme, ch, top+laneH*float32(ch)+laneH/2, laneH/2-4, v, raw)
 	}
 	// Outside the cut, the file is shaded away.
 	e.paintOutside(p, box)
-}
-
-// paintLine draws channel ch's samples in view as the line they make,
-// with a dot at each once they stand apart: the file faint, the sound
-// as edited bright.
-func (e *editor) paintLine(p *paint.Painter, ch int, mid, half float32, box geom.Size) {
-	rate := float64(e.track.Format.SampleRate)
-	k := e.gain()
-	start, end := e.span()
-	f0 := max(e.raw.from, int64(e.tAt(0)*rate)-1)
-	f1 := min(e.raw.from+int64(len(e.raw.data)/2), int64(e.tAt(box.W)*rate)+2)
-	apart := float64(box.W) / (float64(e.v1.Value()-e.v0.Value()) * rate)
-	y := func(v float32) float32 { return mid - max(-half, min(v*half*k, half)) }
-	var was, wasEd geom.Point
-	for f := f0; f < f1; f++ {
-		t := float64(f) / rate
-		v := e.raw.data[2*(f-e.raw.from)+int64(ch)]
-		x := e.xOf(t)
-		pt := geom.Pt(x, y(v))
-		g := float32(0)
-		if t >= start && t <= end {
-			g = float32(e.envelope(t))
-		}
-		ed := geom.Pt(x, y(v*g))
-		if f > f0 {
-			segment(p, was, pt, 1, faded(ink, 0.25))
-			segment(p, wasEd, ed, 1.5, teal)
-		}
-		if apart > 8 {
-			p.RRect(geom.Rc(ed.X-2, ed.Y-2, 4, 4), 2, paint.Solid(teal))
-		}
-		was, wasEd = pt, ed
-	}
-}
-
-// level returns the finest level of the waveform no finer than a column
-// of fpp frames.
-func (e *editor) level(fpp float64) *Level {
-	ls := e.track.Wave.Levels
-	if len(ls) == 0 {
-		return nil
-	}
-	lv := &ls[0]
-	for i := range ls {
-		if float64(ls[i].Per) <= fpp {
-			lv = &ls[i]
-		}
-	}
-	return lv
-}
-
-// column returns the lowest and highest sample of channel ch from frame
-// f0 to f1, and their RMS.
-func (l *Level) column(ch int, f0, f1 int64) (lo, hi, rms float32) {
-	if l == nil {
-		return 0, 0, 0
-	}
-	n := int64(len(l.Min[ch]))
-	b0 := min(f0/int64(l.Per), n-1)
-	b1 := min(max(b0, (f1-1)/int64(l.Per)), n-1)
-	var ms float32
-	for b := b0; b <= b1; b++ {
-		lo, hi = min(lo, l.Min[ch][b]), max(hi, l.Max[ch][b])
-		ms = max(ms, l.RMS[ch][b])
-	}
-	return lo, hi, ms
-}
-
-// column returns the lowest and highest sample of channel ch from frame
-// f0 to f1, and their RMS, from the samples read.
-func (r *rawSamples) column(ch int, f0, f1 int64) (lo, hi, rms float32) {
-	end := r.from + int64(len(r.data)/2)
-	f0, f1 = max(f0, r.from), min(f1, end)
-	if f1 <= f0 {
-		return 0, 0, 0
-	}
-	lo, hi = float32(math.Inf(1)), float32(math.Inf(-1))
-	var ss float32
-	for f := f0; f < f1; f++ {
-		v := r.data[2*(f-r.from)+int64(ch)]
-		lo, hi = min(lo, v), max(hi, v)
-		ss += v * v
-	}
-	lo, hi = min(lo, 0), max(hi, 0)
-	return lo, hi, float32(math.Sqrt(float64(ss / float32(f1-f0))))
 }
 
 // paintZoom draws the vertical zoom's slider up the editor's right edge:
@@ -951,7 +825,7 @@ func (e *editor) paintZoom(p *paint.Painter, box geom.Size) {
 		paint.Shadow{Blur: 8, Color: faded(sky, 0.4*alpha)})
 	if on || e.zoom.Value() > 0.5 {
 		words := fmt.Sprintf("+%.0f dB", e.zoom.Value())
-		run := shapedFace(words, 10, true, true)
+		run := shapedFace(words, 10, true)
 		run.Paint(p, geom.Pt(x-run.Advance-12, ky-6), faded(sky, max(alpha, 0.7)))
 	}
 }
@@ -989,7 +863,7 @@ func (e *editor) paintFades(p *paint.Painter, box geom.Size) {
 					p.RRect(geom.Rc(x, lt, 2, y-lt), 0, paint.Solid(faded(night, 0.35)))
 					pt := geom.Pt(x, y)
 					if x > x0 {
-						segment(p, prev, pt, 2, amber)
+						audioui.Segment(p, prev, pt, 2, amber)
 					}
 					prev = pt
 				}
@@ -1050,24 +924,12 @@ func (e *editor) paintPlayhead(p *paint.Painter, box geom.Size) {
 
 // bubble draws words in a small pill at about at.
 func (e *editor) bubble(p *paint.Painter, box geom.Size, at geom.Point, words string, c color.NRGBA) {
-	run := shapedFace(words, 11, true, true)
+	run := shapedFace(words, 11, true)
 	w, h := run.Advance+16, float32(22)
 	x := max(4, min(at.X-w/2, box.W-w-4))
 	p.RRect(geom.Rc(x, at.Y, w, h), h/2, paint.Solid(faded(night, 0.92)))
 	p.RRectStroke(geom.Rc(x, at.Y, w, h), h/2, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1, Color: faded(c, 0.8)})
 	run.Paint(p, geom.Pt(x+8, at.Y+4), ink)
-}
-
-// segment draws a straight line from a to b, width wide.
-func segment(p *paint.Painter, a, b geom.Point, width float32, c color.NRGBA) {
-	d := b.Sub(a)
-	l := float32(math.Hypot(float64(d.X), float64(d.Y)))
-	if l < 0.01 {
-		return
-	}
-	end := p.Push(paint.Rotate(float32(math.Atan2(float64(d.Y), float64(d.X))), a))
-	p.RRect(geom.Rc(a.X-width/2, a.Y-width/2, l+width, width), width/2, paint.Solid(c))
-	end()
 }
 
 // Cursor implements [gunim.CursorShaper]: the ruler and the cut's ends move
@@ -1091,38 +953,17 @@ func (e *editor) Cursor(p geom.Point) input.Cursor {
 // and, once it is let go moving, glides the view on, slowing, to a stop
 // or the sound's end. It returns whether the view glides.
 func (e *editor) stepFling(dt time.Duration) bool {
-	sec := dt.Seconds()
-	if e.held == gripRuler && sec > 0 {
-		v0 := e.v0.Value()
-		if v0 != e.wasV0 {
-			v := float64(v0-e.wasV0) / sec
-			e.dragV = 0.6*e.dragV + 0.4*v
-			e.still = 0
-		} else {
-			e.still += dt
-		}
-		e.wasV0 = v0
+	v0 := float64(e.v0.Value())
+	if e.held == gripRuler {
+		e.fling.Held(v0, dt)
 		return false
 	}
-	e.wasV0 = e.v0.Value()
-	if e.fling == 0 || sec <= 0 {
-		return false
-	}
-	span := float64(e.v1.Value() - e.v0.Value())
+	span := float64(e.v1.Value()) - v0
 	lo, hi := e.fit()
-	shift := e.fling * sec
-	v0 := float64(e.v0.Value()) + shift
-	// The sound's ends stop it.
-	if v0 < lo || v0+span > hi {
-		v0 = max(lo, min(v0, hi-span))
-		e.fling = 0
+	to, gliding := e.fling.Step(v0, span, lo, hi, dt)
+	if to != v0 {
+		e.v0.Jump(float32(to))
+		e.v1.Jump(float32(to + span))
 	}
-	e.v0.Jump(float32(v0))
-	e.v1.Jump(float32(v0 + span))
-	e.fling *= math.Exp(-4 * sec)
-	if math.Abs(e.fling) < span*0.02 {
-		e.fling = 0
-	}
-	e.wasV0 = e.v0.Value()
-	return e.fling != 0
+	return gliding
 }

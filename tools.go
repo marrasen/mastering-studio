@@ -6,6 +6,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
@@ -239,7 +240,7 @@ func (c *curveChip) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ guni
 		v := c.was.at(u)*(1-m) + c.curve.at(u)*m
 		pt := geom.Pt(area.Min.X+area.Size().W*float32(x), area.Max.Y-area.Size().H*float32(v))
 		if i > 0 {
-			segment(p, prev, pt, 1.6, amber)
+			audioui.Segment(p, prev, pt, 1.6, amber)
 		}
 		prev = pt
 	}

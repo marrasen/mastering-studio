@@ -148,11 +148,11 @@ func (t *transport) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids g
 	at, length, id := t.r.d.position()
 	tr, ok := t.r.track()
 	if ok && id == tr.ID {
-		run := shapedFace(clock(at), 22, true, true)
+		run := shapedFace(clock(at), 22, true)
 		run.Paint(p, geom.Pt(timeX, box.H/2-20), ink)
-		shapedFace("/ "+clock(length), 12, false, true).Paint(p, geom.Pt(timeX+run.Advance+8, box.H/2-10), faded(ink, 0.45))
+		shapedFace("/ "+clock(length), 12, false).Paint(p, geom.Pt(timeX+run.Advance+8, box.H/2-10), faded(ink, 0.45))
 	} else if ok {
-		shapedFace(clock(0), 22, true, true).Paint(p, geom.Pt(timeX, box.H/2-20), faded(ink, 0.6))
+		shapedFace(clock(0), 22, true).Paint(p, geom.Pt(timeX, box.H/2-20), faded(ink, 0.6))
 	}
 	if ok {
 		// The title, where there is room for it.

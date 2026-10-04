@@ -10,6 +10,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
@@ -28,7 +29,7 @@ type rowLook struct {
 	progress           *anim.Float
 	gone               bool
 	thumb              []float32
-	thumbOf            *Wave
+	thumbOf            *audioui.Wave
 }
 
 // trackList is the album's tracks, a row each, in order: its number,
@@ -90,7 +91,7 @@ func (l *trackList) show(s Album, u *gunim.UI) {
 		}
 		lk.progress.Animate(t.Progress, anim.Snappy)
 		if t.Wave != lk.thumbOf && t.Wave != nil {
-			lk.thumb, lk.thumbOf = thumbnail(t.Wave, 64), t.Wave
+			lk.thumb, lk.thumbOf = t.Wave.Thumbnail(64), t.Wave
 		}
 	}
 	for id, lk := range l.rows {
@@ -100,19 +101,6 @@ func (l *trackList) show(s Album, u *gunim.UI) {
 		}
 	}
 	u.Invalidate()
-}
-
-// thumbnail is a waveform in n columns: each the loudest of both
-// channels across its stretch.
-func thumbnail(w *Wave, n int) []float32 {
-	out := make([]float32, n)
-	per := float64(len(w.Peak[0])) / float64(n)
-	for i := range out {
-		for b := int(float64(i) * per); b < int(float64(i+1)*per) && b < len(w.Peak[0]); b++ {
-			out[i] = max(out[i], w.RMS[0][b], w.RMS[1][b])
-		}
-	}
-	return out
 }
 
 // Step implements [gunim.Animator]: rows gone drop away once faded, and
@@ -371,7 +359,7 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 	}
 	if t.ID == s.Current && s.Playing {
 		// The track playing shows bars moving with it in its ring.
-		paintBars(p, l.r.meters, geom.Pt(ring.Min.X+17, ring.Min.Y+15), faded(teal, in))
+		audioui.PaintBars(p, l.r.meters.bands[:], geom.Pt(ring.Min.X+17, ring.Min.Y+15), faded(teal, in))
 	} else {
 		run := shaped(strconv.Itoa(number), 13, true)
 		run.Paint(p, geom.Pt(ring.Min.X+(30-run.Advance)/2, ring.Min.Y+7), faded(numColor, in))
@@ -387,7 +375,7 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 	paintFit(p, t.Title, 14, true, geom.Pt(textX, row.Min.Y+10), room, faded(ink, 0.92*in))
 	// How long it exports, the silence before it and all.
 	if t.Scanned {
-		shapedFace(clock(lengthOf(t, s.gapOf(&t))), 10, false, true).Paint(p, geom.Pt(textX, row.Min.Y+30),
+		shapedFace(clock(lengthOf(t, s.gapOf(&t))), 10, false).Paint(p, geom.Pt(textX, row.Min.Y+30),
 			faded(ink, 0.55*in))
 	}
 	// The waveform, small, under the title.
@@ -409,7 +397,7 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 	case t.Measured && t.Measure.Loud:
 		off := t.Measure.LUFS - s.Target
 		c := loudnessColor(off)
-		lufs := shapedFace(fmt.Sprintf("%.1f", lk.lufs.Value()), 15, true, true)
+		lufs := shapedFace(fmt.Sprintf("%.1f", lk.lufs.Value()), 15, true)
 		alpha := in
 		if t.Stale {
 			// Changed since: the reading is old, faint, with a dot by
@@ -424,7 +412,7 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		if tp > -1 {
 			tpColor = faded(coral, in)
 		}
-		subRun := shapedFace(sub, 10, false, true)
+		subRun := shapedFace(sub, 10, false)
 		subRun.Paint(p, geom.Pt(right-subRun.Advance, row.Min.Y+32), tpColor)
 		lraX := right
 		if t.Exported != "" {
@@ -432,7 +420,7 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 			lraX -= 20
 		}
 		if t.Measure.Ranged {
-			lra := shapedFace(fmt.Sprintf("LRA %.1f", t.Measure.LRA), 10, false, true)
+			lra := shapedFace(fmt.Sprintf("LRA %.1f", t.Measure.LRA), 10, false)
 			lra.Paint(p, geom.Pt(lraX-lra.Advance, row.Min.Y+47), faded(sky, 0.75*in))
 		}
 	case t.Measured:

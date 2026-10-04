@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"math"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
@@ -19,11 +19,11 @@ import (
 // album returns an album of one track, ten seconds of a file read, with
 // its sound from the second second.
 func album() Album {
-	w := &Wave{Frames: 10 * rate, Rate: rate}
+	w := &audioui.Wave{Frames: 10 * rate, Rate: rate}
 	for ch := range 2 {
-		w.Peak[ch] = make([]float32, waveBuckets)
-		w.RMS[ch] = make([]float32, waveBuckets)
-		for b := waveBuckets / 5; b < waveBuckets; b++ {
+		w.Peak[ch] = make([]float32, audioui.WaveBuckets)
+		w.RMS[ch] = make([]float32, audioui.WaveBuckets)
+		for b := audioui.WaveBuckets / 5; b < audioui.WaveBuckets; b++ {
 			w.Peak[ch][b], w.RMS[ch][b] = 0.5, 0.3
 		}
 	}
@@ -455,13 +455,13 @@ func TestZoomingInFarDrawsFromTheSamplesThemselves(t *testing.T) {
 	ed.v1.Jump(5.01)
 	for range 120 {
 		run(1)
-		if len(ed.raw.data) > 0 {
+		if len(ed.raw.Data) > 0 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if ed.raw.file != ed.track.File || ed.raw.from > 5*rate || ed.raw.from+int64(len(ed.raw.data)/2) < 5*rate+441 {
-		t.Fatalf("zoomed in on 5 s, the samples read are from %d, %d frames", ed.raw.from, len(ed.raw.data)/2)
+	if ed.raw.file != ed.track.File || ed.raw.From > 5*rate || ed.raw.From+int64(len(ed.raw.Data)/2) < 5*rate+441 {
+		t.Fatalf("zoomed in on 5 s, the samples read are from %d, %d frames", ed.raw.From, len(ed.raw.Data)/2)
 	}
 }
 
@@ -626,7 +626,7 @@ func TestTheAlbumsNameOpensTheMenuOfAlbums(t *testing.T) {
 func TestTheSpectrogramTakesColumnsWhileTheSoundPlays(t *testing.T) {
 	r, run, mix := playing(t, FollowOff)
 	m := r.meters
-	columns := func() int { return len(m.gram.tiles)*gramTile + m.gram.n }
+	columns := m.gram.Columns
 	for range 120 {
 		mix(time.Second / 60)
 		run(1)
@@ -641,18 +641,6 @@ func TestTheSpectrogramTakesColumnsWhileTheSoundPlays(t *testing.T) {
 	run(30)
 	if columns() != was {
 		t.Fatal("paused, the spectrogram goes on")
-	}
-}
-
-func TestTheSpectrogramKeepsTheTilesItShows(t *testing.T) {
-	var g spectrogram
-	g.keep = 3
-	col := make([]float32, specPoints)
-	for range 10 * gramTile {
-		g.push(col)
-	}
-	if len(g.tiles) != 3 || g.n != 0 {
-		t.Fatalf("after 10 tiles' columns, %d tiles are kept, %d columns filling", len(g.tiles), g.n)
 	}
 }
 
@@ -688,15 +676,15 @@ func TestTheLegendSwitchesTheLoudnessCurves(t *testing.T) {
 	a.Curves = CurveS | CurveI
 	w, r, run := stage(t, a)
 	b := boundsOf(t, w, run, r.editor)
-	for i, c := range loudCurves {
+	for i, c := range audioui.CurveNames {
 		at := b.Min.Add(r.editor.legendRects()[i].Center())
 		w.Input(input.PointerMove{Pos: at})
 		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
 		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
 		run(1)
 		_, rest := edits(w)
-		if len(rest) != 1 || rest[0] != (SetCurves{Curves: a.Curves ^ c.bit}) {
-			t.Fatalf("a click on %s sent %v", c.name, rest)
+		if len(rest) != 1 || rest[0] != (SetCurves{Curves: a.Curves ^ c.Bit}) {
+			t.Fatalf("a click on %s sent %v", c.Name, rest)
 		}
 	}
 }
@@ -730,17 +718,6 @@ func TestTheViewSwitchesToTheSpectrogramAndANoteIsKeptAsTyped(t *testing.T) {
 	run(1)
 	if got := r.head.note.Text(); got != "Needs a new vocal" {
 		t.Fatalf("the note reads %q as it is typed", got)
-	}
-}
-
-func TestASpectrogramIsDrawnAtLevelsForTheViewZoomedOut(t *testing.T) {
-	g := &Gram{Cols: 10000, Rate: rate, Data: make([]byte, 10000*gramRows)}
-	tiles := newGramTiles(g)
-	if len(tiles.levels) != 3 || tiles.levels[1].per != 4 || tiles.levels[2].cols > 2048 {
-		t.Fatalf("10,000 columns are drawn at %d levels", len(tiles.levels))
-	}
-	if w, h := tiles.levels[0].tiles[0].Size(); w != gramTileCols || h != gramRows {
-		t.Fatalf("a tile is %dx%d", w, h)
 	}
 }
 
@@ -810,26 +787,6 @@ func TestTheOutputsFaderSetsTheGainAfterTheChain(t *testing.T) {
 	}
 }
 
-func TestTheIOMetersRMSHoldsStillOnSteadyNoise(t *testing.T) {
-	l := newIOLevels()
-	rng := rand.New(rand.NewPCG(1, 2))
-	chunk := make([]float32, 2*800)
-	var last float32
-	for f := range 180 {
-		for i := range chunk {
-			chunk[i] = float32(rng.NormFloat64() * 0.1)
-		}
-		l.take(chunk, 48000, time.Second/60)
-		if f > 90 && math.Abs(float64(l.rms[0]-last)) > 0.3 {
-			t.Fatalf("frame %d: on steady noise the RMS moved %.2f dB", f, l.rms[0]-last)
-		}
-		last = l.rms[0]
-	}
-	if math.Abs(float64(last+20)) > 0.5 {
-		t.Fatalf("noise at an RMS of 0.1 reads %.1f dB, want -20", last)
-	}
-}
-
 func TestTheViewsFadeIntoEachOther(t *testing.T) {
 	w, r, run := stage(t, album())
 	ed := r.editor
@@ -887,8 +844,8 @@ func TestAFlickOfTheRulerGlidesTheViewOnAndSlows(t *testing.T) {
 		moved = moved || step > 0
 		lastStep = step
 	}
-	if !moved || ed.v0.Value()-let < 0.1 || ed.fling != 0 {
-		t.Fatalf("let go moving, the view glided %.3f s and is still flinging %v", ed.v0.Value()-let, ed.fling != 0)
+	if !moved || ed.v0.Value()-let < 0.1 || ed.fling.Gliding() {
+		t.Fatalf("let go moving, the view glided %.3f s and is still flinging %v", ed.v0.Value()-let, ed.fling.Gliding())
 	}
 }
 
@@ -1073,13 +1030,13 @@ func TestTheSpectrumBeforeTheChainMatchesTheOneAfterWithNoPlugins(t *testing.T) 
 	}
 	m := r.meters
 	k := 0
-	for i, f := range m.freqs {
-		if math.Abs(float64(f)-1000) < math.Abs(float64(m.freqs[k])-1000) {
+	for i, f := range m.spectrum.Freqs {
+		if math.Abs(float64(f)-1000) < math.Abs(float64(m.spectrum.Freqs[k])-1000) {
 			k = i
 		}
 	}
 	// The output as drawn: the listening level taken back out.
-	out := m.spec[k] - float32(m.listening())
+	out := m.spec[k]
 	if math.Abs(float64(m.specIn[k]+10.5)) > 1 || math.Abs(float64(m.specIn[k]-out)) > 1 {
 		t.Fatalf("a 1 kHz tone at -10.5 dBFS reads %.1f dB into the chain and %.1f out of it", m.specIn[k], out)
 	}

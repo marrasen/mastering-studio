@@ -15,6 +15,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/driver"
 )
 
@@ -114,7 +115,7 @@ type (
 		Scanned    bool
 		Format     audio.Format
 		Frames     int64
-		Wave       *Wave
+		Wave       *audioui.Wave
 		SoundStart time.Duration
 		SoundEnd   time.Duration
 		// Measure is the track measured as rendered, which Measuring

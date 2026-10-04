@@ -8,6 +8,7 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
@@ -24,12 +25,12 @@ type strip struct {
 	// by its ID, gliding as tracks change.
 	x0, x1 map[int]*anim.Float
 	thumbs map[int][]float32
-	of     map[int]*Wave
+	of     map[int]*audioui.Wave
 	size   geom.Size
 }
 
 func newStrip(r *root) *strip {
-	return &strip{r: r, x0: map[int]*anim.Float{}, x1: map[int]*anim.Float{}, thumbs: map[int][]float32{}, of: map[int]*Wave{}}
+	return &strip{r: r, x0: map[int]*anim.Float{}, x1: map[int]*anim.Float{}, thumbs: map[int][]float32{}, of: map[int]*audioui.Wave{}}
 }
 
 // lengthOf is how long a track plays, as measured, or as its file
@@ -62,7 +63,7 @@ func (s *strip) show(a Album) {
 		s.x0[t.ID].Animate(from, anim.Spring{Response: 0.4, Damping: 0.9})
 		s.x1[t.ID].Animate(to, anim.Spring{Response: 0.4, Damping: 0.9})
 		if t.Wave != nil && s.of[t.ID] != t.Wave {
-			s.thumbs[t.ID], s.of[t.ID] = thumbnail(t.Wave, 160), t.Wave
+			s.thumbs[t.ID], s.of[t.ID] = t.Wave.Thumbnail(160), t.Wave
 		}
 	}
 }
