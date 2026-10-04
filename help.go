@@ -48,6 +48,7 @@ var helpGroups = []struct {
 	{"Help", [][2]string{
 		{"F1, ?", "This help"},
 		{"Ctrl + wheel", "Zoom the whole window"},
+		{"Ctrl + +, -, 0", "Zoom the window in, out, or back"},
 	}},
 }
 

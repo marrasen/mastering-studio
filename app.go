@@ -392,6 +392,8 @@ type app struct {
 	// settings keep; helping says the help is open.
 	window  *driver.Placement
 	helping bool
+	// zoom is how large the window draws its content.
+	zoom float32
 }
 
 type scanned struct {
@@ -694,7 +696,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.saveDialog = func(o driver.SaveOptions) (string, error) { return c.SaveFile(ctx, o) }
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
-	a.RecentAlbums, a.Recent, a.lame, a.window = st.Albums, st.Plugins, st.LAME, st.Window
+	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
 	useLAME(findLAME(a.lame))
 	a.load()
 	a.opened(a.file)
@@ -1044,6 +1046,11 @@ func (a *app) handle(in gunim.Intent) {
 		a.calcLoudness()
 	case MatchTarget:
 		a.match(in.ID)
+	case gunim.Zoomed:
+		// Ctrl and the wheel, or + and -, zoomed the window: kept for the
+		// next time.
+		a.zoom = in.Zoom
+		a.writeSettings()
 	case ShowHelp:
 		a.showHelp(true)
 	case HelpClosed:

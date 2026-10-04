@@ -62,9 +62,11 @@ func main() {
 		o.settings = filepath.Join(d, "settings.json")
 	}
 	// Where the window was as it closed last, unless a size is asked.
-	if s := readSettings(o.settings); s.Window != nil && *size == "" {
-		o.place = s.Window
+	st := readSettings(o.settings)
+	if st.Window != nil && *size == "" {
+		o.place = st.Window
 	}
+	o.zoom = st.Zoom
 	if o.file == "" {
 		// The album open last, where it still is.
 		o.file = untitled()
@@ -99,6 +101,9 @@ type options struct {
 	// where the window opens.
 	settings string
 	place    *driver.Placement
+	// zoom is how large the window draws its content, as Ctrl and the
+	// wheel last left it.
+	zoom float32
 	// placement says where the window is, to keep as it closes.
 	placement func() (driver.Placement, bool)
 }
@@ -117,7 +122,7 @@ func run(o options) error {
 	}
 	err := gunim.Main(ctx, func(a *gunim.App) error {
 		w, err := a.NewWindow(gunim.WindowOptions{Title: "Mastering", Size: o.size, Place: o.place,
-			AskToClose: Quit{}})
+			AskToClose: Quit{}, ZoomKeys: true, Zoom: o.zoom})
 		if err != nil {
 			return fmt.Errorf("mastering: %w", err)
 		}

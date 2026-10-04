@@ -24,7 +24,12 @@ type transport struct {
 	album            *pill
 	// bypass plays the track without its chain and gains, to compare.
 	bypass *pill
-	volume *valueChip
+	// compact says the buttons are in fewer words, for a narrow window;
+	// pillsX is where they start, and matchMid where Match's middle is.
+	compact  bool
+	pillsX   float32
+	matchMid float32
+	volume   *valueChip
 }
 
 func newTransport(r *root) *transport {
@@ -88,19 +93,50 @@ func (t *transport) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	kids.At(1).Place(geom.Pt(100, mid-28))
 	kids.At(2).Layout(gunim.Tight(geom.Sz(40, 40)))
 	kids.At(2).Place(geom.Pt(164, mid-20))
-	w := pillWidth("Match levels")
+	// The buttons at the right in their words, or, where they would
+	// crowd the time, in fewer.
+	short := map[string]string{"Autoplay next": "Autoplay", "Match levels": "Match", "Calc LUFS first": "Calc first"}
+	for _, b := range []*pill{t.album, t.match} {
+		if s, ok := short[b.words]; ok && t.compact {
+			b.words = s
+		}
+	}
+	widths := func() float32 {
+		return 84 + 12 + pillWidth(t.match.words) + 8 + pillWidth(t.album.words) + 8 + pillWidth(t.bypass.words)
+	}
+	if !t.compact && size.W-widths() < timeX+timeRoom {
+		t.compact = true
+		for _, b := range []*pill{t.album, t.match} {
+			if s, ok := short[b.words]; ok {
+				b.words = s
+			}
+		}
+	} else if t.compact && size.W-widths() > timeX+timeRoom+80 {
+		t.compact = false
+	}
+	x := size.W - 84
 	kids.At(4).Layout(gunim.Tight(geom.Sz(84, 44)))
-	kids.At(4).Place(geom.Pt(size.W-84, mid-22))
-	kids.At(3).Layout(gunim.Tight(geom.Sz(w, 34)))
-	kids.At(3).Place(geom.Pt(size.W-84-12-w, mid-17))
-	aw := pillWidth("Autoplay next")
-	kids.At(5).Layout(gunim.Tight(geom.Sz(aw, 34)))
-	kids.At(5).Place(geom.Pt(size.W-84-12-w-8-aw, mid-17))
-	bw := pillWidth("Bypass")
-	kids.At(7).Layout(gunim.Tight(geom.Sz(bw, 34)))
-	kids.At(7).Place(geom.Pt(size.W-84-12-w-8-aw-8-bw, mid-17))
+	kids.At(4).Place(geom.Pt(x, mid-22))
+	x -= 12
+	for _, k := range []struct {
+		i int
+		b *pill
+	}{{3, t.match}, {5, t.album}, {7, t.bypass}} {
+		w := pillWidth(k.b.words)
+		x -= w
+		kids.At(k.i).Layout(gunim.Tight(geom.Sz(w, 34)))
+		kids.At(k.i).Place(geom.Pt(x, mid-17))
+		if k.i == 3 {
+			t.matchMid = x + w/2
+		}
+		x -= 8
+	}
+	t.pillsX = x
 	return size
 }
+
+// timeRoom is the room the time takes, after timeX.
+const timeRoom = 180
 
 // timeX is where the time is written, after the buttons.
 const timeX = 222
@@ -119,13 +155,15 @@ func (t *transport) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids g
 		shapedFace(clock(0), 22, true, true).Paint(p, geom.Pt(timeX, box.H/2-20), faded(ink, 0.6))
 	}
 	if ok {
-		room := box.W - timeX - pillWidth("Match levels") - pillWidth("Autoplay next") - pillWidth("Bypass") - 136
-		paintFit(p, tr.Title, 12, false, geom.Pt(timeX, box.H/2+10), room, faded(ink, 0.55))
+		// The title, where there is room for it.
+		if room := t.pillsX - timeX - 8; room > 60 {
+			paintFit(p, tr.Title, 12, false, geom.Pt(timeX, box.H/2+10), room, faded(ink, 0.55))
+		}
 	}
 	if d, matched := t.r.state.matchDB(&tr); ok && matched {
 		words := fmt.Sprintf("%+.1f dB to match", d)
 		run := shaped(words, 10, false)
-		run.Paint(p, geom.Pt(box.W-84-12-pillWidth("Match levels")/2-run.Advance/2, box.H/2+19), faded(teal, 0.8))
+		run.Paint(p, geom.Pt(t.matchMid-run.Advance/2, box.H/2+19), faded(teal, 0.8))
 	}
 	for k := range kids.All {
 		k.Paint(p)

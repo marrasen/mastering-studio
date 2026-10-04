@@ -749,7 +749,8 @@ func TestMatchingATrackNotMeasuredAsksForItsLoudness(t *testing.T) {
 	a.Match = true
 	w, r, run := stage(t, a)
 	m := r.trans.match
-	if !m.warn || m.words != "Calc LUFS first" {
+	// In full words, or fewer in a narrow window.
+	if !m.warn || (m.words != "Calc LUFS first" && m.words != "Calc first") {
 		t.Fatalf("matching a track not measured, the button reads %q, warning %v", m.words, m.warn)
 	}
 	b := boundsOf(t, w, run, m)
