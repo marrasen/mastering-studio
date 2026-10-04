@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"math/cmplx"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -68,7 +69,13 @@ type meters struct {
 	inFader, outFader *ioFader
 	inFrom            int64
 	inBuf             []float32
-	size              geom.Size
+	// specIn is the spectrum of the input to the chain, smoothIn as
+	// drawn, inFFT what takes it, and inSpan the frames it takes it of.
+	specIn, smoothIn []float32
+	inFFT            *audio.FFT
+	inSpan           []float32
+	inBins           []complex128
+	size             geom.Size
 }
 
 func newMeters(r *root) *meters {
@@ -76,9 +83,10 @@ func newMeters(r *root) *meters {
 		in: newIOLevels(), out: newIOLevels(), inFader: newIOFader(r, false), outFader: newIOFader(r, true)}
 	m.freqs = make([]float32, specPoints)
 	m.spec, m.smooth = make([]float32, specPoints), make([]float32, specPoints)
+	m.specIn, m.smoothIn = make([]float32, specPoints), make([]float32, specPoints)
 	for i := range m.freqs {
 		m.freqs[i] = float32(20 * math.Pow(1000, float64(i)/(specPoints-1)))
-		m.smooth[i] = specBottom
+		m.smooth[i], m.smoothIn[i] = specBottom, specBottom
 	}
 	return m
 }
@@ -172,9 +180,10 @@ func (m *meters) Step(dt time.Duration) bool {
 	ease(&m.corr, c, 8, 8)
 	if playing {
 		m.r.d.spectrum(m.freqs, m.spec)
+		m.inputSpectrum()
 	} else {
 		for i := range m.spec {
-			m.spec[i] = specBottom - 30
+			m.spec[i], m.specIn[i] = specBottom-30, specBottom-30
 		}
 	}
 	back := float32(-m.listening())
@@ -194,6 +203,7 @@ func (m *meters) Step(dt time.Duration) bool {
 			m.column = append(m.column, gramLevel(to))
 		}
 		ease(&m.smooth[i], to, 25, 5)
+		ease(&m.smoothIn[i], m.specIn[i]+tilt, 25, 5)
 		settled = settled && math.Abs(float64(m.smooth[i]-to)) < 0.5
 	}
 	if takeColumn {
@@ -456,19 +466,37 @@ func (m *meters) paintSpectrum(p *paint.Painter, area geom.Rect) {
 	}
 	p.RRect(area, 10, paint.Solid(faded(night, 0.6)))
 	w := area.Size().W / float32(len(m.smooth))
-	var prev geom.Point
-	for i, v := range m.smooth {
+	at := func(i int, v float32) geom.Point {
 		t := min(max((v-specBottom)/(specTop-specBottom), 0), 1)
-		h := area.Size().H * t
-		x := area.Min.X + float32(i)*w
-		p.RRect(geom.Rc(x, area.Max.Y-h, w+0.5, h), 0, paint.Solid(faded(teal, 0.22)))
-		pt := geom.Pt(x+w/2, area.Max.Y-h)
+		return geom.Pt(area.Min.X+float32(i)*w+w/2, area.Max.Y-area.Size().H*t)
+	}
+	// The output, filled, and over it the input to the chain, a line:
+	// where they part, the chain changed the sound.
+	var prev, prevIn geom.Point
+	for i, v := range m.smooth {
+		pt := at(i, v)
+		p.RRect(geom.Rc(pt.X-w/2, pt.Y, w+0.5, area.Max.Y-pt.Y), 0, paint.Solid(faded(teal, 0.22)))
+		pin := at(i, m.smoothIn[i])
 		if i > 0 {
 			segment(p, prev, pt, 1.4, faded(teal, 0.8))
+			segment(p, prevIn, pin, 1.2, faded(ink, 0.5))
 		}
-		prev = pt
+		prev, prevIn = pt, pin
 	}
 	m.paintPitches(p, area, false)
+	// Which is which, at the top right.
+	x := area.Max.X - 10
+	for _, l := range []struct {
+		name string
+		c    color.NRGBA
+	}{{"OUT", teal}, {"IN", faded(ink, 0.6)}} {
+		run := shaped(l.name, 9, true)
+		x -= run.Advance
+		run.Paint(p, geom.Pt(x, area.Min.Y+6), l.c)
+		x -= 14
+		p.RRect(geom.Rc(x, area.Min.Y+11, 10, 2), 1, paint.Solid(l.c))
+		x -= 10
+	}
 }
 
 // paintBars draws three little bars moving with the music, low, middle
@@ -528,3 +556,49 @@ func (m *meters) Handle(e input.Event, u *gunim.UI) bool {
 
 // listenNames name the ways to listen, in their order.
 var listenNames = []string{"Stereo", "Mono", "Side"}
+
+// inputSpectrum takes the spectrum of the newest frames fed into the
+// chain, for the moment heard, into specIn, as the analyzer takes the
+// output's: in decibels, 0 for a full-scale sine, each frequency the
+// loudest bin about it.
+func (m *meters) inputSpectrum() {
+	const n = 4096
+	at, ok := m.r.d.heardFrames()
+	var rate int
+	if ok {
+		m.inSpan, rate = m.r.d.input(m.inSpan[:0], 0, 0)
+		heard := int64(at.Seconds() * float64(rate))
+		m.inSpan, _ = m.r.d.input(m.inSpan[:0], heard-n, heard)
+	}
+	if !ok || rate == 0 || len(m.inSpan) < 2*n {
+		for i := range m.specIn {
+			m.specIn[i] = specBottom - 30
+		}
+		return
+	}
+	if m.inFFT == nil {
+		m.inFFT, m.inBins = audio.NewFFT(n), make([]complex128, n)
+	}
+	for i := range n {
+		w := 0.5 - 0.5*math.Cos(2*math.Pi*float64(i)/float64(n-1))
+		m.inBins[i] = complex(float64(m.inSpan[2*i]+m.inSpan[2*i+1])/2*w, 0)
+	}
+	m.inFFT.Transform(m.inBins)
+	bin := func(hz float64) float64 { return hz * n / float64(rate) }
+	for i, f := range m.freqs {
+		lo, hi := float64(f), float64(f)
+		if i > 0 {
+			lo = math.Sqrt(float64(m.freqs[i-1]) * float64(f))
+		}
+		if i+1 < len(m.freqs) {
+			hi = math.Sqrt(float64(m.freqs[i+1]) * float64(f))
+		}
+		b0 := max(1, min(int(bin(lo)), n/2-1))
+		b1 := max(b0, min(int(math.Ceil(bin(hi))), n/2-1))
+		var peak float64
+		for k := b0; k <= b1; k++ {
+			peak = max(peak, cmplx.Abs(m.inBins[k]))
+		}
+		m.specIn[i] = float32(20 * math.Log10(max(peak*4/n, 1e-9)))
+	}
+}

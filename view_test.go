@@ -1063,3 +1063,23 @@ func TestAClickOnANoteSeeksToItOnceNoSecondFollows(t *testing.T) {
 		t.Fatalf("a click on the note at 4 s sent %v, want a seek to it as rendered, 5 s", rest)
 	}
 }
+
+func TestTheSpectrumBeforeTheChainMatchesTheOneAfterWithNoPlugins(t *testing.T) {
+	r, run, mix := playing(t, FollowOff)
+	for range 90 {
+		mix(time.Second / 60)
+		run(1)
+	}
+	m := r.meters
+	k := 0
+	for i, f := range m.freqs {
+		if math.Abs(float64(f)-1000) < math.Abs(float64(m.freqs[k])-1000) {
+			k = i
+		}
+	}
+	// The output as drawn: the listening level taken back out.
+	out := m.spec[k] - float32(m.listening())
+	if math.Abs(float64(m.specIn[k]+10.5)) > 1 || math.Abs(float64(m.specIn[k]-out)) > 1 {
+		t.Fatalf("a 1 kHz tone at -10.5 dBFS reads %.1f dB into the chain and %.1f out of it", m.specIn[k], out)
+	}
+}
