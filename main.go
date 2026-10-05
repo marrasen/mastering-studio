@@ -111,7 +111,14 @@ func main() {
 	if *plugins != "" {
 		o.plugins = filepath.SplitList(*plugins)
 	}
-	if err := run(o); err != nil {
+	err := run(o)
+	if restartAfter.Load() {
+		// The release put in place, started once this one has closed.
+		if rerr := install.Restart(installer()); rerr != nil {
+			log.Printf("mastering: starting the new release: %v", rerr)
+		}
+	}
+	if err != nil {
 		log.Fatal(err)
 	}
 }

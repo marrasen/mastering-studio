@@ -151,6 +151,10 @@ func (r *root) show(s Album, u *gunim.UI) {
 		r.toasts.Show(widget.Toast{Title: "Deleted the preset " + s.DeletedPreset, Key: "preset", Icon: icon.Trash2,
 			Action: "Undo", On: RestorePreset{}}, u)
 	}
+	// A newer release: out, to fetch, or in place, to restart into.
+	if s.Update.Seq != was.Update.Seq && s.Update.Version != "" {
+		r.toasts.Show(updateToast(s.Update), u)
+	}
 	// What went wrong, as saving.
 	if s.Note != was.Note && s.Note != "" {
 		r.toasts.Show(widget.Toast{Title: s.Note, Kind: widget.ToastError, Key: "note"}, u)
@@ -599,3 +603,20 @@ func (h *header) openMenu(u *gunim.UI) {
 
 // themeName is the window's theme: dark, with the studio's teal.
 const themeName = "mastering"
+
+// updateToast asks about a newer release: whether to fetch it, or, once
+// it is in place, whether to restart into it. It stays until answered.
+func updateToast(up Update) widget.Toast {
+	if up.Ready {
+		return widget.Toast{Title: appName + " " + up.Version + " is ready", Body: "Restart now, or it starts the next time you open the studio.",
+			Key: "update", Icon: icon.RefreshCw, Buttons: []widget.ToastButton{
+				{Label: "Restart Now", On: func(bool) gunim.Intent { return RestartToUpdate{} }},
+				{Label: "Later"},
+			}}
+	}
+	return widget.Toast{Title: appName + " " + up.Version + " is out", Body: "Fetch it now? It starts the next time you open the studio.",
+		Key: "update", Icon: icon.Download, Buttons: []widget.ToastButton{
+			{Label: "Update", On: func(bool) gunim.Intent { return FetchUpdate{} }},
+			{Label: "Not Now"},
+		}}
+}
