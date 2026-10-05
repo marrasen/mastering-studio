@@ -15,6 +15,7 @@ import (
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/driver"
+	"github.com/marrasen/gunim/install"
 )
 
 // The vocabulary the two halves share.
@@ -88,6 +89,8 @@ type (
 		Exporting bool
 		// Note says what went wrong last, for the window to show.
 		Note string
+		// Update is the newer release the window tells of.
+		Update Update
 		// Loudness is the album's, every track measured together, as
 		// bs1770gain measures an album, once every track is measured.
 		Loudness Measure
@@ -235,6 +238,12 @@ type (
 	SetListen struct{ Listen Listen }
 	// Quit is the window asked to close: its placement is kept first.
 	Quit struct{}
+	// FetchUpdate fetches the newer release told of, and puts it in
+	// place for the next start.
+	FetchUpdate struct{}
+	// RestartToUpdate closes the studio as Quit does, and starts the
+	// release put in place.
+	RestartToUpdate struct{}
 	// SetBypassAll plays the tracks without their chains and gains, or
 	// with.
 	SetBypassAll struct{ On bool }
@@ -383,7 +392,9 @@ type app struct {
 	work sync.WaitGroup
 	d    *deck
 	file string
-	ids  int
+	// offered is the newer release the window last told of.
+	offered install.Release
+	ids     int
 	// scanCache keeps what reading each file told, for the next run.
 	scanCache scanCache
 	// refsFile is where the references are kept, and chosenRefs carries
@@ -913,6 +924,8 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			if !a.watchPlugins() {
 				continue
 			}
+		case n := <-updateNews:
+			a.newsOf(n)
 		case <-a.d.done():
 			// The track played to its end.
 			a.Playing = false
@@ -922,7 +935,10 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 				return c.Err()
 			}
 			switch in := ev.Intent.(type) {
-			case Quit:
+			case Quit, RestartToUpdate:
+				if _, ok := in.(RestartToUpdate); ok {
+					restartAfter.Store(true)
+				}
 				// With changes not saved, the user says what to do.
 				if a.Unsaved {
 					a.askToClose()
@@ -934,6 +950,10 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 				if a.answered(in.Choice) {
 					quit()
 					continue
+				}
+				if in.Choice == CloseCancel {
+					// Staying, so no restart either.
+					restartAfter.Store(false)
 				}
 			default:
 				a.handle(ev.Intent)
@@ -1077,6 +1097,8 @@ func (a *app) handle(in gunim.Intent) {
 		a.record(label, track, key)
 	}
 	switch in := in.(type) {
+	case FetchUpdate:
+		a.fetchUpdate()
 	case SaveAlbum:
 		if a.untitled() {
 			a.chooseAlbum(SaveAlbumAs{})

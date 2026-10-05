@@ -20,7 +20,8 @@ itself for you alone, with no administrator needed: into
 `%LOCALAPPDATA%\Programs` on Windows, with a Start menu entry, and into
 `~/.local/share` on Linux, with an entry among your applications. Projects
 then open in it with a double-click, and it can keep itself up to date
-from the releases here. Installed apps on Windows removes it again, and
+from the releases here: by itself, or, if you untick that as you
+install, by asking first when a new release is out. Installed apps on Windows removes it again, and
 so does `mastering-studio -uninstall`. "Or run it without installing"
 runs the downloaded file as it is.
 
