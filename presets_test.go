@@ -81,3 +81,18 @@ func TestSessionBsTrackIsKeptWithTheAlbum(t *testing.T) {
 		t.Fatalf("opened again, B has %d, want the reference", c.Away.Current)
 	}
 }
+
+func TestSwitchingSidesAloneKeepsSessionBsTrack(t *testing.T) {
+	a := savedApp(t)
+	a.handle(AddReferences{Paths: []string{a.Tracks[0].File}})
+	a.dirty = false
+	// Switched to B, which takes up the first reference of itself.
+	a.handle(SwitchSide{})
+	a.save()
+	b := newApp(a.ctx, newDeck(audio.NewMixer()), a.file)
+	b.References = a.References
+	b.load()
+	if b.Away.Current != a.References[0].ID || b.Unsaved {
+		t.Fatalf("opened again, B has %d, unsaved %v, want the reference, saved", b.Away.Current, b.Unsaved)
+	}
+}

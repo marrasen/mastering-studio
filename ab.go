@@ -146,6 +146,8 @@ func (a *app) switchSide() {
 	}
 	a.Away = Session{Current: a.Current, At: at, Playing: a.Playing, Looping: a.Looping, Left: now}
 	a.Side = 1 - a.Side
+	// The album keeps each session's track: kept as it is now.
+	a.dirty = true
 	a.Current, a.Playing, a.Looping = there.Current, there.Playing, there.Looping
 	a.queued = queuedKey{}
 	switch {

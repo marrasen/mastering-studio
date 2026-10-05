@@ -290,7 +290,7 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 		u.Send(r, ShowHelp{})
 	case k.Key == input.KeyB:
 		u.Send(r, SetBypassAll{On: !r.state.Bypass})
-	case k.Key == input.KeyX:
+	case k.Key == input.KeyS:
 		u.Send(r, SwitchSide{})
 	default:
 		return false
