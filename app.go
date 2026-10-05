@@ -56,8 +56,10 @@ type (
 		Side       Side
 		Away       Session
 		Background bool
-		// Spectrum is how the meters show the spectrum, kept across runs.
+		// Spectrum is how the meters show the spectrum, and Carry where a
+		// track picked while one plays starts, both kept across runs.
 		Spectrum SpectrumView
+		Carry    Carry
 		// Presets are the names of the plugin chains kept, in order;
 		// DeletedPreset is the one deleted last, which Deletes counts.
 		Presets       []string
@@ -797,7 +799,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
 	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
-	a.Background, a.Spectrum = st.Background, st.spectrum()
+	a.Background, a.Spectrum, a.Carry = st.Background, st.spectrum(), st.Carry
 	if a.settingsFile != "" {
 		a.refsFile = filepath.Join(filepath.Dir(a.settingsFile), "references.json")
 		a.presetsFile = filepath.Join(filepath.Dir(a.settingsFile), "presets.json")
@@ -1122,14 +1124,16 @@ func (a *app) handle(in gunim.Intent) {
 			a.dirty = true
 		}
 	case Pick:
-		if a.track(in.ID) == nil || in.ID == a.Current {
+		to := a.track(in.ID)
+		if to == nil || in.ID == a.Current {
 			return
 		}
 		at, _, _ := a.d.position()
+		at = a.carried(a.track(a.Current), to, at)
 		a.Current = in.ID
 		a.dirty = true
 		if a.Playing {
-			// The same moment of the other track, with a crossfade too
+			// Where Carry says in the other track, with a crossfade too
 			// short to hear as one.
 			a.play(at, 25*time.Millisecond)
 		} else {
@@ -1284,6 +1288,9 @@ func (a *app) handle(in gunim.Intent) {
 	case SetCurves:
 		a.Curves = in.Curves
 		a.dirty = true
+	case SetCarry:
+		a.Carry = in.Carry % carries
+		a.writeSettings()
 	case SetSpectrum:
 		a.Spectrum = in.View
 		a.writeSettings()

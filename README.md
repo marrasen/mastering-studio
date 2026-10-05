@@ -49,7 +49,9 @@ waveform zooms in to the samples themselves, and a slider at its right
 draws quiet sound louder. Notes go on a track, and at times along it.
 
 **Listening.** One track plays at a time. Press a number key to switch
-to another at the same moment in the music, so you compare them by ear.
+to another as far through the music, so you compare them by ear; a
+button by the transport's next switches at the same time instead, or
+from the track's start.
 Match levels plays every track at the target loudness. Bypass plays the
 mix as it came, in time with the master, and with Match levels on it
 plays at the target loudness too. A loop
