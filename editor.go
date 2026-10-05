@@ -12,6 +12,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/text"
 )
 
 // The parts of the editor a press takes hold of.
@@ -103,6 +104,11 @@ type editor struct {
 	markGlow map[int]*anim.Float
 	cardIn   *anim.Float
 	cardID   int
+	// noteLaid is the note last laid out for its card.
+	noteLaid struct {
+		text string
+		para text.Paragraph
+	}
 	// seekMark stops the seek a click on a note waits to make, as a
 	// second click writes the note anew instead.
 	seekMark func()

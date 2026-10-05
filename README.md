@@ -63,7 +63,7 @@ They are never exported. Match levels covers both sessions.
 Ozone. Only the track you hear runs its plugins, so the rest cost the
 computer nothing. Open a plugin's own window from the chain. Copy a
 chain to other tracks with every plugin as set. The studio compensates
-for each plugin's latency. Calc LUFS also measures how much louder or
+for each plugin's latency. Measure loudness also measures how much louder or
 quieter each plugin makes the track, and the loudness range out of it;
 its card shows both, and a band behind the chain, as tall as the range,
 shows each plugin widening or narrowing it. With Match
@@ -75,7 +75,7 @@ any track of any project.
 
 **Measuring.** Tracks are measured as they will be exported, through a
 copy of their chain run offline: integrated loudness (LUFS), loudness
-range (LRA) and true peak. Any change marks a track, and Calc LUFS
+range (LRA) and true peak. Any change marks a track, and Measure loudness
 measures the marked tracks, so heavy plugins work only when you ask. To
 target finds the gain that brings a track to the target. The album's
 loudness is measured over all its tracks together. The loudness curves

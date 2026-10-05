@@ -149,7 +149,7 @@ type (
 		Measured  bool
 		Measuring bool
 		// Stale says the track changed since it was last measured, to be
-		// measured again with CalcLoudness.
+		// measured again with MeasureLoudness.
 		Stale bool
 		// Matching says its gain is being found to bring it to the
 		// target.
@@ -249,9 +249,9 @@ type (
 	}
 	// Export exports tracks: those named, or every one.
 	Export struct{ IDs []int }
-	// CalcLoudness measures every track changed since it was last
+	// MeasureLoudness measures every track changed since it was last
 	// measured.
-	CalcLoudness struct{}
+	MeasureLoudness struct{}
 	// MatchTarget sets a track's gain so it measures at the target.
 	MatchTarget struct{ ID int }
 	// NewAlbum asks where to make a new album, and opens it, empty.
@@ -589,7 +589,7 @@ func (a *app) restore(k keptTrack, ref bool) int {
 			Ranged: s.Ranged})
 		a.states[a.slots] = s.State
 	}
-	// Measured before, it waits for CalcLoudness, unless its file
+	// Measured before, it waits for MeasureLoudness, unless its file
 	// changed since.
 	if m, ok := k.Measure.measure(k.File); ok {
 		t.Measure, t.Measured, t.Measuring, t.Stale = m, true, false, k.Stale
@@ -678,7 +678,7 @@ var slots = make(chan struct{}, max(1, runtime.NumCPU()/2))
 
 // remeasure marks track id changed since it was measured. A track
 // never measured is measured once its changes pause a moment; the rest
-// wait for CalcLoudness, as measuring through heavy plugins after every
+// wait for MeasureLoudness, as measuring through heavy plugins after every
 // change would keep the computer busy.
 func (a *app) remeasure(id int) {
 	t := a.track(id)
@@ -700,9 +700,9 @@ func (a *app) measureSoon(id int, wait time.Duration) {
 	}
 }
 
-// calcLoudness measures every track changed since it was measured, and
+// measureLoudness measures every track changed since it was measured, and
 // not being measured as it is now.
-func (a *app) calcLoudness() {
+func (a *app) measureLoudness() {
 	for _, t := range slices.Concat(a.Tracks, a.References) {
 		if t.Stale && (!t.Measuring || a.measuringVersion[t.ID] != a.version[t.ID]) {
 			a.measureSoon(t.ID, 0)
@@ -797,7 +797,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
 	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
-	a.Background, a.Spectrum = st.Background, st.Spectrum
+	a.Background, a.Spectrum = st.Background, st.spectrum()
 	if a.settingsFile != "" {
 		a.refsFile = filepath.Join(filepath.Dir(a.settingsFile), "references.json")
 		a.presetsFile = filepath.Join(filepath.Dir(a.settingsFile), "presets.json")
@@ -1221,8 +1221,8 @@ func (a *app) handle(in gunim.Intent) {
 		a.dirty = true
 		a.openExport(false, nil)
 		a.export(in.IDs)
-	case CalcLoudness:
-		a.calcLoudness()
+	case MeasureLoudness:
+		a.measureLoudness()
 	case MatchTarget:
 		a.match(in.ID)
 	case gunim.Zoomed:

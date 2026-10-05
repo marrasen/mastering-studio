@@ -583,14 +583,14 @@ func TestTheRestartButtonPlaysFromTheStart(t *testing.T) {
 	}
 }
 
-func TestCalcLUFSCountsTheTracksChangedAndMeasuresThem(t *testing.T) {
+func TestMeasureLoudnessCountsTheTracksChangedAndMeasuresThem(t *testing.T) {
 	a := album()
 	two := a.Tracks[0]
 	two.ID = 2
 	a.Tracks = append(a.Tracks, two)
 	a.Tracks[0].Stale = true
 	w, r, run := stage(t, a)
-	if got := r.header.calc.words; got != "Calc LUFS · 1" {
+	if got := r.header.calc.words; got != "Measure loudness · 1" {
 		t.Fatalf("the button reads %q, want one track to measure", got)
 	}
 	b := boundsOf(t, w, run, r.header.calc)
@@ -598,7 +598,7 @@ func TestCalcLUFSCountsTheTracksChangedAndMeasuresThem(t *testing.T) {
 	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
 	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
 	run(1)
-	if _, rest := edits(w); len(rest) != 1 || rest[0] != (CalcLoudness{}) {
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (MeasureLoudness{}) {
 		t.Fatalf("the button sent %v", rest)
 	}
 }
@@ -729,7 +729,7 @@ func TestMatchingATrackNotMeasuredAsksForItsLoudness(t *testing.T) {
 	w, r, run := stage(t, a)
 	m := r.trans.match
 	// In full words, or fewer in a narrow window.
-	if !m.warn || (m.words != "Calc LUFS first" && m.words != "Calc first") {
+	if !m.warn || (m.words != "Measure loudness first" && m.words != "Measure first") {
 		t.Fatalf("matching a track not measured, the button reads %q, warning %v", m.words, m.warn)
 	}
 	b := boundsOf(t, w, run, m)
@@ -737,7 +737,7 @@ func TestMatchingATrackNotMeasuredAsksForItsLoudness(t *testing.T) {
 	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
 	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
 	run(1)
-	if _, rest := edits(w); len(rest) != 1 || !reflect.DeepEqual(rest[0], CalcLoudness{}) {
+	if _, rest := edits(w); len(rest) != 1 || !reflect.DeepEqual(rest[0], MeasureLoudness{}) {
 		t.Fatalf("the button sent %v, want the track measured", rest)
 	}
 }
@@ -1215,8 +1215,12 @@ func TestTheSpectrumAsLeftIsKeptForTheNextRun(t *testing.T) {
 	app := newApp(ctx, newDeck(audio.NewMixer()), "")
 	app.settingsFile = filepath.Join(t.TempDir(), "settings.json")
 	app.handle(SetSpectrum{View: want})
-	if got := readSettings(app.settingsFile).Spectrum; got != want {
+	if got := readSettings(app.settingsFile).spectrum(); got != want {
 		t.Fatalf("the settings keep %+v, want %+v", got, want)
+	}
+	// The first run, with no settings, shows the output alone.
+	if got := readSettings(filepath.Join(t.TempDir(), "none.json")).spectrum(); got != (SpectrumView{HideIn: true}) {
+		t.Fatalf("the first run shows the spectrum as %+v", got)
 	}
 }
 
@@ -1299,4 +1303,30 @@ func TestTheChainsMenuCopiesAndKeepsPresets(t *testing.T) {
 	if _, rest := edits(w); len(rest) != 1 || rest[0] != (LoadPreset{Track: 1, Name: "Gentle"}) {
 		t.Fatalf("picking a preset sent %v", rest)
 	}
+}
+
+func TestATimedNotesCardHoldsAllOfItsNote(t *testing.T) {
+	a := album()
+	long := "The hats get harsh here once the chorus opens up; try a gentler shelf above 8 kHz, " +
+		"and ask the artist whether the delay throw on the last word is meant to ring out this long"
+	a.Tracks[0].Marks = []Mark{{ID: 1, At: 4 * time.Second, Text: long}, {ID: 2, At: 6 * time.Second, Text: "Hats"}}
+	_, r, _ := stage(t, a)
+	ed := r.editor
+	card, _ := ed.cardOf(0)
+	para := ed.noteText(a.Tracks[0].Marks[0])
+	if para.Truncated || len(para.Lines) < 3 || card.Size().W > cardMaxW || card.Size().H < 19+para.Size.H {
+		t.Fatalf("a long note's card is %v, its text %d lines, cut %v", card.Size(), len(para.Lines), para.Truncated)
+	}
+	if short, _ := ed.cardOf(1); short.Size().H != 34 {
+		t.Fatalf("a short note's card is %v tall, want one line's", short.Size().H)
+	}
+}
+
+func TestATracksRowCountsItsTimedNotes(t *testing.T) {
+	// Drawn without fault, with a note and with notes at times.
+	a := album()
+	a.Tracks[0].Note = "Low end"
+	a.Tracks[0].Marks = []Mark{{ID: 1, At: time.Second, Text: "a"}, {ID: 2, At: 2 * time.Second, Text: "b"}}
+	_, _, run := stage(t, a)
+	run(2)
 }

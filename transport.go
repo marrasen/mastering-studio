@@ -43,7 +43,7 @@ func newTransport(r *root) *transport {
 		// Matching a track not yet measured waits on its loudness: the
 		// button measures it.
 		if t.match.warn {
-			u.Send(r, CalcLoudness{})
+			u.Send(r, MeasureLoudness{})
 			return
 		}
 		u.Send(r, SetMatch{On: !r.state.Match})
@@ -65,7 +65,7 @@ func (t *transport) show(s Album) {
 	t.match.words, t.match.warn = "Match levels", false
 	if tr, ok := t.r.track(); ok && s.Match {
 		if _, matched := s.matchDB(&tr); !matched {
-			t.match.words, t.match.warn = "Calc LUFS first", true
+			t.match.words, t.match.warn = "Measure loudness first", true
 			if tr.Measuring {
 				t.match.words = "Measuring…"
 			}
@@ -95,7 +95,7 @@ func (t *transport) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	kids.At(2).Place(geom.Pt(164, mid-20))
 	// The buttons at the right in their words, or, where they would
 	// crowd the time, in fewer.
-	short := map[string]string{"Autoplay next": "Autoplay", "Match levels": "Match", "Calc LUFS first": "Calc first"}
+	short := map[string]string{"Autoplay next": "Autoplay", "Match levels": "Match", "Measure loudness first": "Measure first"}
 	for _, b := range []*pill{t.album, t.match} {
 		if s, ok := short[b.words]; ok && t.compact {
 			b.words = s

@@ -2,7 +2,7 @@
 // album: its tracks, each cut, faded, and set apart from the one before
 // by the same silence; played one at a time, a key or a click switching
 // to another at the same moment, to compare; measured as they will be
-// exported, loudness, its range and true peak, when Calc LUFS asks, the
+// exported, loudness, its range and true peak, when Measure loudness asks, the
 // tracks changed since marked; and exported, each at its own length,
 // to WAV files of 16 or 24 bits, dithered, or 32-bit float, and MP3.
 //

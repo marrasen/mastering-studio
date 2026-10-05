@@ -401,14 +401,32 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		run.Paint(p, geom.Pt(ring.Min.X+(30-run.Advance)/2, ring.Min.Y+7), faded(numColor, in))
 	}
 	textX := ring.Max.X + 12
+	// After the title, whether a note waits on the track, and how many
+	// notes at times it has.
 	room := row.Max.X - textX - 92
+	badges := float32(0)
 	if t.Note != "" {
-		// A note waits on the track: a mark after its title.
-		room -= 20
-		at := textX + min(shaped(t.Title, 14, true).Advance, room) + 6
-		widget.PaintIcon(p, f.Theme, icon.MessageSquareText, geom.Rc(at, row.Min.Y+11, 14, 14), faded(amber, 0.9*in))
+		badges += 20
 	}
-	paintFit(p, t.Title, 14, true, geom.Pt(textX, row.Min.Y+10), room, faded(ink, 0.92*in))
+	count := ""
+	if len(t.Marks) > 0 {
+		count = strconv.Itoa(len(t.Marks))
+		badges += 26 + shapedFace(count, 10, true).Advance
+	}
+	title := min(shaped(t.Title, 14, true).Advance, room-badges)
+	paintFit(p, t.Title, 14, true, geom.Pt(textX, row.Min.Y+10), title, faded(ink, 0.92*in))
+	at := textX + title + 6
+	if t.Note != "" {
+		widget.PaintIcon(p, f.Theme, icon.MessageSquareText, geom.Rc(at, row.Min.Y+11, 14, 14), faded(amber, 0.9*in))
+		at += 20
+	}
+	if count != "" {
+		run := shapedFace(count, 10, true)
+		pill := geom.Rc(at, row.Min.Y+10, 20+run.Advance, 16)
+		p.RRect(pill, 8, paint.Solid(faded(amber, 0.16*in)))
+		widget.PaintIcon(p, f.Theme, icon.Clock, geom.Rc(at+4, row.Min.Y+12, 12, 12), faded(amber, 0.9*in))
+		run.Paint(p, geom.Pt(at+17, row.Min.Y+12), faded(amber, in))
+	}
 	// How long it exports, the silence before it and all.
 	if t.Scanned {
 		shapedFace(clock(lengthOf(t, s.gapOf(&t))), 10, false).Paint(p, geom.Pt(textX, row.Min.Y+30),
@@ -437,7 +455,7 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		alpha := in
 		if t.Stale {
 			// Changed since: the reading is old, faint, with a dot by
-			// it, until Calc LUFS measures it again.
+			// it, until Measure loudness measures it again.
 			alpha *= 0.4
 			p.RRect(geom.Rc(right-lufs.Advance-11, row.Min.Y+15, 6, 6), 3, paint.Solid(faded(amber, in)))
 		}

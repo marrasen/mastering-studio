@@ -354,7 +354,7 @@ func newHeader(r *root) *header {
 		u.Send(r, OpenExport{})
 	})
 	h.export.primary = true
-	h.calc = newPill("Calc LUFS", func(u *gunim.UI) { u.Send(r, CalcLoudness{}) })
+	h.calc = newPill("Measure loudness", func(u *gunim.UI) { u.Send(r, MeasureLoudness{}) })
 	h.help = newIconButton(icon.CircleHelp, func(u *gunim.UI) { u.Send(r, ShowHelp{}) })
 	h.save = newPill("Save", func(u *gunim.UI) { u.Send(r, SaveAlbum{}) })
 	return h
@@ -415,9 +415,9 @@ func (h *header) show(s Album) {
 	case measuring > 0:
 		h.calc.words = fmt.Sprintf("Measuring %d…", measuring)
 	case stale > 0:
-		h.calc.words = fmt.Sprintf("Calc LUFS · %d", stale)
+		h.calc.words = fmt.Sprintf("Measure loudness · %d", stale)
 	default:
-		h.calc.words = "LUFS up to date"
+		h.calc.words = "Loudness up to date"
 	}
 	h.calc.setLit(stale > 0 && measuring == 0)
 }
