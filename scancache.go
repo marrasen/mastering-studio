@@ -24,11 +24,19 @@ const keptScans = 200
 // scanCacheDir is where the scans are kept, or "" where there is
 // nowhere.
 func scanCacheDir() string {
+	if d := cacheDir(); d != "" {
+		return filepath.Join(d, "scans")
+	}
+	return ""
+}
+
+// cacheDir is where the studio keeps what it can make again, or "".
+func cacheDir() string {
 	d, err := os.UserCacheDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(d, "marras-mastering-studio", "scans")
+	return filepath.Join(d, "marras-mastering-studio")
 }
 
 // file is where the scan of the file at path, as it is now, is kept,

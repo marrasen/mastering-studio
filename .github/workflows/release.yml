@@ -1,8 +1,11 @@
 name: Release
 
-# A tag such as v0.1.0 builds the Windows program and publishes it as a
-# release. A run started by hand builds it and keeps it as an artifact
-# of the run.
+# A tag such as v0.1.0 builds the programs for Windows and Linux and
+# publishes them as a release, each the one file a user downloads: run
+# from anywhere, it installs itself, and installed, it updates itself
+# from these releases. Their names and SHA256SUMS are what the updater
+# looks for. A run started by hand builds them and keeps them as an
+# artifact of the run.
 on:
   push:
     tags: ['v*']
@@ -12,7 +15,7 @@ permissions:
   contents: write
 
 jobs:
-  windows:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,23 +40,26 @@ jobs:
           go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --icon icon.png --manifest none \
             --product-name "Marras Mastering Studio" --file-description "Marras Mastering Studio" \
             --product-version "$VERSION" --file-version "$VERSION" \
-            --copyright "Copyright 2026 Marcus Johansson" --original-filename MarrasMasteringStudio.exe
+            --copyright "Copyright 2026 Marcus Johansson" --original-filename mastering-studio.exe
       - name: Build
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mkdir -p dist/MarrasMasteringStudio
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
-            -ldflags "-H windowsgui -s -w -X main.version=$VERSION" \
-            -o dist/MarrasMasteringStudio/MarrasMasteringStudio.exe .
-          cp README.md LICENSE NOTICE dist/MarrasMasteringStudio/
-          cd dist && zip -r "MarrasMasteringStudio-$VERSION-windows-amd64.zip" MarrasMasteringStudio
+          mkdir -p dist
+          for target in windows/amd64 linux/amd64; do
+            goos=${target%/*} goarch=${target#*/}
+            ext=""; flags="-s -w -X main.version=$VERSION"
+            if [[ $goos == windows ]]; then ext=.exe; flags="-H windowsgui $flags"; fi
+            GOOS=$goos GOARCH=$goarch CGO_ENABLED=0 go build -trimpath -ldflags "$flags" \
+              -o "dist/mastering-studio_${VERSION}_${goos}_${goarch}${ext}" .
+          done
+          cd dist && sha256sum mastering-studio_* > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: MarrasMasteringStudio-windows-amd64
-          path: dist/*.zip
+          name: mastering-studio
+          path: dist/*
       - name: Publish
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --title "Marras Mastering Studio $GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "Marras Mastering Studio $GITHUB_REF_NAME" --generate-notes

@@ -19,10 +19,10 @@ github.com/jfreymuth/pulse v0.1.3 h1:bc5TdxiB8E+2INnFjFWWgyfgXtz2IyNNNCX+Wt/ZD14
 github.com/jfreymuth/pulse v0.1.3/go.mod h1:cpYspI6YljhkUf1WLXLLDmeaaPFc3CnGLjDZf9dZ4no=
 github.com/jfreymuth/vorbis v1.0.2 h1:m1xH6+ZI4thH927pgKD8JOH4eaGRm18rEE9/0WKjvNE=
 github.com/jfreymuth/vorbis v1.0.2/go.mod h1:DoftRo4AznKnShRl1GxiTFCseHr4zR9BN3TWXyuzrqQ=
-github.com/marrasen/gunim v0.0.0-20261005093233-a87632762d40 h1:yAy25ZqTF40qtGnChODUieoygCxPjoNTrD0QpUdUYys=
-github.com/marrasen/gunim v0.0.0-20261005093233-a87632762d40/go.mod h1:ZazBcfW+lHJDZtpaWUkbutf+x/sTiNyCFOu4pWQoh2Q=
-github.com/marrasen/oto/v3 v3.5.1-gunim.3 h1:pxAsa7HDNCTVvUtAWFaC5N68ny2Se8+cnb5PJxHIqaE=
-github.com/marrasen/oto/v3 v3.5.1-gunim.3/go.mod h1:9Kr9SPGrjo18cdaKxjd2kaf99e1Ln2CUKgbJP5TpiBU=
+github.com/marrasen/gunim v0.0.0-20261005172451-48381ad0df15 h1:Bcy8ybZ/LiwbjtAan2XuNqxe3Fas+ohcB/jV1dBx9Fs=
+github.com/marrasen/gunim v0.0.0-20261005172451-48381ad0df15/go.mod h1:q3W3ljTAfZ5FS4x6iqTi7KWqCUKMgxIK1b2J/yiuhDk=
+github.com/marrasen/oto/v3 v3.5.1-gunim.4 h1:qySoQE4XnavRJdGID+jG8jZNeSYLS1XFDhICD4xUYGc=
+github.com/marrasen/oto/v3 v3.5.1-gunim.4/go.mod h1:9Kr9SPGrjo18cdaKxjd2kaf99e1Ln2CUKgbJP5TpiBU=
 github.com/mewkiz/flac v1.0.14 h1:hyRGAM8NCKznoPmIi9zz2jyO+nfmxY2ErqBnHZ+gxh4=
 github.com/mewkiz/flac v1.0.14/go.mod h1:HfPYDA+oxjyuqMu2V+cyKcxF51KM6incpw5eZXmfA6k=
 github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d h1:IL2tii4jXLdhCeQN69HNzYYW1kl0meSG0wt5+sLwszU=

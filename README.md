@@ -11,17 +11,27 @@ measured and tagged.
 
 ## Download
 
-Download the zip for Windows from the
-[latest release](https://github.com/marrasen/mastering-studio/releases/latest),
-unpack it anywhere, and run `MarrasMasteringStudio.exe`. The program is
-unsigned, so Windows may warn about an unknown publisher the first time:
-choose More info, then Run anyway.
+Download the program for your system from the
+[latest release](https://github.com/marrasen/mastering-studio/releases/latest):
+`mastering-studio_<version>_windows_amd64.exe` for Windows, or
+`mastering-studio_<version>_linux_amd64` for Linux. That one file is the
+whole program and its own installer. Run it, and it offers to install
+itself for you alone, with no administrator needed: into
+`%LOCALAPPDATA%\Programs` on Windows, with a Start menu entry, and into
+`~/.local/share` on Linux, with an entry among your applications. Projects
+then open in it with a double-click, and it can keep itself up to date
+from the releases here. Installed apps on Windows removes it again, and
+so does `mastering-studio -uninstall`. "Or run it without installing"
+runs the downloaded file as it is.
+
+The program is unsigned, so Windows may warn about an unknown publisher
+the first time: choose More info, then Run anyway.
 
 To try it without music of your own, run it once with `-demo` and a
 folder. It writes six short demo songs there, and a project of them:
 
 ```sh
-MarrasMasteringStudio.exe -demo C:\Temp\demo
+mastering-studio -demo C:\Temp\demo
 ```
 
 ## What it does
@@ -137,17 +147,22 @@ These flags help:
 | `-play` | Start playing the track picked. |
 | `-shot FILE` | Write the window to a PNG file after `-after`, then quit. |
 | `-write-icon FILE` | Write the icon to a PNG file, then quit. |
+| `-install` | Install this copy with no window, as a script would, then quit. |
+| `-uninstall` | Remove the installed studio, asking first; with `-quiet` too, asking nothing. |
 
 A release is built by pushing a tag such as `v0.1.0`. The
-[Release workflow](.github/workflows/release.yml) builds the Windows
-program with its icon and publishes it.
+[Release workflow](.github/workflows/release.yml) builds the programs for
+Windows, with its icon, and for Linux, and publishes them with a
+`SHA256SUMS` of both. Installed copies that keep themselves up to date
+fetch the new release from there, checked against those sums.
 
 ## Built with gunim
 
 The studio is drawn with [gunim](https://github.com/marrasen/gunim), a
 GPU interface toolkit in pure Go. Its meters, spectrum, waveform and
-loudness displays come from gunim's `audioui` package, and its VST3
-hosting from `audio/vst3`.
+loudness displays come from gunim's `audioui` package, its VST3
+hosting from `audio/vst3`, and its installer and updates from
+`install`.
 
 ## Licence
 
