@@ -140,7 +140,7 @@ func TestReferencesAreKeptForEveryProject(t *testing.T) {
 	}
 }
 
-func TestTheBCardAndXSwitchSidesAndAReferencePlays(t *testing.T) {
+func TestTheBCardAndSSwitchSidesAndAReferencePlays(t *testing.T) {
 	a := album()
 	ref := a.Tracks[0]
 	ref.ID, ref.Title = 9, "Reference"
@@ -155,10 +155,10 @@ func TestTheBCardAndXSwitchSidesAndAReferencePlays(t *testing.T) {
 	bar := boundsOf(t, w, run, r.ab)
 	click(bar.Min.Add(r.ab.card(SideA).Center()))
 	click(bar.Min.Add(r.ab.card(SideB).Center()))
-	w.Input(input.KeyPress{Key: input.KeyX})
+	w.Input(input.KeyPress{Key: input.KeyS})
 	run(1)
 	if _, rest := edits(w); len(rest) != 2 || rest[0] != (SwitchSide{}) || rest[1] != (SwitchSide{}) {
-		t.Fatalf("a click on A, one on B and X sent %v, want two switches", rest)
+		t.Fatalf("a click on A, one on B and S sent %v, want two switches", rest)
 	}
 	refs := boundsOf(t, w, run, r.refs)
 	click(refs.Min.Add(geom.Pt(60, rowH/2)))

@@ -48,7 +48,7 @@ with no gap, as the exported files will play. Listen in mono, or to the
 side channel alone.
 
 **A/B and references.** Two listening sessions, A and B, sit above the
-track list. Each has its own track, place, play state and loop. Press X,
+track list. Each has its own track, place, play state and loop. Press S,
 or click the other card, to switch: each takes up where it was left.
 With Play on in background, the session you don't hear keeps running,
 and its card shows where it has got to. Reference tracks, such as

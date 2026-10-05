@@ -20,7 +20,7 @@
 // step through them, Left and Right seek, with Alt to the loop's in and
 // out, Home starts over, M matches
 // levels, A plays on into the next track, B bypasses the chains, I and
-// O set a loop's in and out at the playhead, L loops, and X switches
+// O set a loop's in and out at the playhead, L loops, and S switches
 // between listening A and B, each its own track and moment, on the
 // album or among the references kept for every album. Alt with the
 // wheel, or the slider at the waveform's right, draws it louder, to see
