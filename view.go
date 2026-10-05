@@ -29,6 +29,7 @@ func registerViews(w *gunim.Window, d *deck) {
 	gunim.RegisterView(w, "release", newReleaseDialog, nil)
 	gunim.RegisterView(w, "help", newHelp, nil)
 	gunim.RegisterView(w, "unsaved", newUnsavedDialog, nil)
+	gunim.RegisterView(w, "preset", newPresetDialog, nil)
 	gunim.RegisterView(w, "export", newExportDialog,
 		func(e *exportDialog, d ExportDraft, u *gunim.UI) { e.show(d, u) })
 }
@@ -144,6 +145,11 @@ func (r *root) show(s Album, u *gunim.UI) {
 			to.Icon, to.Action, to.On = icon.Redo2, "Undo", Undo{}
 		}
 		r.toasts.Show(to, u)
+	}
+	// A preset deleted, and a way to bring it back.
+	if s.Deletes != was.Deletes && s.DeletedPreset != "" {
+		r.toasts.Show(widget.Toast{Title: "Deleted the preset " + s.DeletedPreset, Key: "preset", Icon: icon.Trash2,
+			Action: "Undo", On: RestorePreset{}}, u)
 	}
 	// What went wrong, as saving.
 	if s.Note != was.Note && s.Note != "" {

@@ -359,6 +359,8 @@ func (a *app) change(in gunim.Intent) (label string, track int, key string, ok b
 			what = "switching on "
 		}
 		return of(what+slot(in.Track, in.Slot)+" on", in.Track)
+	case LoadPreset:
+		return of("loading the preset "+in.Name+" on", in.Track)
 	case RenamePlugin:
 		return of("naming "+slot(in.Track, in.Slot)+" on", in.Track)
 	case CopyChain:

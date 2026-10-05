@@ -343,7 +343,6 @@ func (a *app) handleChain(in gunim.Intent) {
 			return
 		}
 		chain, states := a.chainOf(from)
-		at, _, _ := a.d.position()
 		to := in.To
 		if len(to) == 0 {
 			for _, t := range a.Tracks {
@@ -353,27 +352,9 @@ func (a *app) handleChain(in gunim.Intent) {
 			}
 		}
 		for _, id := range to {
-			t := a.track(id)
-			if t == nil || id == from.ID {
-				continue
-			}
-			a.dropRack(id)
-			for _, s := range t.Chain {
-				delete(a.states, s.ID)
-			}
-			t.Chain = nil
-			for _, s := range chain {
-				a.slots++
-				c := s
-				// Its gain was of the other track's sound.
-				c.ID, c.Open, c.Failed, c.Gain, c.Gained, c.LRA, c.Ranged = a.slots, false, "", 0, false, 0, false
-				t.Chain = append(t.Chain, c)
-				a.states[c.ID] = bytes.Clone(states[s.ID])
-			}
-			a.remeasureChain(id)
-			if a.Current == id && a.Playing {
-				// It plays on through its new chain.
-				a.play(at, 15*time.Millisecond)
+			if t := a.track(id); t != nil && id != from.ID {
+				a.giveChain(id, chain, states)
+				t.Preset = from.Preset
 			}
 		}
 		a.dirty = true

@@ -77,6 +77,14 @@ func (a *app) project() project {
 	for i := range a.Tracks {
 		p.Tracks = append(p.Tracks, a.kept(&a.Tracks[i]))
 	}
+	// Session B's track.
+	b := Session{Current: a.Current, Looping: a.Looping}
+	if a.Side == SideA {
+		b = a.Away
+	}
+	if k := (keptSession{Track: a.place(b.Current), Ref: indexOf(a.References, b.Current), Looping: b.Looping}); k.Track >= 0 || k.Ref >= 0 {
+		p.B = &k
+	}
 	return p
 }
 
@@ -105,15 +113,16 @@ func writeProject(path string, p project) error {
 	return err
 }
 
-// newer says the file at path is there, and newer than the one at than,
-// or than is not.
+// newer says the file at path is there, and no older than the one at
+// than, or than is not: a draft is let go as its album is saved, so one
+// as new as its album, as file times run in steps, still holds changes.
 func newer(path, than string) bool {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return false
 	}
 	ti, err := os.Stat(than)
-	return err != nil || fi.ModTime().After(ti.ModTime())
+	return err != nil || !fi.ModTime().Before(ti.ModTime())
 }
 
 // save keeps the work, as it changed: the references beside the

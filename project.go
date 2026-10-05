@@ -205,7 +205,7 @@ func (a *app) switchTo(path string, fresh bool) {
 	a.Album = Album{Gap: keep.Gap, Target: keep.Target, Bits: keep.Bits, Dither: keep.Dither, Volume: keep.Volume,
 		Plugins: keep.Plugins, Scanning: keep.Scanning, Recent: keep.Recent, RecentAlbums: keep.RecentAlbums,
 		Follow: keep.Follow, References: keep.References, Away: away, Background: keep.Background,
-		Spectrum: keep.Spectrum}
+		Spectrum: keep.Spectrum, Presets: keep.Presets}
 	a.queued = queuedKey{}
 	a.file = path
 	if fresh {

@@ -22,19 +22,23 @@ import (
 // its editor, and its menu renames, moves and removes it. Behind the
 // sound's line, a band as tall as the loudness range shows how each
 // plugin widens or narrows it, as last measured. After the cards, a
-// button adds a plugin, found by typing its name; at the end, another
-// copies the chain to other tracks.
+// button adds a plugin, found by typing its name; at the end, a menu
+// copies the chain to other tracks, and keeps it as a preset, loads
+// one, or deletes one.
 type chainRow struct {
 	anim.Group
-	r     *root
-	menu  *widget.ContextMenu
-	add   *pill
-	copy  *pill
+	r    *root
+	menu *widget.ContextMenu
+	add  *pill
+	// more is the chain's menu: copy, and the presets.
+	more  *pill
 	cards map[int]*chainCard
 	order []int
-	// track is the track shown, and slots its chain.
-	track int
-	slots []Slot
+	// track is the track shown, slots its chain, and preset the preset
+	// it was loaded from or saved as.
+	track  int
+	slots  []Slot
+	preset string
 	// flow is how far the sound has run along the joins, in pixels.
 	flow float32
 	// inLRA is the loudness range fed into the chain, as drawn, where
@@ -92,8 +96,9 @@ func newChainRow(r *root) *chainRow {
 	c := &chainRow{r: r, cards: map[int]*chainCard{}, hover: -1, press: -1, inLRA: anim.NewFloat(0)}
 	c.Add(c.inLRA)
 	c.add = newPill("+ Plugin", c.openPicker)
-	c.copy = newPill("Copy to…", c.openCopy)
-	c.Add(c.add, c.copy)
+	c.more = newPill("Chain", c.openMore)
+	c.more.menu = true
+	c.Add(c.add, c.more)
 	c.field = &slotField{TextField: widget.NewTextField(), c: c}
 	c.field.OnSubmit = func(text string) gunim.Intent {
 		in := c.named(text)
@@ -169,7 +174,7 @@ func (c *chainRow) show(t Track, s Album) {
 	if switched {
 		c.renaming = 0
 	}
-	c.track, c.slots = t.ID, t.Chain
+	c.track, c.slots, c.preset = t.ID, t.Chain, t.Preset
 	keep := map[int]bool{}
 	for _, sl := range t.Chain {
 		keep[sl.ID] = true
@@ -236,7 +241,7 @@ func cardDetail(s Slot) string {
 // along, and takes anything only while a slot is named.
 func (c *chainRow) Children() []gunim.Node {
 	c.field.Disabled = c.renaming == 0
-	return []gunim.Node{c.add, c.copy, c.field}
+	return []gunim.Node{c.add, c.more, c.field}
 }
 
 // Layout implements [gunim.Node]: the cards in a row after the label,
@@ -245,7 +250,7 @@ func (c *chainRow) Children() []gunim.Node {
 func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	c.size = cs.Max
 	// The cards narrow to leave room for the buttons.
-	room := c.size.W - chainLabelW - pillWidth("+ Plugin") - pillWidth("Copy to…") - 16
+	room := c.size.W - chainLabelW - pillWidth("+ Plugin") - menuPillWidth(c.more.words) - 16
 	var want float32
 	for _, id := range c.order {
 		want += cardWidth(c.cards[id].slot) + cardGap
@@ -270,7 +275,7 @@ func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	kids.At(0).Layout(gunim.Tight(geom.Sz(aw, 32)))
 	kids.At(0).Place(geom.Pt(x, mid-16))
 	c.addX = x
-	cw := pillWidth("Copy to…")
+	cw := menuPillWidth(c.more.words)
 	kids.At(1).Layout(gunim.Tight(geom.Sz(cw, 32)))
 	kids.At(1).Place(geom.Pt(c.size.W-cw, mid-16))
 	// The field over the card named.
@@ -392,7 +397,7 @@ func (c *chainRow) openMenu(p geom.Point, u *gunim.UI) bool {
 		icon.Trash2}
 	c.menu.Disabled = []bool{k.slot.Failed != "", false, false, i == 0, i == len(c.order)-1, false}
 	c.menu.Breaks = []int{3, 5}
-	c.menu.Captions = nil
+	c.menu.Captions, c.menu.Hints, c.menu.Checked = nil, nil, nil
 	c.menu.Picked = func(item int, u *gunim.UI) {
 		switch item {
 		case 0:
@@ -476,7 +481,7 @@ func (c *chainRow) openCopy(u *gunim.UI) {
 			items = append(items, fmt.Sprintf("%02d %s", i+1, t.Title))
 		}
 	}
-	c.menu.Items, c.menu.Icons, c.menu.Captions = items, nil, nil
+	c.menu.Items, c.menu.Icons, c.menu.Captions, c.menu.Hints, c.menu.Checked = items, nil, nil, nil, nil
 	c.menu.Disabled = make([]bool, len(items))
 	c.menu.Disabled[0] = len(ids) == 0
 	c.menu.Breaks = []int{1}
@@ -488,7 +493,77 @@ func (c *chainRow) openCopy(u *gunim.UI) {
 		}
 		u.Send(c, CopyChain{From: from, To: []int{ids[item-1]}})
 	}
-	c.menu.Open(geom.Pt(c.size.W-pillWidth("Copy to…"), c.size.H/2+16), u)
+	c.menu.Open(c.moreAt(), u)
+}
+
+// moreAt is where the chain's menus open: under its button.
+func (c *chainRow) moreAt() geom.Point {
+	return geom.Pt(c.size.W-menuPillWidth(c.more.words), c.size.H/2+16)
+}
+
+// openMore opens the chain's menu: copy it to other tracks, keep it as
+// its preset or a new one, load a preset, or delete one.
+func (c *chainRow) openMore(u *gunim.UI) {
+	if c.menu == nil || c.track == 0 {
+		return
+	}
+	presets := c.r.state.Presets
+	save := "Save preset"
+	has := c.preset != "" && slices.Contains(presets, c.preset)
+	if has {
+		save = "Save preset “" + c.preset + "”"
+	}
+	empty := len(c.slots) == 0
+	c.menu.Items = []string{"Copy to…", save, "Save preset as…", "Load preset…", "Delete preset…"}
+	c.menu.Icons = []*icon.Icon{icon.Copy, icon.Save, icon.Save, icon.FolderOpen, icon.Trash2}
+	c.menu.Disabled = []bool{false, empty || !has, empty, len(presets) == 0, len(presets) == 0}
+	c.menu.Hints, c.menu.Checked, c.menu.Captions = nil, nil, nil
+	c.menu.Breaks = []int{1, 3}
+	track := c.track
+	c.menu.Picked = func(item int, u *gunim.UI) {
+		switch item {
+		case 0:
+			c.openCopy(u)
+		case 1:
+			u.Send(c, SavePreset{Track: track})
+		case 2:
+			u.Send(c, NamePreset{Track: track})
+		case 3:
+			c.openPresets(u, false)
+		case 4:
+			c.openPresets(u, true)
+		}
+	}
+	c.menu.Open(c.moreAt(), u)
+}
+
+// openPresets opens the menu of the presets kept, to load one, or,
+// del, to delete one.
+func (c *chainRow) openPresets(u *gunim.UI, del bool) {
+	presets := slices.Clone(c.r.state.Presets)
+	c.menu.Items = presets
+	c.menu.Icons = make([]*icon.Icon, len(presets))
+	c.menu.Checked = make([]bool, len(presets))
+	for i, p := range presets {
+		c.menu.Icons[i] = icon.AudioLines
+		if del {
+			c.menu.Icons[i] = icon.Trash2
+		}
+		c.menu.Checked[i] = !del && p == c.preset
+	}
+	c.menu.Disabled, c.menu.Hints, c.menu.Captions, c.menu.Breaks = nil, nil, nil, nil
+	track := c.track
+	c.menu.Picked = func(item int, u *gunim.UI) {
+		if item < 0 || item >= len(presets) {
+			return
+		}
+		if del {
+			u.Send(c, DeletePreset{Name: presets[item]})
+			return
+		}
+		u.Send(c, LoadPreset{Track: track, Name: presets[item]})
+	}
+	c.menu.Open(c.moreAt(), u)
 }
 
 // Paint implements [gunim.Node]: the label, the sound's line through the
