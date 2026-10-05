@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -48,6 +49,7 @@ func (a *app) rackOf(t *Track) *rack {
 	if !a.Playing || a.Current != t.ID {
 		r.setActive(false)
 	}
+	r.match = a.Match
 	a.racks[t.ID] = r
 	return r
 }
@@ -175,8 +177,16 @@ func (a *app) watchPlugins() bool {
 				changed = true
 			}
 		}
-		if read && a.readRack(id) {
+		if !read {
+			continue
+		}
+		// The plugins' settings as they were, for the step to undo.
+		was := a.snapshot()
+		if a.readRack(id) {
 			a.dirty = true
+			if !a.isRef(id) {
+				a.recordSnap(was, "plugin settings on "+t.Title, id, fmt.Sprintf("plugins %d", id))
+			}
 			a.remeasureChain(id)
 			changed = true
 		}
@@ -200,6 +210,14 @@ func (a *app) slot(id, sid int) (t *Track, at int) {
 		return nil, -1
 	}
 	return t, slices.IndexFunc(t.Chain, func(s Slot) bool { return s.ID == sid })
+}
+
+// title is what slot s is called: its own name, or its plugin's.
+func (s Slot) title() string {
+	if s.Label != "" {
+		return s.Label
+	}
+	return s.Name
 }
 
 func (a *app) handleChain(in gunim.Intent) {
@@ -277,6 +295,18 @@ func (a *app) handleChain(in gunim.Intent) {
 		}
 		a.dirty = true
 		a.remeasureChain(t.ID)
+	case RenamePlugin:
+		t, i := a.slot(in.Track, in.Slot)
+		if i < 0 {
+			return
+		}
+		// Named as the plugin, or not at all, it is called the plugin's.
+		label := strings.TrimSpace(in.Label)
+		if label == t.Chain[i].Name {
+			label = ""
+		}
+		t.Chain[i].Label = label
+		a.dirty = true
 	case SetBypass:
 		t, i := a.slot(in.Track, in.Slot)
 		if i < 0 {
@@ -302,7 +332,7 @@ func (a *app) handleChain(in gunim.Intent) {
 		if lp == nil {
 			return
 		}
-		if err := lp.p.OpenEditor(fmt.Sprintf("%s · %s", t.Chain[i].Name, t.Title)); err != nil {
+		if err := lp.p.OpenEditor(fmt.Sprintf("%s · %s", t.Chain[i].title(), t.Title)); err != nil {
 			a.Note = err.Error()
 			return
 		}
@@ -335,7 +365,8 @@ func (a *app) handleChain(in gunim.Intent) {
 			for _, s := range chain {
 				a.slots++
 				c := s
-				c.ID, c.Open, c.Failed = a.slots, false, ""
+				// Its gain was of the other track's sound.
+				c.ID, c.Open, c.Failed, c.Gain, c.Gained, c.LRA, c.Ranged = a.slots, false, "", 0, false, 0, false
 				t.Chain = append(t.Chain, c)
 				a.states[c.ID] = bytes.Clone(states[s.ID])
 			}
@@ -394,6 +425,11 @@ type queuedKey struct {
 // queueNext has the deck play the track after the one playing once it
 // ends, in album play, and nothing otherwise.
 func (a *app) queueNext() {
+	// The deck turned to the track queued, and the application has yet
+	// to hear of it: queued again now, it would play twice.
+	if _, _, id := a.d.position(); id != 0 && id != a.Current {
+		return
+	}
 	var want queuedKey
 	list := a.listOf(a.Current)
 	if i := indexOf(list, a.Current); a.AlbumPlay && a.d.done() != nil && i >= 0 && i+1 < len(list) {

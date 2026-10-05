@@ -46,6 +46,11 @@ var helpGroups = []struct {
 		{"Double-click", "Fit the whole track"},
 		{"Shift + drag", "Move a handle finely"},
 	}},
+	{"Project", [][2]string{
+		{"Ctrl + S", "Save; Ctrl + Shift + S saves as"},
+		{"Ctrl + Z", "Undo the last change"},
+		{"Ctrl + Shift + Z", "Redo it"},
+	}},
 	{"Help", [][2]string{
 		{"F1, ?", "This help"},
 		{"Ctrl + wheel", "Zoom the whole window"},

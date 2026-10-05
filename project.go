@@ -206,6 +206,7 @@ func (a *app) switchTo(path string, fresh bool) {
 	a.queued = queuedKey{}
 	a.file = path
 	if fresh {
+		a.history = history{}
 		a.dirty = true
 		a.save()
 	} else {
@@ -215,11 +216,19 @@ func (a *app) switchTo(path string, fresh bool) {
 	a.applyLevel()
 }
 
-// saveAs keeps the album open at path from now on.
+// saveAs saves the album at path, and keeps it there from now on: the
+// draft it had, of where it was, or the untitled album, goes.
 func (a *app) saveAs(path string) {
+	was := a.draftPath()
 	a.file = path
-	a.dirty = true
-	a.save()
+	if err := a.saveNow(); err != nil {
+		a.Note = err.Error()
+		return
+	}
+	if was != "" && was != a.draftPath() {
+		_ = os.Remove(was)
+	}
+	a.Untitled = false
 	a.opened(path)
 }
 
@@ -242,11 +251,15 @@ func (a *app) chooseAlbum(in gunim.Intent) {
 			path, err = a.saveDialog(driver.SaveOptions{Title: "Save project as", Name: a.AlbumName + albumExt,
 				Filters: albumFilter})
 		}
+		// Asked away, the answer is no album, so a close waiting on it
+		// waits no more.
 		if err != nil || path == "" {
-			return
+			path = ""
+		} else {
+			path = withExt(path)
 		}
 		select {
-		case a.albums <- albumChoice{in: in, path: withExt(path)}:
+		case a.albums <- albumChoice{in: in, path: path}:
 		case <-a.ctx.Done():
 		}
 	}()
@@ -260,6 +273,9 @@ type albumChoice struct {
 
 // chosenAlbum does what the album was chosen for.
 func (a *app) chosenAlbum(c albumChoice) {
+	if c.path == "" {
+		return
+	}
 	switch c.in.(type) {
 	case OpenAlbum:
 		a.switchTo(c.path, false)

@@ -63,7 +63,13 @@ They are never exported. Match levels covers both sessions.
 Ozone. Only the track you hear runs its plugins, so the rest cost the
 computer nothing. Open a plugin's own window from the chain. Copy a
 chain to other tracks with every plugin as set. The studio compensates
-for each plugin's latency.
+for each plugin's latency. Calc LUFS also measures how much louder or
+quieter each plugin makes the track, and the loudness range out of it;
+its card shows both, and a band behind the chain, as tall as the range,
+shows each plugin widening or narrowing it. With Match
+levels on, a bypassed plugin is played as that gain, so you compare its
+sound and not its level. Right-click a card to rename it, as when the
+same plugin is in the chain twice.
 
 **Measuring.** Tracks are measured as they will be exported, through a
 copy of their chain run offline: integrated loudness (LUFS), loudness
@@ -82,11 +88,19 @@ in and out of the chain, or a spectrogram.
 once, to 16 or 24-bit WAV with dither, or 32-bit float. With
 [LAME](https://lame.sourceforge.io/) installed, it writes MP3 as well.
 Each file is tagged with the artist, release, title and track number.
-A text report of the export is written if you ask for one.
+A text report of the export is written if you ask for one. The
+export's list marks the tracks with a note, and how many notes at times
+each has; Copy notes to clipboard copies them all, to send the artist.
 
 **Projects.** A project is a `.mastering` file. It keeps its tracks'
 paths relative to its own folder, so a project opens wherever its
-folder and the music move together.
+folder and the music move together. Your work is kept as you go, in a
+draft beside the settings, and an asterisk after the project's name
+shows changes not yet saved; Save (Ctrl+S) writes them to the project.
+Closing with changes not saved asks whether to save them, keep the
+draft for next time, or discard them. Undo (Ctrl+Z) and redo
+(Ctrl+Shift+Z) work across the whole project, and an undo shows the
+track it changed.
 
 Press F1 or ? in the studio for every key.
 

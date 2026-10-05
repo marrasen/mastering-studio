@@ -98,6 +98,11 @@ type editor struct {
 	writeAt   time.Duration
 	writeID   int
 	hotMark   int
+	// markGlow lights each note's pin as the pointer comes over it, by
+	// its ID; cardIn brings in the card of note cardID.
+	markGlow map[int]*anim.Float
+	cardIn   *anim.Float
+	cardID   int
 	// seekMark stops the seek a click on a note waits to make, as a
 	// second click writes the note anew instead.
 	seekMark func()
@@ -123,6 +128,8 @@ func newEditor(r *root) *editor {
 	e.silence = -1
 	e.markField = newMarkField(e)
 	e.hotMark = -1
+	e.markGlow, e.cardIn = map[int]*anim.Float{}, anim.NewFloat(0)
+	e.Add(e.cardIn)
 	e.gram = anim.NewFloat(0)
 	e.Add(e.gram)
 	for i := range e.curves {

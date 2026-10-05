@@ -22,14 +22,16 @@ import (
 const rowH = 74
 
 // rowLook is a row's animated state, by its track's ID: where it is,
-// how lit, how picked, and its readings as they count to new ones.
+// how lit, how picked by session A and by B, and its readings as they
+// count to new ones.
 type rowLook struct {
-	y, lit, picked, in *anim.Float
-	lufs, peak         *anim.Float
-	progress           *anim.Float
-	gone               bool
-	thumb              []float32
-	thumbOf            *audioui.Wave
+	y, lit, in       *anim.Float
+	pickedA, pickedB *anim.Float
+	lufs, peak       *anim.Float
+	progress         *anim.Float
+	gone             bool
+	thumb            []float32
+	thumbOf          *audioui.Wave
 }
 
 // trackList is the album's tracks, or the references, a row each, in
@@ -72,15 +74,22 @@ func (l *trackList) look(id int) *rowLook {
 	if lk := l.rows[id]; lk != nil {
 		return lk
 	}
-	lk := &rowLook{y: anim.NewFloat(float32(len(l.order)) * rowH), lit: anim.NewFloat(0), picked: anim.NewFloat(0),
-		in: anim.NewFloat(0), lufs: anim.NewFloat(0), peak: anim.NewFloat(0), progress: anim.NewFloat(0)}
+	lk := &rowLook{y: anim.NewFloat(float32(len(l.order)) * rowH), lit: anim.NewFloat(0), pickedA: anim.NewFloat(0),
+		pickedB: anim.NewFloat(0), in: anim.NewFloat(0), lufs: anim.NewFloat(0), peak: anim.NewFloat(0),
+		progress: anim.NewFloat(0)}
 	lk.in.Animate(1, anim.Spring{Response: 0.4, Damping: 0.8})
-	l.Add(lk.y, lk.lit, lk.picked, lk.in, lk.lufs, lk.peak, lk.progress)
+	l.Add(lk.y, lk.lit, lk.pickedA, lk.pickedB, lk.in, lk.lufs, lk.peak, lk.progress)
 	l.rows[id] = lk
 	return lk
 }
 
 func (l *trackList) show(s Album, u *gunim.UI) {
+	// Each session's track, lit in its colour: fully while it is heard,
+	// half while the other is.
+	a, b := s.Current, s.Away.Current
+	if s.Side == SideB {
+		a, b = b, a
+	}
 	live := map[int]bool{}
 	l.order = l.order[:0]
 	for i, t := range l.list(&s) {
@@ -91,7 +100,8 @@ func (l *trackList) show(s Album, u *gunim.UI) {
 		if t.ID != l.moving {
 			lk.y.Animate(float32(i)*rowH, anim.Spring{Response: 0.35, Damping: 0.85})
 		}
-		lk.picked.Animate(map[bool]float32{false: 0, true: 1}[t.ID == s.Current], anim.Snappy)
+		lk.pickedA.Animate(onOff(t.ID == a)*(1-0.5*float32(s.Side)), anim.Snappy)
+		lk.pickedB.Animate(onOff(t.ID == b)*(0.5+0.5*float32(s.Side)), anim.Snappy)
 		if t.Measured {
 			if lk.lufs.Value() == 0 {
 				lk.lufs.Jump(t.Measure.LUFS)
@@ -120,7 +130,7 @@ func (l *trackList) Step(dt time.Duration) bool {
 	moving := l.Group.Step(dt)
 	for id, lk := range l.rows {
 		if lk.gone && lk.in.Value() < 0.01 && !lk.in.Active() {
-			l.Remove(lk.y, lk.lit, lk.picked, lk.in, lk.lufs, lk.peak, lk.progress)
+			l.Remove(lk.y, lk.lit, lk.pickedA, lk.pickedB, lk.in, lk.lufs, lk.peak, lk.progress)
 			delete(l.rows, id)
 		}
 	}
@@ -355,20 +365,25 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 	row := geom.Rc(10, y+4, box.W-20, rowH-8)
 	mid := row.Min.Add(geom.Pt(row.Size().W/2, row.Size().H/2))
 	defer p.Push(paint.Scale(0.92+0.08*in, mid))()
-	picked := lk.picked.Value()
+	// Lit in the colour of the session that has it, the one heard over
+	// the other.
+	picked, tint := lk.pickedA.Value(), teal
+	if b := lk.pickedB.Value(); b > picked {
+		picked, tint = b, sky
+	}
 	if id == l.moving {
 		p.ShadowRRect(row, 14, paint.Solid(raised), paint.Shadow{Blur: 18, Offset: geom.Pt(0, 6), Color: faded(night, 0.7)})
 	}
-	p.RRect(row, 14, paint.Solid(faded(mix(raised, teal, 0.14*picked), (0.55+0.45*picked)*in)))
+	p.RRect(row, 14, paint.Solid(faded(mix(raised, tint, 0.14*picked), (0.55+0.45*picked)*in)))
 	if lit := lk.lit.Value(); lit > 0.01 {
 		p.RRect(row, 14, paint.Solid(faded(ink, 0.05*lit*in)))
 	}
 	if picked > 0.01 {
-		p.RRectStroke(row, 14, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1.5, Color: faded(teal, 0.8*picked*in)})
+		p.RRectStroke(row, 14, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1.5, Color: faded(tint, 0.8*picked*in)})
 	}
 	// The number, in a ring that spins while the track is read.
 	ring := geom.Rc(row.Min.X+12, mid.Y-15, 30, 30)
-	numColor := mix(faded(ink, 0.7), teal, picked)
+	numColor := mix(faded(ink, 0.7), tint, picked)
 	if !t.Scanned || t.Measuring {
 		l.paintSpin(p, ring, faded(teal, 0.8*in))
 	} else {
@@ -376,7 +391,7 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 	}
 	if t.ID == s.Current && s.Playing {
 		// The track playing shows bars moving with it in its ring.
-		audioui.PaintBars(p, l.r.meters.bands[:], geom.Pt(ring.Min.X+17, ring.Min.Y+15), faded(teal, in))
+		audioui.PaintBars(p, l.r.meters.bands[:], geom.Pt(ring.Min.X+17, ring.Min.Y+15), faded(tint, in))
 	} else {
 		label := strconv.Itoa(number)
 		if l.refs {
@@ -407,7 +422,7 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		for i, v := range lk.thumb {
 			h := max(1, 16*min(float32(math.Sqrt(float64(v)))*1.4, 1))
 			p.RRect(geom.Rc(textX+float32(i)*cw, base-h/2, max(cw-1, 1), h), 0.5,
-				paint.Solid(faded(mix(ink, teal, picked), 0.35*in)))
+				paint.Solid(faded(mix(ink, tint, picked), 0.35*in)))
 		}
 	}
 	// The readings, right: loudness against the target, and true peak.

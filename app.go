@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -95,7 +93,17 @@ type (
 		AlbumFile    string
 		AlbumName    string
 		RecentAlbums []string
-		Scanning     bool
+		// Unsaved says the album holds changes the user has not saved,
+		// kept in its draft; Untitled that it was never saved.
+		Unsaved  bool
+		Untitled bool
+		// UndoLabel and RedoLabel name the changes undo and redo take
+		// back or make again, or are empty; Undone says what the last
+		// undo or redo did, which Undos counts.
+		UndoLabel, RedoLabel string
+		Undone               string
+		Undos                int
+		Scanning             bool
 	}
 	// Track is one of the album's tracks.
 	Track struct {
@@ -253,6 +261,12 @@ type (
 	}
 	// RemovePlugin takes a plugin out of a track's chain.
 	RemovePlugin struct{ Track, Slot int }
+	// RenamePlugin names a slot of a track's chain apart from its plugin,
+	// or, Label empty, after it again.
+	RenamePlugin struct {
+		Track, Slot int
+		Label       string
+	}
 	// MovePlugin moves the plugin at From in a track's chain to To.
 	MovePlugin struct{ Track, From, To int }
 	// SetBypass passes a plugin by, or runs it again.
@@ -324,8 +338,17 @@ type keptTrack struct {
 type keptSlot struct {
 	Path, Class  string
 	Name, Vendor string
+	Label        string `json:",omitempty"`
 	Bypass       bool
 	State        []byte
+	// Gain is how much louder the plugin made the track, as last
+	// measured, where Gained says it was.
+	Gain   float32 `json:",omitempty"`
+	Gained bool    `json:",omitempty"`
+	// LRA is the loudness range out of the plugin, as last measured,
+	// where Ranged says it had one.
+	LRA    float32 `json:",omitempty"`
+	Ranged bool    `json:",omitempty"`
 }
 
 // app is the application half.
@@ -345,6 +368,15 @@ type app struct {
 	// the files chosen to add to them.
 	refsFile   string
 	chosenRefs chan []string
+	// drafts is the folder of the albums' drafts, or "" for none: the
+	// album is then saved as it changes. asking says the dialog of
+	// changes not saved is up, and quitAfterSave that the window closes
+	// once the album is saved where the user says.
+	drafts        string
+	asking        bool
+	quitAfterSave bool
+	// history is the album's changes, to undo and redo.
+	history
 	// scans and measures carry what the background tells; measuring
 	// holds how to stop each track's measuring, and settle when it is
 	// due once its edits have paused.
@@ -458,15 +490,23 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 	return a
 }
 
-// load takes up the album kept in the file.
+// load takes up the album kept in the file, or in its draft, where
+// that holds changes newer than the file.
 func (a *app) load() {
-	b, err := os.ReadFile(a.file)
-	if err != nil {
+	a.history = history{}
+	a.Unsaved, a.Untitled = false, a.untitled()
+	from := a.file
+	if d := a.draftPath(); d != "" && d != a.file && newer(d, a.file) {
+		from = d
+	}
+	p, ok := readProject(from)
+	if !ok {
 		return
 	}
-	var p project
-	if json.Unmarshal(b, &p) != nil {
-		return
+	// A draft, or the untitled album with anything on it, holds changes
+	// not saved.
+	if from != a.file || (a.untitled() && len(p.Tracks) > 0) {
+		a.savedID, a.Unsaved = -1, true
 	}
 	a.Gap, a.Target, a.Bits, a.Dither = p.Gap, p.Target, p.Bits, p.Dither
 	a.ExportDir = found(a.file, p.ExportDir, p.ExportAt)
@@ -509,7 +549,8 @@ func (a *app) restore(k keptTrack, ref bool) int {
 	for _, s := range k.Chain {
 		a.slots++
 		t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
-			Vendor: s.Vendor, Bypass: s.Bypass})
+			Vendor: s.Vendor, Label: s.Label, Bypass: s.Bypass, Gain: s.Gain, Gained: s.Gained, LRA: s.LRA,
+			Ranged: s.Ranged})
 		a.states[a.slots] = s.State
 	}
 	// Measured before, it waits for CalcLoudness, unless its file
@@ -531,45 +572,10 @@ func (a *app) kept(t *Track) keptTrack {
 	}
 	for _, s := range t.Chain {
 		k.Chain = append(k.Chain, keptSlot{Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor,
-			Bypass: s.Bypass, State: a.states[s.ID]})
+			Label: s.Label, Bypass: s.Bypass, State: a.states[s.ID], Gain: s.Gain, Gained: s.Gained, LRA: s.LRA,
+			Ranged: s.Ranged})
 	}
 	return k
-}
-
-// save keeps the album, and the references, if they changed.
-func (a *app) save() {
-	if !a.dirty {
-		return
-	}
-	a.readStates()
-	a.saveRefs()
-	if a.file == "" {
-		return
-	}
-	a.dirty = false
-	// The album keeps the track A plays.
-	cur, looping := a.sideA()
-	p := project{Release: a.Release, Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither,
-		ExportDir: relative(a.file, a.ExportDir), ExportAt: a.ExportDir, ExportWAV: &a.ExportWAV, ExportMP3: a.ExportMP3,
-		MP3Rate: a.MP3Rate, Report: a.ExportReport,
-		Volume: a.Volume, Match: a.Match, Current: a.place(cur), AlbumPlay: a.AlbumPlay,
-		Follow: a.Follow, View: a.View, Curves: &a.Curves, Looping: looping}
-	for i := range a.Tracks {
-		p.Tracks = append(p.Tracks, a.kept(&a.Tracks[i]))
-	}
-	b, err := json.MarshalIndent(p, "", "\t")
-	if err == nil {
-		err = os.MkdirAll(filepath.Dir(a.file), 0o755)
-	}
-	if err == nil {
-		tmp := a.file + ".tmp"
-		if err = os.WriteFile(tmp, b, 0o644); err == nil {
-			err = os.Rename(tmp, a.file)
-		}
-	}
-	if err != nil {
-		log.Printf("mastering: keeping the album: %v", err)
-	}
 }
 
 // track returns the track with ID id, of the album or the references,
@@ -588,6 +594,10 @@ func (a *app) add(path, title string) { a.addTo(false, path, title, Edit{}) }
 // and starts reading it. A reference has no silence before it.
 func (a *app) addTo(ref bool, path, title string, e Edit) int {
 	a.ids++
+	// A reference added as an MP3 is called as its tag says.
+	if title == "" && ref && strings.EqualFold(filepath.Ext(path), ".mp3") {
+		title = readTags(path).name()
+	}
 	if title == "" {
 		title = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	}
@@ -678,6 +688,7 @@ func (a *app) measured(m measured) {
 	}
 	t.Measure, t.Measured = m.m, true
 	t.Stale = m.version != a.version[m.id]
+	a.takeSteps(t)
 	// The project keeps it, so the next run need not measure again.
 	a.dirty = true
 	a.applyLevel()
@@ -756,6 +767,9 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	}
 	useLAME(findLAME(a.lame))
 	a.scanCache = scanCache{dir: scanCacheDir()}
+	if a.settingsFile != "" {
+		a.drafts = filepath.Join(filepath.Dir(a.settingsFile), "drafts")
+	}
 	a.loadRefs()
 	a.load()
 	a.opened(a.file)
@@ -777,6 +791,17 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		a.play(0, 10*time.Millisecond)
 	}
 	defer a.save()
+	// quit closes the window, where it is kept for the next time: it
+	// leaves as a program quitting does, fading as it goes.
+	quit := func() {
+		if o.placement != nil {
+			if p, ok := o.placement(); ok {
+				a.window = &p
+				a.writeSettings()
+			}
+		}
+		c.Leave()
+	}
 	var keep <-chan time.Time
 	for {
 		if a.dirty && keep == nil {
@@ -795,8 +820,16 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			a.measured(m)
 		case m := <-a.matches:
 			a.matchedGain(m)
-		case c := <-a.albums:
-			a.chosenAlbum(c)
+		case ch := <-a.albums:
+			a.chosenAlbum(ch)
+			// Saved where the user said, as the window closes: closed.
+			if _, as := ch.in.(SaveAlbumAs); as && a.quitAfterSave {
+				a.quitAfterSave = false
+				if ch.path != "" && !a.Unsaved {
+					quit()
+					continue
+				}
+			}
 		case p := <-a.lames:
 			if found := findLAME(p); found != "" {
 				a.lame = found
@@ -816,10 +849,12 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 				a.replayEdit()
 			}
 		case paths := <-a.chosen:
+			a.record("adding tracks", 0, "")
 			a.addPaths(paths)
 		case paths := <-a.chosenRefs:
 			a.handleAB(AddReferences{Paths: paths})
 		case dir := <-a.dirs:
+			a.record("the export folder", 0, "")
 			a.ExportDir = dir
 			a.dirty = true
 			if a.exportOpen {
@@ -830,7 +865,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		case ps := <-a.found:
 			a.Plugins, a.Scanning = ps, false
 		case r := <-a.replacing:
-			a.replace(r.ID, r.Path)
+			a.handle(r)
 		case id := <-a.d.turns:
 			// Album play ran on into the next track.
 			a.turned(id)
@@ -846,18 +881,23 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			if !ok {
 				return c.Err()
 			}
-			if _, quit := ev.Intent.(Quit); quit {
-				// Where the window is, kept for the next time, then closed.
-				if o.placement != nil {
-					if p, ok := o.placement(); ok {
-						a.window = &p
-						a.writeSettings()
-					}
+			switch in := ev.Intent.(type) {
+			case Quit:
+				// With changes not saved, the user says what to do.
+				if a.Unsaved {
+					a.askToClose()
+					break
 				}
-				c.Close()
+				quit()
 				continue
+			case CloseAnswer:
+				if a.answered(in.Choice) {
+					quit()
+					continue
+				}
+			default:
+				a.handle(ev.Intent)
 			}
-			a.handle(ev.Intent)
 		}
 		a.queueNext()
 		a.applyLoop()
@@ -935,11 +975,44 @@ func (a *app) replayEdit() {
 // applyLevel sets the listening level, matched to the target where
 // levels are matched.
 func (a *app) applyLevel() {
-	var match float32
-	if t := a.track(a.Current); t != nil {
-		match, _ = a.matchDB(t)
+	match := map[int]float32{}
+	for _, ts := range [][]Track{a.Tracks, a.References} {
+		for i := range ts {
+			if db, ok := a.matchDB(&ts[i]); ok {
+				match[ts[i].ID] = db
+			}
+		}
 	}
 	a.d.setLevel(a.Volume, match)
+	for _, r := range a.racks {
+		r.setMatch(a.Match)
+	}
+}
+
+// takeSteps takes how much louder each plugin of track t made it, as
+// last measured, onto its slots and its chain playing. A plugin
+// bypassed as it was measured keeps its gain from before, which the
+// track plays louder by with it matched.
+func (a *app) takeSteps(t *Track) {
+	gains := map[int]float32{}
+	t.Measure.Restore = 0
+	for i := range t.Chain {
+		s := &t.Chain[i]
+		if r, ok := t.Measure.lras[s.ID]; ok {
+			s.LRA, s.Ranged = r, true
+		}
+		if g, ok := t.Measure.steps[s.ID]; ok {
+			s.Gain, s.Gained = g, true
+		} else if s.Gained {
+			t.Measure.Restore += s.Gain
+		}
+		if s.Gained {
+			gains[s.ID] = s.Gain
+		}
+	}
+	if r := a.racks[t.ID]; r != nil {
+		r.setGains(gains)
+	}
 }
 
 // play plays the track picked from at, the one playing fading out over
@@ -959,7 +1032,23 @@ func (a *app) play(at, fade time.Duration) {
 }
 
 func (a *app) handle(in gunim.Intent) {
+	// A change of the album's is a step to undo, and not yet saved.
+	if label, track, key, ok := a.change(in); ok {
+		a.record(label, track, key)
+	}
 	switch in := in.(type) {
+	case SaveAlbum:
+		if a.untitled() {
+			a.chooseAlbum(SaveAlbumAs{})
+			return
+		}
+		if err := a.saveNow(); err != nil {
+			a.Note = err.Error()
+		}
+	case Undo:
+		a.undoStep(false)
+	case Redo:
+		a.undoStep(true)
 	case AddFiles:
 		a.addPaths(in.Paths)
 	case ChooseFiles:
@@ -1212,7 +1301,7 @@ func (s *Album) matchDB(t *Track) (float32, bool) {
 	case s.Bypass && m.DryLoud:
 		return max(-24, min(s.Target-m.DryLUFS, 24)), true
 	case !s.Bypass && m.Loud:
-		return max(-24, min(s.Target-m.LUFS, 24)), true
+		return max(-24, min(s.Target-m.LUFS-m.Restore, 24)), true
 	}
 	return 0, false
 }

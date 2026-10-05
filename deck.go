@@ -40,16 +40,18 @@ type deck struct {
 	monitor *monitor
 	bypass  atomic.Bool
 	// id is the track playing, and volume the listening level, as a
-	// ratio, with match, the gain that brings the track to the target
-	// loudness while levels are matched.
-	id     int
-	volume float32
-	match  float32
+	// ratio; matches are the gains, as ratios, by track, that bring each
+	// to the target loudness while levels are matched, which each
+	// track's stage plays it at.
+	id      int
+	volume  float32
+	matches map[int]float32
 }
 
 func newDeck(mix *audio.Mixer) *deck {
 	an := audio.NewAnalyzer(mix, 32)
-	return &deck{mix: mix, an: an, volume: 0.8, match: 1, turns: make(chan int, 8), tap: &ioTap{}, monitor: &monitor{}}
+	return &deck{mix: mix, an: an, volume: 0.8, matches: map[int]float32{}, turns: make(chan int, 8), tap: &ioTap{},
+		monitor: &monitor{}}
 }
 
 // play plays track id, rendered from the file at path with the album's
@@ -69,7 +71,9 @@ func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at 
 	defer d.mu.Unlock()
 	d.stopLocked(fade)
 	r.setActive(true)
-	d.voice = d.mix.Play(out, audio.Options{Volume: max(d.volume*d.match, 1e-6), FadeIn: fade, Paused: paused,
+	st.setLevel(d.matchLocked(id))
+	st.level = d.matchLocked(id)
+	d.voice = d.mix.Play(out, audio.Options{Volume: max(d.volume, 1e-6), FadeIn: fade, Paused: paused,
 		Insert: d.monitor})
 	// Seeking through the voice, so it says where it is from the start.
 	_ = d.voice.Seek(at)
@@ -254,15 +258,42 @@ func (d *deck) done() <-chan struct{} {
 	return d.voice.Done()
 }
 
-// setLevel sets the listening volume, and the gain that matches the
-// track to the target, in decibels.
-func (d *deck) setLevel(volume, matchDB float32) {
+// setLevel sets the listening volume, and the gains, in decibels, by
+// track, that match each to the target: the track playing, and the one
+// queued, take theirs up at once.
+func (d *deck) setLevel(volume float32, matchDB map[int]float32) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.volume, d.match = volume, float32(math.Pow(10, float64(matchDB)/20))
-	if d.voice != nil {
-		d.voice.SetVolume(max(d.volume*d.match, 1e-6), anim.Spring{Response: 0.15, Damping: 1})
+	d.volume = volume
+	clear(d.matches)
+	for id, db := range matchDB {
+		d.matches[id] = float32(math.Pow(10, float64(db)/20))
 	}
+	if d.voice != nil {
+		d.voice.SetVolume(max(d.volume, 1e-6), anim.Spring{Response: 0.15, Damping: 1})
+	}
+	if d.stage != nil {
+		d.stage.setLevel(d.matchLocked(d.id))
+	}
+	if d.next != nil {
+		d.next.stage.setLevel(d.matchLocked(d.next.id))
+	}
+}
+
+// matchLocked is the gain, as a ratio, that matches track id's level.
+// It runs with mu held.
+func (d *deck) matchLocked(id int) float32 {
+	if g, ok := d.matches[id]; ok {
+		return g
+	}
+	return 1
+}
+
+// matchOf is the gain, as a ratio, that matches track id's level.
+func (d *deck) matchOf(id int) float32 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.matchLocked(id)
 }
 
 // heard appends the frames heard since from to dst, as the analyzer
@@ -489,8 +520,11 @@ func (d *deck) queue(id int, path string, gap time.Duration, e Edit, r *rack) er
 		return nil
 	}
 	d.unqueueLocked()
-	// Its chain runs from the moment the mixer reaches it.
+	// Its chain runs from the moment the mixer reaches it, at its own
+	// level.
 	r.setActive(true)
+	st.setLevel(d.matchLocked(id))
+	st.level = d.matchLocked(id)
 	d.voice.Then(out)
 	d.next = &queued{id: id, sw: sw, rack: r, stage: st, rate: format.SampleRate}
 	return nil

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,11 +33,14 @@ type exportBody struct {
 	rate   *widget.Dropdown
 	locate *widget.Button
 	report *widget.Checkbox
-	lameAt string
-	list   *exportList
-	scroll *widget.Scroll
-	box    *widget.Sized
-	size   geom.Size
+	// notes copies the tracks' notes, the text it copies.
+	notes     *widget.Button
+	notesText string
+	lameAt    string
+	list      *exportList
+	scroll    *widget.Scroll
+	box       *widget.Sized
+	size      geom.Size
 }
 
 // The body's measures.
@@ -76,6 +80,21 @@ func newExportBody(d ExportDraft) *exportBody {
 	b.locate.On = LocateLAME{}
 	b.report = widget.NewCheckbox("Write report")
 	b.report.On = d.Report
+	b.notesText = notesText(d)
+	b.notes = widget.NewButton("Copy notes to clipboard")
+	b.notes.Disabled = !slices.ContainsFunc(d.Tracks, func(t ExportTrack) bool {
+		return strings.TrimSpace(t.Note) != "" || len(t.Marks) > 0
+	})
+	b.notes.OnActivate(func(u *gunim.UI) {
+		u.SetClipboard(b.notesText)
+		// Told as done a moment, then as it was.
+		b.notes.Label = "Copied"
+		u.After(2*time.Second, func(u *gunim.UI) {
+			b.notes.Label = "Copy notes to clipboard"
+			u.Invalidate()
+		})
+		u.Invalidate()
+	})
 	b.list = newExportList(d.Tracks)
 	b.scroll = widget.NewScroll(b.list)
 	b.box = widget.NewSized(b.scroll, 0, float32(min(max(len(d.Tracks), 3), exRows))*exRowH)
@@ -95,12 +114,12 @@ func (b *exportBody) lame(path string) {
 
 // Focusables implements the dialog's way to Tab through the body.
 func (b *exportBody) Focusables() []gunim.Node {
-	return []gunim.Node{b.change, b.wav, b.bits, b.dither, b.mp3, b.rate, b.locate, b.report}
+	return []gunim.Node{b.change, b.wav, b.bits, b.dither, b.mp3, b.rate, b.locate, b.notes, b.report}
 }
 
 // Children implements [gunim.Composite].
 func (b *exportBody) Children() []gunim.Node {
-	return []gunim.Node{b.change, b.wav, b.bits, b.dither, b.mp3, b.rate, b.locate, b.box, b.report}
+	return []gunim.Node{b.change, b.wav, b.bits, b.dither, b.mp3, b.rate, b.locate, b.box, b.report, b.notes}
 }
 
 // exportPlaces are where the body's parts are.
@@ -158,6 +177,9 @@ func (b *exportBody) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Child
 	// The report's tick, on the sum's line, at the right.
 	rs2 := kids.At(8).Layout(loose)
 	kids.At(8).Place(geom.Pt(w-rs2.W, sum-4))
+	// The notes' button, at the right of the tracks' heading.
+	ns := kids.At(9).Layout(gunim.Loose(geom.Sz(w, 28)))
+	kids.At(9).Place(geom.Pt(w-ns.W, at.head.Min.Y-exHead-ns.H+exHead-2))
 	b.size = geom.Sz(w, sum+24)
 	return b.size
 }
@@ -318,7 +340,32 @@ func (l *exportList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 		}
 		paintTick(p, f, geom.Pt(10, y+8), l.on[i], false)
 		shapedFace(fmt.Sprintf("%02d", t.Number), 12, false).Paint(p, geom.Pt(38, y+9), faded(ink, 0.5*alpha))
-		paintFit(p, t.Title, 13, false, geom.Pt(66, y+8), box.W-66-exColLen-12, faded(ink, alpha))
+		// The title, then whether the track has a note, and how many
+		// notes at times.
+		room := box.W - 66 - exColLen - 12
+		badges := float32(0)
+		if strings.TrimSpace(t.Note) != "" {
+			badges += 22
+		}
+		count := ""
+		if len(t.Marks) > 0 {
+			count = strconv.Itoa(len(t.Marks))
+			badges += 26 + shapedFace(count, 11, true).Advance
+		}
+		title := min(shaped(t.Title, 13, false).Advance, room-badges)
+		paintFit(p, t.Title, 13, false, geom.Pt(66, y+8), title, faded(ink, alpha))
+		x := 66 + title + 8
+		if strings.TrimSpace(t.Note) != "" {
+			widget.PaintIcon(p, f.Theme, icon.MessageSquareText, geom.Rc(x, y+10, 14, 14), faded(amber, 0.9*alpha))
+			x += 22
+		}
+		if count != "" {
+			run := shapedFace(count, 11, true)
+			pill := geom.Rc(x, y+8, 22+run.Advance, 18)
+			p.RRect(pill, 9, paint.Solid(faded(amber, 0.16*alpha)))
+			widget.PaintIcon(p, f.Theme, icon.Clock, geom.Rc(x+5, y+10, 13, 13), faded(amber, 0.9*alpha))
+			run.Paint(p, geom.Pt(x+19, y+10), faded(amber, alpha))
+		}
 		shapedFace(clock(t.Length), 12, false).Paint(p, geom.Pt(box.W-exColLen, y+9), faded(ink, 0.6*alpha))
 		lufs, c := "—", faded(ink, 0.4*alpha)
 		if t.Measured {

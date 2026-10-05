@@ -238,8 +238,8 @@ func TestMatchingLevelsBringsEachTrackToTheTarget(t *testing.T) {
 	settle(t, a, func() bool { return a.Tracks[2].Measured && a.Tracks[0].Measured })
 	a.handle(SetMatch{On: true})
 	want := math.Pow(10, float64(a.Target-a.Tracks[0].Measure.LUFS)/20)
-	if math.Abs(float64(a.d.match)-want) > 1e-3 {
-		t.Fatalf("matched by %.3f, want %.3f: the target over the track's loudness", a.d.match, want)
+	if math.Abs(float64(a.d.matchOf(a.Current))-want) > 1e-3 {
+		t.Fatalf("matched by %.3f, want %.3f: the target over the track's loudness", a.d.matchOf(a.Current), want)
 	}
 }
 
@@ -618,7 +618,8 @@ func TestTheAlbumsNameOpensTheMenuOfAlbums(t *testing.T) {
 	w.Input(input.KeyPress{Key: input.KeyDown})
 	w.Input(input.KeyPress{Key: input.KeyEnter})
 	run(5)
-	if _, rest := edits(w); len(rest) != 1 || rest[0] != (EditRelease{}) {
+	// Nothing to undo or redo, the first item that takes a press saves.
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (SaveAlbum{}) {
 		t.Fatalf("the menu's first item sent %v", rest)
 	}
 }
@@ -1112,5 +1113,45 @@ func TestTheSpectrumsLegendSwitchesItsLines(t *testing.T) {
 	click(out.Center())
 	if m.spectrum.HideOut || m.showGram {
 		t.Fatal("a second click on OUT left the output hidden, or switched the view")
+	}
+}
+
+func TestASlotIsNamedApartFromItsPlugin(t *testing.T) {
+	w, r, run := stage(t, chained())
+	gunim.RegisterPatch(w, "album", func(r *root, _ struct{}, u *gunim.UI) { r.chain.rename(8, u) })
+	if err := w.Client().Patch("album", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	// The name typed over the plugin's, which the field starts with,
+	// all of it picked.
+	w.Input(input.TextInput{Text: "Maximizer, gentle"})
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	run(2)
+	_, rest := edits(w)
+	if len(rest) != 1 || rest[0] != (RenamePlugin{Track: 1, Slot: 8, Label: "Maximizer, gentle"}) {
+		t.Fatalf("naming the slot sent %v", rest)
+	}
+	if r.chain.renaming != 0 {
+		t.Fatal("named, the field stays open")
+	}
+	s := Slot{Name: "Ozone 11 Maximizer", Vendor: "iZotope", Label: "Maximizer, gentle", Gain: 1.24, Gained: true}
+	if s.title() != "Maximizer, gentle" || cardDetail(s) != "+1.2 LU · Ozone 11 Maximizer" {
+		t.Fatalf("a slot named apart reads %q, %q", s.title(), cardDetail(s))
+	}
+}
+
+func TestASlotNamedAsItsPluginIsCalledAfterItAgain(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	a.Tracks = []Track{{ID: 1, Chain: []Slot{{ID: 3, Name: "Limiter"}}}}
+	a.handle(RenamePlugin{Track: 1, Slot: 3, Label: "  Last limiter "})
+	if l := a.Tracks[0].Chain[0].Label; l != "Last limiter" {
+		t.Fatalf("named %q", l)
+	}
+	a.handle(RenamePlugin{Track: 1, Slot: 3, Label: "Limiter"})
+	if l := a.Tracks[0].Chain[0].Label; l != "" {
+		t.Fatalf("named as its plugin, the slot keeps %q", l)
 	}
 }
