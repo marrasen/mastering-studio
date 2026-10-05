@@ -69,7 +69,9 @@ its card shows both, and a band behind the chain, as tall as the range,
 shows each plugin widening or narrowing it. With Match
 levels on, a bypassed plugin is played as that gain, so you compare its
 sound and not its level. Right-click a card to rename it, as when the
-same plugin is in the chain twice.
+same plugin is in the chain twice. The Chain menu copies the chain to
+other tracks, and keeps it as a preset, every plugin as set, to load on
+any track of any project.
 
 **Measuring.** Tracks are measured as they will be exported, through a
 copy of their chain run offline: integrated loudness (LUFS), loudness

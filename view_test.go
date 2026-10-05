@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -1262,5 +1263,40 @@ func TestAltLeftAndRightGoToTheLoopsInAndOut(t *testing.T) {
 	run(1)
 	if _, rest := edits(w); len(rest) != 1 || rest[0] != (SeekTo{At: 5 * time.Second}) {
 		t.Fatalf("with no loop, Alt and Right sent %v", rest)
+	}
+}
+
+func TestTheChainsMenuCopiesAndKeepsPresets(t *testing.T) {
+	a := chained()
+	a.Presets = []string{"Gentle", "Loud"}
+	a.Tracks[0].Preset = "Loud"
+	w, r, run := stage(t, a)
+	c := r.chain
+	gunim.RegisterPatch(w, "album", func(_ *root, item int, u *gunim.UI) {
+		if item < 0 {
+			c.openMore(u)
+			return
+		}
+		c.menu.Picked(item, u)
+	})
+	patch := func(item int) {
+		if err := w.Client().Patch("album", item); err != nil {
+			t.Fatal(err)
+		}
+		run(1)
+	}
+	patch(-1)
+	want := []string{"Copy to…", "Save preset “Loud”", "Save preset as…", "Load preset…", "Delete preset…"}
+	if !reflect.DeepEqual(c.menu.Items, want) || slices.Contains(c.menu.Disabled, true) {
+		t.Fatalf("the chain's menu offers %v, off %v", c.menu.Items, c.menu.Disabled)
+	}
+	// Load: the presets, the track's ticked; one picked loads.
+	patch(3)
+	if !reflect.DeepEqual(c.menu.Items, a.Presets) || !reflect.DeepEqual(c.menu.Checked, []bool{false, true}) {
+		t.Fatalf("the presets to load are %v, ticked %v", c.menu.Items, c.menu.Checked)
+	}
+	patch(0)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (LoadPreset{Track: 1, Name: "Gentle"}) {
+		t.Fatalf("picking a preset sent %v", rest)
 	}
 }

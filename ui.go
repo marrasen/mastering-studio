@@ -294,8 +294,10 @@ type pill struct {
 	words   string
 	press   func(*gunim.UI)
 	primary bool
-	// warn shows the pill in amber, for what waits on the user.
+	// warn shows the pill in amber, for what waits on the user, and menu
+	// a chevron after its words, for a pill that opens a menu.
 	warn       bool
+	menu       bool
 	hover, lit *anim.Float
 	down       *anim.Float
 	held       bool
@@ -352,7 +354,7 @@ func (b *pill) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom
 }
 
 // Paint implements [gunim.Node].
-func (b *pill) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Children) {
+func (b *pill) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	mid := geom.Pt(box.W/2, box.H/2)
 	defer p.Push(paint.Scale(1-0.05*b.down.Value(), mid))()
 	whole := geom.Rect{Max: box.Point()}
@@ -370,8 +372,17 @@ func (b *pill) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Chi
 		p.RRect(whole, box.H/2, paint.Solid(faded(mix(ink, teal, lit), 0.06+0.06*b.hover.Value()+0.08*lit)))
 	}
 	run := shaped(b.words, 12, true)
-	run.Paint(p, geom.Pt((box.W-run.Advance)/2, (box.H-15)/2), words)
+	if !b.menu {
+		run.Paint(p, geom.Pt((box.W-run.Advance)/2, (box.H-15)/2), words)
+		return
+	}
+	x := (box.W - run.Advance - 18) / 2
+	run.Paint(p, geom.Pt(x, (box.H-15)/2), words)
+	widget.PaintIcon(p, f.Theme, icon.ChevronDown, geom.Rc(x+run.Advance+4, (box.H-14)/2, 14, 14), words)
 }
+
+// menuPillWidth is the width a pill of words that opens a menu takes.
+func menuPillWidth(words string) float32 { return pillWidth(words) + 18 }
 
 // pillWidth is the width a pill of words takes.
 func pillWidth(words string) float32 { return shaped(words, 12, true).Advance + 28 }

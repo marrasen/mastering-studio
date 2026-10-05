@@ -58,6 +58,11 @@ type (
 		Background bool
 		// Spectrum is how the meters show the spectrum, kept across runs.
 		Spectrum SpectrumView
+		// Presets are the names of the plugin chains kept, in order;
+		// DeletedPreset is the one deleted last, which Deletes counts.
+		Presets       []string
+		DeletedPreset string
+		Deletes       int
 		// Match plays every track at the target loudness, to compare
 		// them on their sound alone; Volume is the listening level.
 		Match  bool
@@ -126,8 +131,10 @@ type (
 		// Seq is the window's count of edits taken, so it can tell its
 		// own edit coming back from an older one.
 		Seq int
-		// Chain is the plugins the track runs through, after its edit.
-		Chain []Slot
+		// Chain is the plugins the track runs through, after its edit, and
+		// Preset the preset it was loaded from or saved as.
+		Chain  []Slot
+		Preset string
 		// Scanned says the file has been read through: its format,
 		// length, waveform and where its sound starts and ends.
 		Scanned    bool
@@ -316,6 +323,15 @@ type project struct {
 	Looping   bool   `json:",omitempty"`
 	View      View   `json:",omitempty"`
 	Curves    *uint8 `json:",omitempty"`
+	// B is the track session B has, and whether it loops.
+	B *keptSession `json:",omitempty"`
+}
+
+// keptSession is a session's track, as a project keeps it: its place
+// on the album, or among the references, -1 for neither.
+type keptSession struct {
+	Track, Ref int
+	Looping    bool `json:",omitempty"`
 }
 
 type keptTrack struct {
@@ -326,6 +342,8 @@ type keptTrack struct {
 	Loop        *Loop          `json:",omitempty"`
 	Edit        Edit
 	Chain       []keptSlot `json:",omitempty"`
+	// Preset is the preset its chain was loaded from or saved as.
+	Preset string `json:",omitempty"`
 	// At is File whole, as it was last saved, where File is from the
 	// album's folder: the album opens on the computer it was saved on
 	// even where the folders do not move together.
@@ -379,6 +397,13 @@ type app struct {
 	quitAfterSave bool
 	// history is the album's changes, to undo and redo.
 	history
+	// presets are the plugin chains kept by name, in presetsFile;
+	// naming says the dialog that names one is up, and lastDeleted is
+	// the one deleted last, to bring back.
+	presets     []Preset
+	presetsFile string
+	naming      bool
+	lastDeleted *Preset
 	// scans and measures carry what the background tells; measuring
 	// holds how to stop each track's measuring, and settle when it is
 	// due once its edits have paused.
@@ -531,6 +556,15 @@ func (a *app) load() {
 			a.Current = id
 		}
 	}
+	// Session B's track, as it was left.
+	if b := p.B; b != nil {
+		switch {
+		case b.Track >= 0 && b.Track < len(a.Tracks):
+			a.Away = Session{Current: a.Tracks[b.Track].ID, Looping: b.Looping}
+		case b.Ref >= 0 && b.Ref < len(a.References):
+			a.Away = Session{Current: a.References[b.Ref].ID, Looping: b.Looping}
+		}
+	}
 	a.measureAlbum()
 }
 
@@ -540,7 +574,7 @@ func (a *app) load() {
 func (a *app) restore(k keptTrack, ref bool) int {
 	id := a.addTo(ref, k.File, k.Title, k.Edit)
 	t := a.track(id)
-	t.Note, t.Marks, t.Loop = k.Note, k.Marks, k.Loop
+	t.Note, t.Marks, t.Loop, t.Preset = k.Note, k.Marks, k.Loop, k.Preset
 	// A reference kept with no silence of its own has none.
 	if k.Silence != nil || !ref {
 		t.Silence = k.Silence
@@ -568,7 +602,7 @@ func (a *app) restore(k keptTrack, ref bool) int {
 // folder.
 func (a *app) kept(t *Track) keptTrack {
 	k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Silence: t.Silence,
-		Marks: t.Marks, Loop: t.Loop, Edit: t.Edit, Stale: t.Stale}
+		Marks: t.Marks, Loop: t.Loop, Edit: t.Edit, Stale: t.Stale, Preset: t.Preset}
 	if t.Measured {
 		k.Measure = keep(t.File, t.Measure)
 	}
@@ -766,7 +800,9 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.Background, a.Spectrum = st.Background, st.Spectrum
 	if a.settingsFile != "" {
 		a.refsFile = filepath.Join(filepath.Dir(a.settingsFile), "references.json")
+		a.presetsFile = filepath.Join(filepath.Dir(a.settingsFile), "presets.json")
 	}
+	a.loadPresets()
 	useLAME(findLAME(a.lame))
 	a.scanCache = scanCache{dir: scanCacheDir()}
 	if a.settingsFile != "" {
@@ -1279,7 +1315,7 @@ func (a *app) handle(in gunim.Intent) {
 			a.dirty = true
 		}
 	default:
-		if a.handleMarks(in) || a.handleLoop(in) || a.handleAB(in) {
+		if a.handleMarks(in) || a.handleLoop(in) || a.handleAB(in) || a.handlePresets(in) {
 			return
 		}
 		a.handleChain(in)
