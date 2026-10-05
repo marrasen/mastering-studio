@@ -36,6 +36,7 @@ var helpGroups = []struct {
 		{"B", "Bypass the chain and gains: the mix as it came"},
 		{"L", "Loop, from a loop at the playhead"},
 		{"I, O", "Set the loop's in or out at the playhead"},
+		{"Alt + Left, Right", "Go to the loop's in, or its out"},
 		{"X", "Switch between listening A and B"},
 	}},
 	{"The editor", [][2]string{

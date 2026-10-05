@@ -217,3 +217,18 @@ func TestEachSidesTrackIsLitInItsColourTheOneNotHeardAtHalf(t *testing.T) {
 			one.pickedA.Target(), b.pickedB.Target())
 	}
 }
+
+func TestFromTheLoopsOutTheSoundPlaysOnPastIt(t *testing.T) {
+	a, mix := abApp(t)
+	tr := a.Tracks[0]
+	a.handle(SetLoop{Track: tr.ID, Loop: &Loop{In: time.Second, Out: 2 * time.Second}})
+	a.handle(SetLooping{On: true})
+	a.handle(TogglePlay{})
+	a.applyLoop()
+	// The out, as rendered: the second of silence before, then 2 s in.
+	a.handle(SeekTo{At: 3 * time.Second})
+	seconds(mix, 500*time.Millisecond)
+	if at, _, _ := a.d.position(); at < 3200*time.Millisecond {
+		t.Fatalf("played on from the loop's out, the track is at %v, want past it", at)
+	}
+}
