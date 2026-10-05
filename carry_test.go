@@ -82,3 +82,21 @@ func TestTheCarryButtonTurnsThroughItsWaysAndIsKept(t *testing.T) {
 		t.Fatalf("past the last way, the button turns to %v, want as far through", a.Carry)
 	}
 }
+
+func TestTheCarryTipSaysWhatTheButtonIsOn(t *testing.T) {
+	a := album()
+	w, r, run := stage(t, a)
+	if r.trans.carryTo.Text != carryLooks[CarryPercent].tip {
+		t.Fatalf("the button's tip reads %q", r.trans.carryTo.Text)
+	}
+	// The application's answer to a press: the next way, which the tip,
+	// up or not, turns to.
+	a.Carry = CarryTime
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	if r.trans.carryTo.Text != carryLooks[CarryTime].tip {
+		t.Fatalf("pressed, the button's tip reads %q", r.trans.carryTo.Text)
+	}
+}
