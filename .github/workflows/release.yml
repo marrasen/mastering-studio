@@ -18,8 +18,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Test
@@ -54,7 +54,7 @@ jobs:
               -o "dist/mastering-studio_${VERSION}_${goos}_${goarch}${ext}" .
           done
           cd dist && sha256sum mastering-studio_* > SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mastering-studio
           path: dist/*
