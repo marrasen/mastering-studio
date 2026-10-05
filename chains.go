@@ -395,8 +395,9 @@ type queuedKey struct {
 // ends, in album play, and nothing otherwise.
 func (a *app) queueNext() {
 	var want queuedKey
-	if i := a.place(a.Current); a.AlbumPlay && a.d.done() != nil && i >= 0 && i+1 < len(a.Tracks) {
-		n := &a.Tracks[i+1]
+	list := a.listOf(a.Current)
+	if i := indexOf(list, a.Current); a.AlbumPlay && a.d.done() != nil && i >= 0 && i+1 < len(list) {
+		n := &list[i+1]
 		want = queuedKey{id: n.ID, file: n.File, edit: n.Edit, gap: a.gapOf(n), rack: a.rackOf(n)}
 	}
 	if want == a.queued && (want.id == 0 || a.d.hasNext()) {
