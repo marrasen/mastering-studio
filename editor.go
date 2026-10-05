@@ -176,6 +176,11 @@ func (e *editor) show(was Album, t Track) {
 	}
 	e.synced = true
 	fresh := t.ID != e.track.ID || t.Scanned != e.track.Scanned || t.File != e.track.File
+	// Zoomed in on the track it leaves, the view keeps its zoom on the
+	// next.
+	span := float64(e.v1.Target() - e.v0.Target())
+	f0, f1 := e.fit()
+	zoomed := e.track.Scanned && t.ID != e.track.ID && span < (f1-f0)*0.98
 	e.track = t
 	// The window's own edits are newer than the application's answers.
 	if t.Seq >= e.seq || fresh {
@@ -184,6 +189,9 @@ func (e *editor) show(was Album, t Track) {
 	}
 	if fresh {
 		v0, v1 := e.fit()
+		if zoomed && span < v1-v0 {
+			v0, v1 = e.zoomedOn(span, v0, v1)
+		}
 		if t.ID != was.Current || e.v1.Value() <= e.v0.Value() {
 			e.v0.Jump(float32(v0))
 			e.v1.Jump(float32(v1))
@@ -194,6 +202,16 @@ func (e *editor) show(was Album, t Track) {
 		e.glow.Jump(1)
 		e.glow.Animate(0, anim.Spring{Response: 0.6, Damping: 1})
 	}
+}
+
+// zoomedOn returns a view span seconds wide, within lo and hi: about
+// the playhead where the track plays, or else at its start.
+func (e *editor) zoomedOn(span, lo, hi float64) (v0, v1 float64) {
+	v0 = lo
+	if t, ok := e.heard(); ok {
+		v0 = max(lo, min(t-span*0.25, hi-span))
+	}
+	return v0, v0 + span
 }
 
 // morph turns a fade whose curve changes into its new one.

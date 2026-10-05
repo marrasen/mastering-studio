@@ -1041,3 +1041,76 @@ func TestTheSpectrumBeforeTheChainMatchesTheOneAfterWithNoPlugins(t *testing.T) 
 		t.Fatalf("a 1 kHz tone at -10.5 dBFS reads %.1f dB into the chain and %.1f out of it", m.specIn[k], out)
 	}
 }
+
+func TestTheNextTrackKeepsTheZoom(t *testing.T) {
+	a := album()
+	two := a.Tracks[0]
+	two.ID, two.Title, two.File = 2, "Two", "two.wav"
+	a.Tracks = append(a.Tracks, two)
+	w, r, run := stage(t, a)
+	ed := r.editor
+	ed.v0.Jump(3)
+	ed.v1.Jump(5)
+	a.Current = 2
+	if err := w.Client().Publish(albumTopic, a); err != nil {
+		t.Fatal(err)
+	}
+	run(30)
+	f0, _ := ed.fit()
+	if ed.track.ID != 2 || math.Abs(float64(ed.v1.Value()-ed.v0.Value())-2) > 0.01 || math.Abs(float64(ed.v0.Value())-f0) > 0.01 {
+		t.Fatalf("on the next track the view is %.2f to %.2f, want two seconds from its start, %.2f", ed.v0.Value(), ed.v1.Value(), f0)
+	}
+	// Zoomed out, the next track is shown whole.
+	ed.v0.Jump(float32(f0))
+	_, f1 := ed.fit()
+	ed.v1.Jump(float32(f1))
+	a.Current = 1
+	if err := w.Client().Publish(albumTopic, a); err != nil {
+		t.Fatal(err)
+	}
+	run(30)
+	if g0, g1 := ed.fit(); math.Abs(float64(ed.v0.Value())-g0) > 0.01 || math.Abs(float64(ed.v1.Value())-g1) > 0.01 {
+		t.Fatalf("zoomed out, the next track is shown %.2f to %.2f, want the whole of it", ed.v0.Value(), ed.v1.Value())
+	}
+}
+
+func TestStoppedTheLevelsFallOnWithoutThePointer(t *testing.T) {
+	_, r, _ := stage(t, album())
+	m := r.meters
+	for ch := range 2 {
+		m.out.Peak[ch], m.out.Hold[ch] = -6, -6
+	}
+	frames := 0
+	for m.Step(time.Second / 60) {
+		frames++
+		if frames > 60*20 {
+			t.Fatal("stopped, the levels never come to rest")
+		}
+	}
+	if frames < 60 || falling(&m.out) {
+		t.Fatalf("the levels stopped falling after %d frames, at a peak of %.1f dB", frames, m.out.Peak[0])
+	}
+}
+
+func TestTheSpectrumsLegendSwitchesItsLines(t *testing.T) {
+	w, r, run := stage(t, album())
+	m := r.meters
+	b := boundsOf(t, w, run, m)
+	out, in := m.spectrum.LegendRects(m.specArea)
+	click := func(at geom.Point) {
+		at = b.Min.Add(at)
+		w.Input(input.PointerMove{Pos: at})
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+		run(1)
+	}
+	click(out.Center())
+	click(in.Center())
+	if !m.spectrum.HideOut || m.spectrum.ShowIn {
+		t.Fatalf("after a click on each, the output is hidden %v and the input shown %v", m.spectrum.HideOut, m.spectrum.ShowIn)
+	}
+	click(out.Center())
+	if m.spectrum.HideOut || m.showGram {
+		t.Fatal("a second click on OUT left the output hidden, or switched the view")
+	}
+}

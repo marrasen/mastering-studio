@@ -853,3 +853,80 @@ func TestBypassedTheMixIsMatchedAsMeasured(t *testing.T) {
 		t.Fatalf("bypassed, the mix is matched by %+.2f, the master by %+.2f", dry, wet)
 	}
 }
+
+func TestAProjectKeepsItsMeasuresWhereAFilesTimeChangesAlone(t *testing.T) {
+	a := measuredApp(t)
+	a.save()
+	// The first file comes back the same, as a copy, at another time;
+	// the second changes, as long as it was.
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(a.Tracks[0].File, later, later); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(a.Tracks[1].File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b[len(b)-1] ^= 0x40
+	if err := os.WriteFile(a.Tracks[1].File, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	later = later.Add(time.Hour)
+	if err := os.Chtimes(a.Tracks[1].File, later, later); err != nil {
+		t.Fatal(err)
+	}
+	c := newApp(a.ctx, newDeck(audio.NewMixer()), a.file)
+	c.load()
+	if one := c.Tracks[0]; !one.Measured || one.Measuring || one.Measure.LUFS != a.Tracks[0].Measure.LUFS {
+		t.Fatal("a file the same at another time is measured again")
+	}
+	if !c.Tracks[1].Measuring {
+		t.Fatal("a file changed, at another time, is not measured again")
+	}
+}
+
+func TestTheDemoWrittenAgainKeepsTheAlbumAsWorkedOn(t *testing.T) {
+	dir := t.TempDir()
+	path, err := writeDemo(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	song := filepath.Join(dir, "01 Lantern Season.wav")
+	was, err := os.Stat(song)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"Target":-9}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeDemo(dir); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	now, _ := os.Stat(song)
+	if string(b) != `{"Target":-9}` || !now.ModTime().Equal(was.ModTime()) {
+		t.Fatal("the demo written again over itself wrote the album or its songs anew")
+	}
+}
+
+func TestAScanIsKeptUntilItsFileChanges(t *testing.T) {
+	c := scanCache{dir: t.TempDir()}
+	path := writeAlbum(t)[0]
+	sc, err := scanTrack(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.put(path, sc)
+	got, ok := c.get(path)
+	if !ok || got.Frames != sc.Frames || got.SoundStart != sc.SoundStart || got.Format != sc.Format ||
+		!reflect.DeepEqual(got.Wave, sc.Wave) {
+		t.Fatal("the scan kept came back otherwise")
+	}
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.get(path); ok {
+		t.Fatal("a file changed since its scan was kept comes back as it was")
+	}
+}

@@ -42,8 +42,10 @@ type meters struct {
 	gramAt   time.Duration
 	column   []float32
 	// specHead is where the spectrum's heading is, which switches it,
+	// specArea where the spectrum is, its legend switching its lines,
 	// and listenRects where the ways to listen are.
 	specHead    geom.Rect
+	specArea    geom.Rect
 	listenRects []geom.Rect
 	// in and out are the input's and output's levels, their faders the
 	// gains in and out, and inFrom the frame of the input read next.
@@ -62,7 +64,7 @@ func newMeters(r *root) *meters {
 	m := &meters{r: r, loud: audioui.NewLoudness(audio.SampleRate), scope: audioui.NewScope(),
 		in: audioui.NewLevels(), out: audioui.NewLevels(), spectrum: audioui.NewSpectrum(specPoints),
 		inMeter: audioui.NewSpectrometer(4096)}
-	m.spectrum.ShowIn = true
+	m.spectrum.ShowIn, m.spectrum.Switches = true, true
 	m.spec, m.specIn = make([]float32, specPoints), make([]float32, specPoints)
 	m.inFader, m.outFader = m.fader(false), m.fader(true)
 	return m
@@ -159,7 +161,18 @@ func (m *meters) Step(dt time.Duration) bool {
 	// Three bands of the spectrum, for the little bars of the track
 	// playing.
 	m.spectrum.Bands(m.bands[:])
-	return playing || !settled || loud
+	// Stopped, the levels fall on to silence.
+	return playing || !settled || loud || falling(&m.in) || falling(&m.out)
+}
+
+// falling says levels still show above the meter's foot, to fall on.
+func falling(l *audioui.Levels) bool {
+	for ch := range 2 {
+		if max(l.Peak[ch], l.RMS[ch], l.Hold[ch]) > -60 {
+			return true
+		}
+	}
+	return false
 }
 
 // Layout implements [gunim.Node].
@@ -282,12 +295,15 @@ func (m *meters) paintSpectrum(p *paint.Painter, f gunim.Frame, area geom.Rect) 
 		return
 	}
 	// The output, filled, and over it the input to the chain, a line:
-	// where they part, the chain changed the sound.
+	// where they part, the chain changed the sound. Their legend
+	// switches each on and off.
+	m.specArea = area
 	m.spectrum.Paint(p, f.Theme, area)
 }
 
 // Handle implements [gunim.Handler]: a click on the spectrum's heading
-// switches it to the spectrogram and back.
+// switches it to the spectrogram and back, and one on its legend
+// switches the output or the input on and off.
 func (m *meters) Handle(e input.Event, u *gunim.UI) bool {
 	d, ok := e.(input.PointerDown)
 	if !ok || d.Button != input.ButtonPrimary {
@@ -297,6 +313,20 @@ func (m *meters) Handle(e input.Event, u *gunim.UI) bool {
 		if r.Contains(d.Pos) {
 			u.Cue(gunim.CueTick, m)
 			u.Send(m, SetListen{Listen: Listen(i)})
+			u.Invalidate()
+			return true
+		}
+	}
+	if !m.showGram {
+		out, in := m.spectrum.LegendRects(m.specArea)
+		switch {
+		case out.Contains(d.Pos):
+			m.spectrum.HideOut = !m.spectrum.HideOut
+		case in.Contains(d.Pos):
+			m.spectrum.ShowIn = !m.spectrum.ShowIn
+		}
+		if out.Contains(d.Pos) || in.Contains(d.Pos) {
+			u.Cue(gunim.CueTick, m)
 			u.Invalidate()
 			return true
 		}

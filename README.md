@@ -106,7 +106,7 @@ These flags help:
 | --- | --- |
 | `-project FILE` | Open this project. By default the studio opens the project open last. |
 | `-plugins DIRS` | Look for VST3 plugins in these folders too, as a list like PATH. |
-| `-demo DIR` | Write six demo songs and a project of them to this folder, and open it. |
+| `-demo DIR` | Write six demo songs and a project of them to this folder, and open it. Files already there are kept as they are. |
 | `-size WxH` | Open the window at this size, as `1680x1040`. |
 | `-play` | Start playing the track picked. |
 | `-shot FILE` | Write the window to a PNG file after `-after`, then quit. |

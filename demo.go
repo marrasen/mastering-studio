@@ -57,7 +57,8 @@ var demoSongs = []demoSong{
 }
 
 // writeDemo writes the demo's songs to dir, as WAV files, and a project
-// of them, and returns the project's path.
+// of them, and returns the project's path. What is there already stays
+// as it is: the project as it was worked on, measures and all.
 func writeDemo(dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -67,13 +68,20 @@ func writeDemo(dir string) (string, error) {
 	var wg sync.WaitGroup
 	for i, s := range demoSongs {
 		files[i] = fmt.Sprintf("%02d %s.wav", i+1, s.title)
-		wg.Go(func() { errs[i] = writeSong(filepath.Join(dir, files[i]), s) })
+		song := filepath.Join(dir, files[i])
+		if _, err := os.Stat(song); err == nil {
+			continue
+		}
+		wg.Go(func() { errs[i] = writeSong(song, s) })
 	}
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, "Lantern Season"+albumExt)
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
 	curves := CurveS | CurveI
 	p := project{Release: Release{Artist: "The Quiet Harbour", Title: "Lantern Season", Year: "2026", Genre: "Indie"},
 		Gap: 2 * time.Second, Target: -14, Bits: 16, Dither: true, ExportDir: "Masters", Volume: 0.8,

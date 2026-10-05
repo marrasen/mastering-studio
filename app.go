@@ -327,6 +327,8 @@ type app struct {
 	d    *deck
 	file string
 	ids  int
+	// scanCache keeps what reading each file told, for the next run.
+	scanCache scanCache
 	// scans and measures carry what the background tells; measuring
 	// holds how to stop each track's measuring, and settle when it is
 	// due once its edits have paused.
@@ -564,10 +566,17 @@ func (a *app) add(path, title string, e Edit) int {
 	return t.ID
 }
 
-// scan reads track id's file, path, in the background.
+// scan reads track id's file, path, in the background, or takes what
+// reading it told before, where the file is as it was.
 func (a *app) scan(id int, path string) {
 	go func() {
-		sc, err := scanTrack(a.ctx, path)
+		sc, ok := a.scanCache.get(path)
+		var err error
+		if !ok {
+			if sc, err = scanTrack(a.ctx, path); err == nil {
+				a.scanCache.put(path, sc)
+			}
+		}
 		select {
 		case a.scans <- scanned{id, path, sc, err}:
 		case <-a.ctx.Done():
@@ -661,6 +670,7 @@ func (a *app) startMeasures() {
 				return
 			}
 			m, err := measure(ctx, path, gap, e, chain, states)
+			m.sum = fileSum(path)
 			<-slots
 			if ctx.Err() != nil {
 				return
@@ -699,6 +709,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	st := readSettings(a.settingsFile)
 	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
 	useLAME(findLAME(a.lame))
+	a.scanCache = scanCache{dir: scanCacheDir()}
 	a.load()
 	a.opened(a.file)
 	for _, p := range o.paths {

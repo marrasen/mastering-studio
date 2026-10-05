@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"io"
 	"math"
 	"os"
 	"time"
@@ -103,6 +106,10 @@ type Measure struct {
 	// the start to each second, for its curve of it.
 	blocks, shorts []float64
 	running        []float32
+	// sum is of the file measured, as it was, for a file that comes
+	// back the same after its time changes, as a copy or a cloud folder
+	// gives it, to keep its measure.
+	sum string
 }
 
 // reading is what the meters measured of a sound length long.
@@ -171,11 +178,12 @@ type keptMeasure struct {
 	Blocks, Shorts []byte
 	Size           int64
 	Modified       time.Time
+	Sum            string `json:",omitempty"`
 }
 
 // keep returns m, of the file at path, to keep.
 func keep(path string, m Measure) *keptMeasure {
-	k := &keptMeasure{Measure: m, Blocks: floats(m.blocks), Shorts: floats(m.shorts)}
+	k := &keptMeasure{Measure: m, Blocks: floats(m.blocks), Shorts: floats(m.shorts), Sum: m.sum}
 	if fi, err := os.Stat(path); err == nil {
 		k.Size, k.Modified = fi.Size(), fi.ModTime()
 	}
@@ -183,19 +191,37 @@ func keep(path string, m Measure) *keptMeasure {
 }
 
 // measure returns the measure kept, where the file at path is as it was
-// measured.
+// measured: as it was then, or, its time changed, the same throughout.
 func (k *keptMeasure) measure(path string) (Measure, bool) {
 	if k == nil {
 		return Measure{}, false
 	}
 	fi, err := os.Stat(path)
-	if err != nil || fi.Size() != k.Size || !fi.ModTime().Equal(k.Modified) {
+	if err != nil || fi.Size() != k.Size {
+		return Measure{}, false
+	}
+	if !fi.ModTime().Equal(k.Modified) && (k.Sum == "" || fileSum(path) != k.Sum) {
 		return Measure{}, false
 	}
 	m := k.Measure
-	m.blocks, m.shorts = unfloats(k.Blocks), unfloats(k.Shorts)
+	m.blocks, m.shorts, m.sum = unfloats(k.Blocks), unfloats(k.Shorts), k.Sum
 	m.running = audioui.RunningLoudness(m.blocks)
 	return m, true
+}
+
+// fileSum is the SHA-256 of the file at path, in hex, or "" where it
+// cannot be read.
+func fileSum(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // floats packs powers as 32-bit floats, as the project keeps them.
