@@ -930,3 +930,86 @@ func TestAScanIsKeptUntilItsFileChanges(t *testing.T) {
 		t.Fatal("a file changed since its scan was kept comes back as it was")
 	}
 }
+
+func TestAPluginsGainIsMeasuredAndPlayedInItsPlaceBypassed(t *testing.T) {
+	s := lspSlot(t, 1, "Parametric Equalizer x16 Stereo")
+	// The equalizer, its output down.
+	lp, err := newPlugin(s, nil, 44100, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range lp.p.Params() {
+		if q.Title == "Output gain" {
+			lp.p.Set(q.ID, q.Default/2)
+		}
+	}
+	lp.p.Process(make([]float32, 2*512))
+	state, err := lp.p.State()
+	lp.p.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeTrack(t, 0, 3*time.Second, 0, 0.3)
+	dry, err := measure(context.Background(), path, 0, Edit{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wet, err := measure(context.Background(), path, 0, Edit{}, []Slot{s}, map[int][]byte{1: state})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step, ok := wet.steps[1]
+	if !ok || math.Abs(float64(step-(wet.LUFS-dry.LUFS))) > 0.2 || step > -3 {
+		t.Fatalf("the equalizer measures %.1f LU (%v), want what it takes away, %.1f", step, ok, wet.LUFS-dry.LUFS)
+	}
+	// The loudness range fed in, and out of the equalizer, which only
+	// turns the sound down: alike.
+	lra, ok := wet.lras[1]
+	if !wet.InRanged || !ok || math.Abs(float64(lra-wet.InLRA)) > 0.5 {
+		t.Fatalf("the range fed in is %.1f (%v), out of the equalizer %.1f (%v)", wet.InLRA, wet.InRanged, lra, ok)
+	}
+	// Bypassed, with levels matched, it plays as its gain.
+	s.Bypass, s.Gain, s.Gained = true, step, true
+	r, failed := newRack([]Slot{s}, map[int][]byte{1: state}, 44100, false)
+	if failed != nil {
+		t.Fatal(failed)
+	}
+	defer r.close()
+	// A steady level, through the plugin's own latency.
+	level := func(match bool) float32 {
+		r.setMatch(match)
+		frames := make([]float32, 2*8192)
+		for i := range frames {
+			frames[i] = 0.5
+		}
+		r.mu.Lock()
+		r.processLocked(frames)
+		r.mu.Unlock()
+		return frames[len(frames)-2]
+	}
+	if v := level(false); math.Abs(float64(v)-0.5) > 1e-3 {
+		t.Fatalf("bypassed, unmatched, the sound comes out at %.3f, want as it went in", v)
+	}
+	if v, want := level(true), 0.5*math.Pow(10, float64(step)/20); math.Abs(float64(v)-want) > 1e-3 {
+		t.Fatalf("bypassed and matched, the sound comes out at %.3f, want %.3f", v, want)
+	}
+}
+
+func TestTheNotesCopiedAreEveryTracksWithAny(t *testing.T) {
+	d := ExportDraft{Release: Release{Artist: "The Quiet Harbour", Title: "Lantern Season"}, Tracks: []ExportTrack{
+		{Number: 1, Title: "One", Note: "Low end heavy", Marks: []Mark{{At: 34 * time.Second, Text: "Chorus lift"}}},
+		{Number: 2, Title: "Two"},
+		{Number: 3, Title: "Three", Marks: []Mark{{At: 77 * time.Second, Text: "Hats"}}},
+	}}
+	want := "Lantern Season · The Quiet Harbour\n\n01 One\nLow end heavy\n  0:34  Chorus lift\n\n03 Three\n  1:17  Hats\n"
+	if got := notesText(d); got != want {
+		t.Fatalf("the notes read\n%s\nwant\n%s", got, want)
+	}
+	if b := newExportBody(d); b.notes.Disabled {
+		t.Fatal("with notes, the button to copy them is off")
+	}
+	d.Tracks = d.Tracks[1:2]
+	if b := newExportBody(d); !b.notes.Disabled {
+		t.Fatal("with no notes, the button to copy them is on")
+	}
+}

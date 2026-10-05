@@ -19,7 +19,9 @@ import (
 // chainRow is the track's chain: its plugins as cards, in the order the
 // sound runs through them, joined by the sound itself, flowing while it
 // plays. A card's light switches the plugin on and off, a click opens
-// its editor, and its menu moves and removes it. After the cards, a
+// its editor, and its menu renames, moves and removes it. Behind the
+// sound's line, a band as tall as the loudness range shows how each
+// plugin widens or narrows it, as last measured. After the cards, a
 // button adds a plugin, found by typing its name; at the end, another
 // copies the chain to other tracks.
 type chainRow struct {
@@ -34,19 +36,45 @@ type chainRow struct {
 	track int
 	slots []Slot
 	// flow is how far the sound has run along the joins, in pixels.
-	flow    float32
-	hover   int
-	press   int
-	picker  widget.Palette
-	choices []PluginChoice
+	flow float32
+	// inLRA is the loudness range fed into the chain, as drawn, where
+	// inRanged says it has one; stale draws the ranges faint, the track
+	// changed since they were measured.
+	inLRA    *anim.Float
+	inRanged bool
+	stale    bool
+	hover    int
+	press    int
+	picker   widget.Palette
+	choices  []PluginChoice
 	// addX is where the add button is.
 	addX float32
-	size geom.Size
+	// field names a slot, renaming, over its card.
+	field    *slotField
+	renaming int
+	size     geom.Size
+}
+
+// slotField is the field a slot is named in: it names it as Enter is
+// pressed or it loses the keyboard, and Escape lets it go unchanged.
+type slotField struct {
+	*widget.TextField
+	c *chainRow
+}
+
+// Handle implements [gunim.Handler].
+func (f *slotField) Handle(e input.Event, u *gunim.UI) bool {
+	if _, ok := e.(input.FocusLost); ok && f.c.renaming != 0 {
+		f.c.finish(f.Text(), u)
+	}
+	return f.TextField.Handle(e, u)
 }
 
 // chainCard is a plugin's card, its place and look animated.
 type chainCard struct {
-	slot        Slot
+	slot Slot
+	// lra is the loudness range out of the plugin, as drawn.
+	lra         *anim.Float
 	x, w        *anim.Float
 	appear, on  *anim.Float
 	hover, open *anim.Float
@@ -61,19 +89,69 @@ const (
 )
 
 func newChainRow(r *root) *chainRow {
-	c := &chainRow{r: r, cards: map[int]*chainCard{}, hover: -1, press: -1}
+	c := &chainRow{r: r, cards: map[int]*chainCard{}, hover: -1, press: -1, inLRA: anim.NewFloat(0)}
+	c.Add(c.inLRA)
 	c.add = newPill("+ Plugin", c.openPicker)
 	c.copy = newPill("Copy to…", c.openCopy)
 	c.Add(c.add, c.copy)
+	c.field = &slotField{TextField: widget.NewTextField(), c: c}
+	c.field.OnSubmit = func(text string) gunim.Intent {
+		in := c.named(text)
+		c.renaming = 0
+		return in
+	}
+	c.field.Keys = func(k input.KeyPress, u *gunim.UI) bool {
+		if k.Key != input.KeyEscape {
+			return false
+		}
+		c.renaming = 0
+		u.Focus(r)
+		u.Invalidate()
+		return true
+	}
 	return c
+}
+
+// rename starts naming slot id, its name in the field over its card.
+func (c *chainRow) rename(id int, u *gunim.UI) {
+	k := c.cards[id]
+	if k == nil {
+		return
+	}
+	c.renaming = id
+	c.field.Disabled = false
+	c.field.Placeholder = k.slot.Name
+	title := k.slot.title()
+	c.field.SetText(title)
+	c.field.Select(0, len([]rune(title)))
+	u.Focus(c.field)
+	u.Invalidate()
+}
+
+// named is the naming of the slot renamed to text, or nil for none.
+func (c *chainRow) named(text string) gunim.Intent {
+	k := c.cards[c.renaming]
+	if k == nil || text == k.slot.title() {
+		return nil
+	}
+	return RenamePlugin{Track: c.track, Slot: c.renaming, Label: text}
+}
+
+// finish ends the naming, naming the slot text.
+func (c *chainRow) finish(text string, u *gunim.UI) {
+	if in := c.named(text); in != nil {
+		u.Send(c, in)
+	}
+	c.renaming = 0
+	u.Invalidate()
 }
 
 func (c *chainRow) card(s Slot) *chainCard {
 	k := c.cards[s.ID]
 	if k == nil {
 		k = &chainCard{x: anim.NewFloat(0), w: anim.NewFloat(0), appear: anim.NewFloat(0), on: anim.NewFloat(1),
-			hover: anim.NewFloat(0), open: anim.NewFloat(0)}
-		c.Add(k.x, k.w, k.appear, k.on, k.hover, k.open)
+			hover: anim.NewFloat(0), open: anim.NewFloat(0), lra: anim.NewFloat(float32(s.LRA))}
+		c.Add(k.x, k.w, k.appear, k.on, k.hover, k.open, k.lra)
 		c.cards[s.ID] = k
 	}
 	return k
@@ -88,6 +166,9 @@ func onOff(b bool) float32 {
 
 func (c *chainRow) show(t Track, s Album) {
 	switched := t.ID != c.track
+	if switched {
+		c.renaming = 0
+	}
 	c.track, c.slots = t.ID, t.Chain
 	keep := map[int]bool{}
 	for _, sl := range t.Chain {
@@ -98,7 +179,7 @@ func (c *chainRow) show(t Track, s Album) {
 		case keep[id]:
 		case switched:
 			// Another track's chain: its cards go at once.
-			c.Remove(k.x, k.w, k.appear, k.on, k.hover, k.open)
+			c.Remove(k.x, k.w, k.appear, k.on, k.hover, k.open, k.lra)
 			delete(c.cards, id)
 		case !k.gone:
 			k.gone = true
@@ -112,32 +193,51 @@ func (c *chainRow) show(t Track, s Album) {
 		k.appear.Animate(1, anim.Spring{Response: 0.35 + 0.04*float32(i)*onOff(switched), Damping: 0.8})
 		k.on.Animate(onOff(!sl.Bypass), anim.Snappy)
 		k.open.Animate(onOff(sl.Open), anim.Gentle)
+		k.lra.Animate(sl.LRA*onOff(sl.Ranged), anim.Spring{Response: 0.5, Damping: 0.9})
 		c.order = append(c.order, sl.ID)
 	}
+	c.inRanged, c.stale = t.Measured && t.Measure.InRanged, t.Stale
+	c.inLRA.Animate(t.Measure.InLRA*onOff(c.inRanged), anim.Spring{Response: 0.5, Damping: 0.9})
 	c.choices = s.Plugins
 	c.add.setLit(false)
 }
 
 // cardWidth is how wide the card of slot s is.
 func cardWidth(s Slot) float32 {
-	w := max(shaped(s.Name, 12, true).Advance, shaped(cardDetail(s), 9, false).Advance)
+	w := max(shaped(s.title(), 12, true).Advance, shaped(cardDetail(s), 9, false).Advance)
 	return min(max(w+52, 120), 230)
 }
 
-// cardDetail is what a card says under its name: who makes it, and how
-// late its sound comes.
+// cardDetail is what a card says under its name: how much louder the
+// plugin makes the track, as measured, who makes it, and how late its
+// sound comes.
 func cardDetail(s Slot) string {
-	switch {
-	case s.Failed != "":
+	if s.Failed != "" {
 		return "would not load"
-	case s.Latency > 0:
-		return fmt.Sprintf("%d smp · %s", s.Latency, s.Vendor)
 	}
-	return s.Vendor
+	// Named apart, the plugin's own name in its maker's place.
+	d := s.Vendor
+	if s.Label != "" {
+		d = s.Name
+	}
+	if s.Latency > 0 {
+		d = fmt.Sprintf("%d smp · %s", s.Latency, d)
+	}
+	if s.Ranged {
+		d = fmt.Sprintf("LRA %.1f · %s", s.LRA, d)
+	}
+	if s.Gained {
+		d = fmt.Sprintf("%+.1f LU · %s", s.Gain, d)
+	}
+	return d
 }
 
-// Children implements [gunim.Composite].
-func (c *chainRow) Children() []gunim.Node { return []gunim.Node{c.add, c.copy} }
+// Children implements [gunim.Composite]: the field is there all
+// along, and takes anything only while a slot is named.
+func (c *chainRow) Children() []gunim.Node {
+	c.field.Disabled = c.renaming == 0
+	return []gunim.Node{c.add, c.copy, c.field}
+}
 
 // Layout implements [gunim.Node]: the cards in a row after the label,
 // sliding to their places, the add button after them, and the copy
@@ -173,6 +273,13 @@ func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	cw := pillWidth("Copy to…")
 	kids.At(1).Layout(gunim.Tight(geom.Sz(cw, 32)))
 	kids.At(1).Place(geom.Pt(c.size.W-cw, mid-16))
+	// The field over the card named.
+	fr := geom.Rc(0, mid-16, 160, 32)
+	if k := c.cards[c.renaming]; k != nil {
+		fr = geom.Rc(k.x.Target(), mid-16, max(k.w.Target(), 160), 32)
+	}
+	kids.At(2).Layout(gunim.Tight(fr.Size()))
+	kids.At(2).Place(fr.Min)
 	return c.size
 }
 
@@ -205,7 +312,7 @@ func (c *chainRow) Step(dt time.Duration) bool {
 	moving := c.Group.Step(dt)
 	for id, k := range c.cards {
 		if k.gone && k.appear.Value() < 0.01 && !k.appear.Active() {
-			c.Remove(k.x, k.w, k.appear, k.on, k.hover, k.open)
+			c.Remove(k.x, k.w, k.appear, k.on, k.hover, k.open, k.lra)
 			delete(c.cards, id)
 		}
 	}
@@ -280,10 +387,11 @@ func (c *chainRow) openMenu(p geom.Point, u *gunim.UI) bool {
 	if k.slot.Bypass {
 		run = "Switch on"
 	}
-	c.menu.Items = []string{"Open editor", run, "Move earlier", "Move later", "Remove from the chain"}
-	c.menu.Icons = []*icon.Icon{icon.SlidersHorizontal, icon.Power, icon.ArrowLeft, icon.ArrowRight, icon.Trash2}
-	c.menu.Disabled = []bool{k.slot.Failed != "", false, i == 0, i == len(c.order)-1, false}
-	c.menu.Breaks = []int{2, 4}
+	c.menu.Items = []string{"Open editor", run, "Rename…", "Move earlier", "Move later", "Remove from the chain"}
+	c.menu.Icons = []*icon.Icon{icon.SlidersHorizontal, icon.Power, icon.Pencil, icon.ArrowLeft, icon.ArrowRight,
+		icon.Trash2}
+	c.menu.Disabled = []bool{k.slot.Failed != "", false, false, i == 0, i == len(c.order)-1, false}
+	c.menu.Breaks = []int{3, 5}
 	c.menu.Captions = nil
 	c.menu.Picked = func(item int, u *gunim.UI) {
 		switch item {
@@ -292,10 +400,12 @@ func (c *chainRow) openMenu(p geom.Point, u *gunim.UI) bool {
 		case 1:
 			u.Send(c, SetBypass{Track: c.track, Slot: id, On: !k.slot.Bypass})
 		case 2:
-			u.Send(c, MovePlugin{Track: c.track, From: i, To: i - 1})
+			c.rename(id, u)
 		case 3:
-			u.Send(c, MovePlugin{Track: c.track, From: i, To: i + 1})
+			u.Send(c, MovePlugin{Track: c.track, From: i, To: i - 1})
 		case 4:
+			u.Send(c, MovePlugin{Track: c.track, From: i, To: i + 1})
+		case 5:
 			u.Send(c, RemovePlugin{Track: c.track, Slot: id})
 		}
 	}
@@ -395,6 +505,7 @@ func (c *chainRow) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gu
 	// dotted with the sound flowing while it plays.
 	addX := c.addX
 	if addX > chainLabelW {
+		c.paintRanges(p, mid, addX-4)
 		line := faded(ink, 0.12)
 		audioui.Segment(p, geom.Pt(chainLabelW-10, mid), geom.Pt(addX-4, mid), 1.5, line)
 		if c.r.state.Playing {
@@ -406,9 +517,46 @@ func (c *chainRow) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gu
 	for _, id := range c.drawOrder() {
 		c.paintCard(p, c.cards[id])
 	}
-	for k := range kids.All {
-		k.Paint(p)
+	kids.At(0).Paint(p)
+	kids.At(1).Paint(p)
+	if c.renaming != 0 {
+		kids.At(2).Paint(p)
 	}
+}
+
+// lraScale is how tall the band of the loudness range is, in pixels a
+// unit.
+const lraScale = 2.4
+
+// paintRanges draws, behind the sound's line, a band as tall as the
+// loudness range: of the sound fed in, from the label to the first
+// card, then of the sound out of each plugin, to the next, and the last
+// to end.
+func (c *chainRow) paintRanges(p *paint.Painter, mid, end float32) {
+	alpha := float32(1)
+	if c.stale {
+		alpha = 0.45
+	}
+	band := func(x0, x1, lra float32) {
+		h := min(max(lra*lraScale, 0), cardH+12)
+		if x1 <= x0 || h < 1 {
+			return
+		}
+		r := geom.Rc(x0, mid-h/2, x1-x0, h)
+		p.RRect(r, min(h/2, 6), paint.Solid(faded(sky, 0.13*alpha)))
+		p.RRect(geom.Rc(x0, r.Min.Y, x1-x0, 1), 0, paint.Solid(faded(sky, 0.35*alpha)))
+		p.RRect(geom.Rc(x0, r.Max.Y-1, x1-x0, 1), 0, paint.Solid(faded(sky, 0.35*alpha)))
+	}
+	// Each stretch runs a little under the cards either side, so the
+	// band reads as one.
+	x, lra := float32(chainLabelW-10), c.inLRA.Value()
+	for _, id := range c.order {
+		k := c.cards[id]
+		r := c.cardRect(k)
+		band(x, r.Min.X+8, lra)
+		x, lra = r.Max.X-8, k.lra.Value()
+	}
+	band(x, end, lra)
 }
 
 // drawOrder is the cards, those leaving first, under the rest.
@@ -455,7 +603,7 @@ func (c *chainRow) paintCard(p *paint.Painter, k *chainCard) {
 	p.RRect(geom.Rc(at.X-4, at.Y-4, 8, 8), 4, paint.Solid(mix(faded(ink, 0.3), night, on)))
 	room := r.Size().W - 44
 	words := mix(faded(ink, 0.45), ink, on)
-	paintFit(p, k.slot.Name, 12, true, geom.Pt(r.Min.X+34, r.Min.Y+8), room, words)
+	paintFit(p, k.slot.title(), 12, true, geom.Pt(r.Min.X+34, r.Min.Y+8), room, words)
 	detail := faded(ink, 0.45)
 	if failed {
 		detail = coral

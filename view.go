@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -27,6 +28,7 @@ func registerViews(w *gunim.Window, d *deck) {
 		theme.Set(widget.ButtonPrimaryHover, rgb(0x2a, 0xa3, 0x92))))
 	gunim.RegisterView(w, "release", newReleaseDialog, nil)
 	gunim.RegisterView(w, "help", newHelp, nil)
+	gunim.RegisterView(w, "unsaved", newUnsavedDialog, nil)
 	gunim.RegisterView(w, "export", newExportDialog,
 		func(e *exportDialog, d ExportDraft, u *gunim.UI) { e.show(d, u) })
 }
@@ -51,7 +53,9 @@ type root struct {
 	refHead *refHead
 	refs    *trackList
 	refDrop *widget.DropTarget
-	editor  *editor
+	// toasts tells what an undo or redo did.
+	toasts *widget.Toasts
+	editor *editor
 	// edDrop takes a file dropped on the editor, as the track's new
 	// file.
 	edDrop *widget.DropTarget
@@ -87,6 +91,7 @@ func newRoot(d *deck) *root {
 		return widget.DropHint{Text: "Add as reference tracks", Effect: widget.DropCopy}
 	}
 	r.refDrop.OnDrop = func(d input.Drop) gunim.Intent { return AddReferences{Paths: d.Paths} }
+	r.toasts = &widget.Toasts{Life: 3 * time.Second}
 	r.editor = newEditor(r)
 	r.edDrop = widget.NewDropTarget(r.editor)
 	r.edDrop.Accept = func(_ any, paths []string) bool { return len(paths) == 1 && r.state.Current != 0 }
@@ -132,13 +137,25 @@ func (r *root) show(s Album, u *gunim.UI) {
 	r.trans.show(s)
 	r.strip.show(s)
 	r.meters.show(was, s)
+	if s.Undos != was.Undos && s.Undone != "" {
+		// What was undone, and a way to take it back.
+		to := widget.Toast{Title: s.Undone, Key: "undo", Icon: icon.Undo2, Action: "Redo", On: Redo{}}
+		if strings.HasPrefix(s.Undone, "Redid") {
+			to.Icon, to.Action, to.On = icon.Redo2, "Undo", Undo{}
+		}
+		r.toasts.Show(to, u)
+	}
+	// What went wrong, as saving.
+	if s.Note != was.Note && s.Note != "" {
+		r.toasts.Show(widget.Toast{Title: s.Note, Kind: widget.ToastError, Key: "note"}, u)
+	}
 	u.Invalidate()
 }
 
 // Children implements [gunim.Composite].
 func (r *root) Children() []gunim.Node {
 	return []gunim.Node{r.headerMenu, r.drop, r.edDrop, r.tools, r.trans, r.strip, r.meters, r.chainMenu, r.head,
-		r.ab, r.refHead, r.refDrop}
+		r.ab, r.refHead, r.refDrop, r.toasts}
 }
 
 // Focusable implements [gunim.Focusable]: the window's keys come here.
@@ -186,6 +203,9 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	edBottom := bottom - stripH - gutter - transH - gutter - chainH - toolsH
 	place(2, geom.Rc(x0, edTop, x1-x0, max(edBottom-edTop, 80)))
 	place(3, geom.Rc(x0, edBottom, x1-x0, toolsH))
+	// The toasts, in the editor's lower corner, over the transport.
+	ts := kids.At(12).Layout(gunim.Constraints{Max: geom.Sz(360, size.H)})
+	kids.At(12).Place(geom.Pt(x1-ts.W-gutter, bottom-stripH-gutter-transH-ts.H-gutter))
 	return size
 }
 
@@ -204,6 +224,23 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 	k, ok := e.(input.KeyPress)
 	if !ok {
 		return false
+	}
+	// Ctrl, or Command, with S saves, and with Z undoes.
+	if k.Mods.Has(input.ModControl) || k.Mods.Has(input.ModSuper) {
+		shift := k.Mods.Has(input.ModShift)
+		switch {
+		case k.Key == input.KeyS && shift:
+			u.Send(r, SaveAlbumAs{})
+		case k.Key == input.KeyS:
+			u.Send(r, SaveAlbum{})
+		case k.Key == input.KeyZ && shift, k.Key == input.KeyY:
+			u.Send(r, Redo{})
+		case k.Key == input.KeyZ:
+			u.Send(r, Undo{})
+		default:
+			return false
+		}
+		return true
 	}
 	at, _, _ := r.d.position()
 	switch {
@@ -268,10 +305,11 @@ type header struct {
 	target *valueChip
 	add    *pill
 	export *pill
-	// calc measures the tracks changed since they were measured, and
-	// help shows the keys.
+	// calc measures the tracks changed since they were measured, help
+	// shows the keys, and save saves the album.
 	calc *pill
 	help *iconButton
+	save *pill
 	sum  string
 	// album is the album's loudness and range, measured together, and
 	// albumOff how far its loudness is from the target.
@@ -301,6 +339,7 @@ func newHeader(r *root) *header {
 	h.export.primary = true
 	h.calc = newPill("Calc LUFS", func(u *gunim.UI) { u.Send(r, CalcLoudness{}) })
 	h.help = newIconButton(icon.CircleHelp, func(u *gunim.UI) { u.Send(r, ShowHelp{}) })
+	h.save = newPill("Save", func(u *gunim.UI) { u.Send(r, SaveAlbum{}) })
 	return h
 }
 
@@ -312,6 +351,15 @@ func (h *header) show(s Album) {
 	if h.name == "" {
 		h.name = "Untitled project"
 	}
+	// Changes not saved: an asterisk, and the button to save them lit.
+	if s.Unsaved {
+		h.name += "*"
+	}
+	h.save.words = "Save"
+	if s.Untitled {
+		h.save.words = "Save as…"
+	}
+	h.save.setLit(s.Unsaved)
 	h.gap.value = s.Gap.Seconds()
 	h.target.value = float64(s.Target)
 	h.export.words = "Export…"
@@ -374,7 +422,7 @@ func lastDirs(path string) string {
 
 // Children implements [gunim.Composite].
 func (h *header) Children() []gunim.Node {
-	return []gunim.Node{h.gap, h.target, h.add, h.export, h.calc, h.help}
+	return []gunim.Node{h.gap, h.target, h.add, h.export, h.calc, h.help, h.save}
 }
 
 // Layout implements [gunim.Node]: the settings right of the name, the
@@ -404,6 +452,11 @@ func (h *header) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children)
 		kids.At(i).Place(geom.Pt(right, (size.H-36)/2))
 		right -= 10
 	}
+	sw := max(pillWidth(h.save.words), 72)
+	right -= sw
+	kids.At(6).Layout(gunim.Tight(geom.Sz(sw, 36)))
+	kids.At(6).Place(geom.Pt(right, (size.H-36)/2))
+	right -= 10
 	kids.At(5).Layout(gunim.Tight(geom.Sz(36, 36)))
 	kids.At(5).Place(geom.Pt(right-36, (size.H-36)/2))
 	return size
@@ -478,39 +531,50 @@ func (h *header) openMenu(u *gunim.UI) {
 			recent = append(recent, p)
 		}
 	}
-	m.Items = []string{"Edit release details…", "New project…", "Open project…", "Save project as…",
-		"Keyboard shortcuts"}
-	m.Icons = []*icon.Icon{icon.Disc3, icon.FilePlus, icon.FolderOpen, icon.Save, icon.Keyboard}
-	m.Hints, m.Checked, m.Disabled, m.Captions = nil, nil, nil, nil
-	m.Breaks = []int{1, 4}
+	s := h.r.state
+	undo, redo := "Undo", "Redo"
+	if s.UndoLabel != "" {
+		undo += " " + s.UndoLabel
+	}
+	if s.RedoLabel != "" {
+		redo += " " + s.RedoLabel
+	}
+	// Each item, and what it sends.
+	type item struct {
+		words, hint string
+		ic          *icon.Icon
+		off         bool
+		send        gunim.Intent
+	}
+	items := []item{
+		{undo, "Ctrl+Z", icon.Undo2, s.UndoLabel == "", Undo{}},
+		{redo, "Ctrl+Shift+Z", icon.Redo2, s.RedoLabel == "", Redo{}},
+		{"Save project", "Ctrl+S", icon.Save, false, SaveAlbum{}},
+		{"Save project as…", "Ctrl+Shift+S", icon.Save, false, SaveAlbumAs{}},
+		{"New project…", "", icon.FilePlus, false, NewAlbum{}},
+		{"Open project…", "", icon.FolderOpen, false, OpenAlbum{}},
+		{"Edit release details…", "", icon.Disc3, false, EditRelease{}},
+		{"Keyboard shortcuts", "", icon.Keyboard, false, ShowHelp{}},
+	}
+	m.Breaks, m.Captions, m.Checked = []int{2, 4, 6}, nil, nil
 	if len(recent) > 0 {
-		m.Items = append(m.Items, "Recent")
-		m.Icons = append(m.Icons, nil)
-		m.Captions = []int{5}
-		m.Breaks = []int{1, 4, 5}
+		m.Breaks = append(m.Breaks, len(items))
+		m.Captions = []int{len(items)}
+		items = append(items, item{words: "Recent"})
 		for _, p := range recent {
-			m.Items = append(m.Items, albumName(p))
-			m.Icons = append(m.Icons, icon.Disc3)
-		}
-		m.Hints = make([]string, len(m.Items))
-		for i, p := range recent {
-			m.Hints[6+i] = lastDirs(filepath.Dir(p))
+			items = append(items, item{albumName(p), lastDirs(filepath.Dir(p)), icon.Disc3, false, OpenAlbumPath{Path: p}})
 		}
 	}
+	m.Items, m.Icons, m.Hints, m.Disabled = nil, nil, nil, nil
+	for _, it := range items {
+		m.Items = append(m.Items, it.words)
+		m.Icons = append(m.Icons, it.ic)
+		m.Hints = append(m.Hints, it.hint)
+		m.Disabled = append(m.Disabled, it.off)
+	}
 	m.Picked = func(i int, u *gunim.UI) {
-		switch {
-		case i == 0:
-			u.Send(h, EditRelease{})
-		case i == 1:
-			u.Send(h, NewAlbum{})
-		case i == 2:
-			u.Send(h, OpenAlbum{})
-		case i == 3:
-			u.Send(h, SaveAlbumAs{})
-		case i == 4:
-			u.Send(h, ShowHelp{})
-		case i >= 6 && i-6 < len(recent):
-			u.Send(h, OpenAlbumPath{Path: recent[i-6]})
+		if i >= 0 && i < len(items) && items[i].send != nil {
+			u.Send(h, items[i].send)
 		}
 	}
 	m.Open(geom.Pt(16, headerH-6), u)

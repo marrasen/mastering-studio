@@ -100,6 +100,14 @@ type Measure struct {
 	// it has: the chain and the gains bypassed.
 	DryLUFS float32
 	DryLoud bool
+	// Restore is how much louder it plays with the plugins bypassed as
+	// it was measured played as their gains, as levels matched play
+	// them, in LU.
+	Restore float32 `json:",omitempty"`
+	// InLRA is the loudness range of the sound fed into the chain, where
+	// InRanged says it has one.
+	InLRA    float32 `json:",omitempty"`
+	InRanged bool    `json:",omitempty"`
 	// blocks and shorts are the powers the loudness and its range are
 	// measured from, for the album's, measured over every track, and
 	// for the editor's curves; running is the integrated loudness from
@@ -110,6 +118,11 @@ type Measure struct {
 	// back the same after its time changes, as a copy or a cloud folder
 	// gives it, to keep its measure.
 	sum string
+	// steps are how much louder each plugin that ran made it, in LU, by
+	// slot.
+	steps map[int]float32
+	// lras are the loudness ranges out of each plugin, by slot.
+	lras map[int]float32
 }
 
 // reading is what the meters measured of a sound length long.
@@ -138,6 +151,9 @@ func measure(ctx context.Context, path string, gap time.Duration, e Edit, chain 
 		return Measure{}, err
 	}
 	defer done()
+	if st, ok := r.(*chainStage); ok && len(chain) > 0 {
+		st.r.measureSteps(format.SampleRate)
+	}
 	return measureOf(ctx, r, format.SampleRate)
 }
 

@@ -117,6 +117,8 @@ func measureOf(ctx context.Context, r audio.Seeker, rate int) (Measure, error) {
 		if l, loud := st.dryMeter.Integrated(); loud {
 			m.DryLUFS, m.DryLoud = float32(l), true
 		}
+		m.steps = st.r.steps()
+		m.InLRA, m.InRanged, m.lras = st.r.ranges()
 	}
 	return m, nil
 }
@@ -162,6 +164,9 @@ func (a *app) matchedGain(r matched) {
 	if r.version != a.version[r.id] {
 		a.Note = t.Title + " changed while it was matched to the target; match it again"
 		return
+	}
+	if !a.isRef(r.id) {
+		a.record("the gain to target on "+t.Title, r.id, "")
 	}
 	t.Edit.Gain = r.gain
 	// The window takes the gain as an edit newer than its own.

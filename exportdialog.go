@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -30,6 +32,8 @@ type (
 		ExportingNow bool
 		// Report writes a report of the export beside its files.
 		Report bool
+		// Release names the album, heading its notes as they are copied.
+		Release Release
 	}
 	// ExportTrack is a track as the dialog lists it, ticked to export.
 	ExportTrack struct {
@@ -41,6 +45,9 @@ type (
 		Length          time.Duration
 		LUFS, Target    float32
 		Measured, Stale bool
+		// Note is the track's note, and Marks its notes at times.
+		Note  string
+		Marks []Mark
 	}
 
 	// OpenExport opens the export's dialog, the tracks named ticked, or
@@ -117,6 +124,37 @@ func (e *exportDialog) show(d ExportDraft, u *gunim.UI) {
 	u.Invalidate()
 }
 
+// notesText is the tracks' notes, to send to the artist: under the
+// release's name, each track with any, by its number and title, its
+// note, then its notes at times, by the time in the mix.
+func notesText(d ExportDraft) string {
+	var b strings.Builder
+	head := d.Release.Title
+	if d.Release.Artist != "" {
+		head = strings.TrimPrefix(head+" · "+d.Release.Artist, " · ")
+	}
+	if head != "" {
+		b.WriteString(head + "\n")
+	}
+	for _, t := range d.Tracks {
+		note := strings.TrimSpace(t.Note)
+		if note == "" && len(t.Marks) == 0 {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "%02d %s\n", t.Number, t.Title)
+		if note != "" {
+			b.WriteString(note + "\n")
+		}
+		for _, m := range t.Marks {
+			fmt.Fprintf(&b, "  %s  %s\n", short(m.At), m.Text)
+		}
+	}
+	return b.String()
+}
+
 // The app's half of the dialog.
 
 // mp3Rates are the bitrates offered for MP3.
@@ -126,7 +164,8 @@ var mp3Rates = []int{320, 256, 192}
 // every one.
 func (a *app) exportDraft(ids []int) ExportDraft {
 	d := ExportDraft{Dir: a.exportDir(), Bits: a.Bits, Dither: a.Dither, WAV: a.ExportWAV, MP3: a.ExportMP3,
-		MP3Rate: a.MP3Rate, HaveMP3: encodeMP3 != nil, MP3Rates: mp3Rates, LAME: lamePath, Report: a.ExportReport}
+		MP3Rate: a.MP3Rate, HaveMP3: encodeMP3 != nil, MP3Rates: mp3Rates, LAME: lamePath, Report: a.ExportReport,
+		Release: a.Release}
 	for i, t := range a.Tracks {
 		length := t.Measure.Length
 		if length == 0 && t.Format.SampleRate > 0 {
@@ -134,7 +173,7 @@ func (a *app) exportDraft(ids []int) ExportDraft {
 		}
 		d.Tracks = append(d.Tracks, ExportTrack{ID: t.ID, Number: i + 1, Title: t.Title,
 			Ticked: len(ids) == 0 || slices.Contains(ids, t.ID), Length: length, LUFS: t.Measure.LUFS,
-			Target: a.Target, Measured: t.Measured && t.Measure.Loud, Stale: t.Stale})
+			Target: a.Target, Measured: t.Measured && t.Measure.Loud, Stale: t.Stale, Note: t.Note, Marks: t.Marks})
 	}
 	return d
 }

@@ -22,8 +22,20 @@ type Slot struct {
 	// [vst3.Class.IDString] writes it.
 	Path, Class  string
 	Name, Vendor string
+	// Label is what the slot is called, where it is named apart from
+	// its plugin, as one of two of the same plugin.
+	Label string
 	// Bypass passes the sound by the plugin.
 	Bypass bool
+	// Gain is how much louder the plugin makes the sound, in LU, as last
+	// measured while it ran, where Gained says it was: while levels are
+	// matched, a plugin bypassed is played as this gain in its place.
+	Gain   float32
+	Gained bool
+	// LRA is the loudness range of the sound out of the plugin, in LU,
+	// as last measured, where Ranged says it has one.
+	LRA    float32
+	Ranged bool
 	// Latency is how late the plugin's sound comes, in frames, once it
 	// is loaded; Open says its editor is open, and Failed why it would
 	// not load.
@@ -109,6 +121,9 @@ type livePlugin struct {
 	bypassID  uint32
 	hasBypass bool
 	bypass    bool
+	// gain is the plugin's gain, as a ratio, played in its place while
+	// it is bypassed and the rack matches.
+	gain float32
 	// edits is the count of the editor's edits last seen.
 	edits uint64
 }
@@ -124,6 +139,12 @@ type rack struct {
 	gen int
 	// ran is when the plugins last processed sound.
 	ran time.Time
+	// match plays each plugin bypassed as its gain, so the sound is as
+	// loud as with it on.
+	match bool
+	// meters, where set, measure the sound fed into the chain, then out
+	// of each plugin in turn, for how much louder each makes it.
+	meters []*audio.LoudnessMeter
 }
 
 // newPlugin loads slot s's plugin at rate, of state, offline or not.
@@ -148,7 +169,10 @@ func newPlugin(s Slot, state []byte, rate int, offline bool) (*livePlugin, error
 	}
 	// Its latency, as some plugins tell it only once they process.
 	p.Prime(100 * time.Millisecond)
-	lp := &livePlugin{slot: s.ID, p: p, edits: p.Edits()}
+	lp := &livePlugin{slot: s.ID, p: p, edits: p.Edits(), gain: 1}
+	if s.Gained {
+		lp.gain = float32(math.Pow(10, float64(s.Gain)/20))
+	}
 	lp.bypassID, lp.hasBypass = p.Bypass()
 	lp.setBypass(s.Bypass)
 	return lp, nil
@@ -230,11 +254,87 @@ func (r *rack) processLocked(frames []float32) {
 		return
 	}
 	r.ran = time.Now()
-	for _, lp := range r.plugins {
+	if r.meters != nil {
+		r.meters[0].Write(frames)
+	}
+	for i, lp := range r.plugins {
 		if !lp.passed() {
 			lp.p.Process(frames)
 		}
+		if lp.bypass && r.match && lp.gain != 1 {
+			for k := range frames {
+				frames[k] *= lp.gain
+			}
+		}
+		if r.meters != nil {
+			r.meters[i+1].Write(frames)
+		}
 	}
+}
+
+// setMatch plays the plugins bypassed as their gains, or not.
+func (r *rack) setMatch(on bool) {
+	r.mu.Lock()
+	r.match = on
+	r.mu.Unlock()
+}
+
+// setGains sets the plugins' gains, in LU, by slot.
+func (r *rack) setGains(gains map[int]float32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, lp := range r.plugins {
+		if g, ok := gains[lp.slot]; ok {
+			lp.gain = float32(math.Pow(10, float64(g)/20))
+		}
+	}
+}
+
+// measureSteps has the rack measure how much louder each plugin makes
+// the sound, at rate.
+func (r *rack) measureSteps(rate int) {
+	r.meters = make([]*audio.LoudnessMeter, len(r.plugins)+1)
+	for i := range r.meters {
+		r.meters[i] = audio.NewLoudnessMeter(rate)
+	}
+}
+
+// ranges returns the loudness range of the sound fed into the chain,
+// and of the sound out of each plugin, by slot, as the rack measured
+// them; ok says the sound fed in has one.
+func (r *rack) ranges() (in float32, ok bool, out map[int]float32) {
+	if r.meters == nil {
+		return 0, false, nil
+	}
+	lra := func(m *audio.LoudnessMeter) (float32, bool) {
+		lo, hi, ranged := audio.LoudnessRange(m.ShortTerms())
+		return float32(hi - lo), ranged
+	}
+	in, ok = lra(r.meters[0])
+	out = map[int]float32{}
+	for i, lp := range r.plugins {
+		if v, ranged := lra(r.meters[i+1]); ranged {
+			out[lp.slot] = v
+		}
+	}
+	return in, ok, out
+}
+
+// steps returns how much louder each plugin that ran made the sound, in
+// LU, by slot, as the rack measured it.
+func (r *rack) steps() map[int]float32 {
+	if r.meters == nil {
+		return nil
+	}
+	out := map[int]float32{}
+	for i, lp := range r.plugins {
+		before, ok := r.meters[i].Integrated()
+		after, ok2 := r.meters[i+1].Integrated()
+		if !lp.bypass && ok && ok2 {
+			out[lp.slot] = float32(after - before)
+		}
+	}
+	return out
 }
 
 // setActive runs the chain's plugins or holds them: only the track
@@ -308,6 +408,12 @@ type chainStage struct {
 	// glides there over a block, so a change makes no click.
 	out   float32
 	outTo atomic.Uint32
+	// level is the gain that matches the track's level to the target,
+	// as a ratio, and levelTo where it goes, in bits, gliding there over
+	// a block: each track carries its own, so a turn into the next takes
+	// up its gain on the very sample.
+	level   float32
+	levelTo atomic.Uint32
 	// bypass, where set, has the stage play the sound as fed, the
 	// chain's latency later, its gain in taken back out and no gain
 	// after: the mix as it came, to compare. inGain is the gain in, as a
@@ -350,11 +456,15 @@ func (s *chainStage) setOut(db float32) {
 	s.outTo.Store(math.Float32bits(float32(math.Pow(10, float64(db)/20))))
 }
 
+// setLevel sets the gain that matches the track's level, as a ratio.
+func (s *chainStage) setLevel(g float32) { s.levelTo.Store(math.Float32bits(g)) }
+
 func newStage(in audio.Seeker, r *rack, outDB float32) *chainStage {
 	s := &chainStage{in: in, r: r, buf: make([]float32, 2*512)}
 	s.setOut(outDB)
 	s.setIn(0)
-	s.out = math.Float32frombits(s.outTo.Load())
+	s.setLevel(1)
+	s.out, s.level = math.Float32frombits(s.outTo.Load()), 1
 	r.mu.Lock()
 	_ = s.alignLocked(0)
 	r.mu.Unlock()
@@ -436,6 +546,15 @@ func (s *chainStage) Read(dst []float32) (int, error) {
 			dst[2*i+1] = dst[2*i+1]*(1-m) + dry[2*i+1]*back*m
 		}
 		s.dry = wantDry
+	}
+	// The gain that matches levels, gliding to where it is set.
+	if from, to := s.level, math.Float32frombits(s.levelTo.Load()); from != to || to != 1 {
+		for i := range n {
+			g := from + (to-from)*float32(i+1)/float32(n)
+			dst[2*i] *= g
+			dst[2*i+1] *= g
+		}
+		s.level = to
 	}
 	s.at += int64(n)
 	return n, nil

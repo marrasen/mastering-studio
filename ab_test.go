@@ -72,8 +72,8 @@ func TestMatchingLevelsHoldsForBothSides(t *testing.T) {
 	a.handle(SwitchSide{})
 	ref := a.References[0]
 	want := math.Pow(10, float64(a.Target-ref.Measure.LUFS)/20)
-	if math.Abs(float64(a.d.match)-want) > 1e-3 {
-		t.Fatalf("on B the reference is matched by %.3f, want %.3f", a.d.match, want)
+	if math.Abs(float64(a.d.matchOf(a.Current))-want) > 1e-3 {
+		t.Fatalf("on B the reference is matched by %.3f, want %.3f", a.d.matchOf(a.Current), want)
 	}
 }
 
@@ -164,5 +164,56 @@ func TestTheBCardAndXSwitchSidesAndAReferencePlays(t *testing.T) {
 	click(refs.Min.Add(geom.Pt(60, rowH/2)))
 	if _, rest := edits(w); len(rest) != 1 || rest[0] != (Pick{ID: 9}) {
 		t.Fatalf("a click on the reference sent %v", rest)
+	}
+}
+
+func TestAutoplayTakesUpTheNextTracksMatchedLevelOnTheTurn(t *testing.T) {
+	a, mix := abApp(t)
+	a.handle(SetMatch{On: true})
+	a.handle(SetAlbumPlay{On: true})
+	a.handle(TogglePlay{})
+	a.queueNext()
+	// The level heard over a stretch, from now.
+	rms := func(d time.Duration) float64 {
+		buf := make([]float32, 2*int(d.Seconds()*audio.SampleRate))
+		mix.Mix(buf)
+		var ss float64
+		for _, v := range buf {
+			ss += float64(v * v)
+		}
+		return math.Sqrt(ss / float64(len(buf)))
+	}
+	// Into the first track's sound, a second and a half after its
+	// second of silence; then on, the application not yet told of the
+	// turn, into the second's.
+	seconds(mix, 2500*time.Millisecond)
+	first := rms(time.Second)
+	seconds(mix, 2300*time.Millisecond)
+	second := rms(time.Second)
+	// The deck hears of the turn on its next look, every 10 ms.
+	deadline := time.Now().Add(time.Second)
+	for _, _, id := a.d.position(); id != a.Tracks[1].ID; _, _, id = a.d.position() {
+		if time.Now().After(deadline) {
+			t.Fatalf("the deck plays track %d, want the second", id)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if d := 20 * math.Log10(second/first); math.Abs(d) > 1 {
+		t.Fatalf("matched, the second track plays %.1f dB from the first", d)
+	}
+}
+
+func TestEachSidesTrackIsLitInItsColourTheOneNotHeardAtHalf(t *testing.T) {
+	a := album()
+	two := a.Tracks[0]
+	two.ID, two.Title = 2, "Two"
+	a.Tracks = append(a.Tracks, two)
+	// Listening to B, on track 2; A waits on track 1.
+	a.Side, a.Current, a.Away = SideB, 2, Session{Current: 1}
+	_, r, _ := stage(t, a)
+	one, b := r.list.rows[1], r.list.rows[2]
+	if one.pickedA.Target() != 0.5 || one.pickedB.Target() != 0 || b.pickedB.Target() != 1 || b.pickedA.Target() != 0 {
+		t.Fatalf("A's track is lit %.1f teal, B's %.1f blue; want half and whole",
+			one.pickedA.Target(), b.pickedB.Target())
 	}
 }
