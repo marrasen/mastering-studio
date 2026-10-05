@@ -32,13 +32,16 @@ type rowLook struct {
 	thumbOf            *audioui.Wave
 }
 
-// trackList is the album's tracks, a row each, in order: its number,
-// title and length, its waveform small, its loudness against the target
-// and its true peak, and its export's progress. A row picked plays; a
-// row dragged moves; files dropped on the list join the album.
+// trackList is the album's tracks, or the references, a row each, in
+// order: its number, title and length, its waveform small, its loudness
+// against the target and its true peak, and its export's progress. A
+// row picked plays; a row dragged moves; files dropped on the list join
+// it.
 type trackList struct {
 	anim.Group
-	r     *root
+	r *root
+	// refs says the list is of the references.
+	refs  bool
 	rows  map[int]*rowLook
 	order []int
 	hot   int
@@ -53,8 +56,16 @@ type trackList struct {
 	size    geom.Size
 }
 
-func newTrackList(r *root) *trackList {
-	return &trackList{r: r, rows: map[int]*rowLook{}, down: -1}
+func newTrackList(r *root, refs bool) *trackList {
+	return &trackList{r: r, refs: refs, rows: map[int]*rowLook{}, down: -1}
+}
+
+// list returns the tracks of s the list shows.
+func (l *trackList) list(s *Album) []Track {
+	if l.refs {
+		return s.References
+	}
+	return s.Tracks
 }
 
 func (l *trackList) look(id int) *rowLook {
@@ -72,7 +83,7 @@ func (l *trackList) look(id int) *rowLook {
 func (l *trackList) show(s Album, u *gunim.UI) {
 	live := map[int]bool{}
 	l.order = l.order[:0]
-	for i, t := range s.Tracks {
+	for i, t := range l.list(&s) {
 		live[t.ID] = true
 		l.order = append(l.order, t.ID)
 		lk := l.look(t.ID)
@@ -114,7 +125,7 @@ func (l *trackList) Step(dt time.Duration) bool {
 		}
 	}
 	measuring := false
-	for _, t := range l.r.state.Tracks {
+	for _, t := range l.list(&l.r.state) {
 		measuring = measuring || t.Measuring || !t.Scanned || t.Progress > 0
 	}
 	if measuring {
@@ -185,12 +196,12 @@ func (l *trackList) Handle(e input.Event, u *gunim.UI) bool {
 	case input.PointerUp:
 		switch {
 		case l.moving != 0:
-			from := indexOf(l.r.state.Tracks, l.moving)
+			from := indexOf(l.list(&l.r.state), l.moving)
 			to := max(0, min(int((l.y-l.grab+rowH/2)/rowH), len(l.order)-1))
 			l.moving = 0
 			if from >= 0 && from != to {
 				u.Cue(gunim.CueTick, l)
-				u.Send(l, MoveTrack{From: from, To: to})
+				u.Send(l, MoveTrack{From: from, To: to, Refs: l.refs})
 			} else {
 				l.show(l.r.state, u)
 			}
@@ -218,7 +229,7 @@ func indexOf(ts []Track, id int) int {
 // makeWay moves the rows between a track dragged and where it would
 // land a place, to make way.
 func (l *trackList) makeWay() {
-	from := indexOf(l.r.state.Tracks, l.moving)
+	from := indexOf(l.list(&l.r.state), l.moving)
 	to := max(0, min(int((l.y-l.grab+rowH/2)/rowH), len(l.order)-1))
 	for i, id := range l.order {
 		if id == l.moving {
@@ -244,10 +255,8 @@ func (l *trackList) openMenu(p geom.Point, u *gunim.UI) bool {
 	id := l.order[i]
 	// The track's file heads the menu, its folder after it.
 	var file string
-	for _, t := range l.r.state.Tracks {
-		if t.ID == id {
-			file = t.File
-		}
+	if t := l.r.state.find(id); t != nil {
+		file = t.File
 	}
 	l.menu.Items = []string{filepath.Base(file), "Rename", "Replace file…", "Show file in folder", "Export this track",
 		"Remove from the album"}
@@ -256,6 +265,11 @@ func (l *trackList) openMenu(p geom.Point, u *gunim.UI) bool {
 	l.menu.Captions = []int{0}
 	l.menu.Breaks = []int{1, 4, 5}
 	l.menu.Disabled = nil
+	if l.refs {
+		// A reference is not exported.
+		l.menu.Items[5] = "Remove reference"
+		l.menu.Disabled = []bool{4: true, 5: false}
+	}
 	l.menu.Picked = func(k int, u *gunim.UI) {
 		switch k - 1 {
 		case 0:
@@ -290,6 +304,9 @@ func (l *trackList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	if len(l.order) == 0 {
 		lines := []string{"Drop your mixes here", "WAV, FLAC, MP3 or Ogg, or a folder of them", "or press Add tracks"}
 		y := float32(120)
+		if l.refs {
+			lines, y = []string{"Drop reference tracks here", "to compare the album with"}, 14
+		}
 		for i, s := range lines {
 			size, alpha := float32(13), float32(0.5)
 			if i == 0 {
@@ -322,7 +339,7 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 	s := l.r.state
 	t, ok := Track{}, false
 	number := 0
-	for i, tr := range s.Tracks {
+	for i, tr := range l.list(&s) {
 		if tr.ID == id {
 			t, ok, number = tr, true, i+1
 		}
@@ -361,7 +378,11 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		// The track playing shows bars moving with it in its ring.
 		audioui.PaintBars(p, l.r.meters.bands[:], geom.Pt(ring.Min.X+17, ring.Min.Y+15), faded(teal, in))
 	} else {
-		run := shaped(strconv.Itoa(number), 13, true)
+		label := strconv.Itoa(number)
+		if l.refs {
+			label = "R" + label
+		}
+		run := shaped(label, 13, true)
 		run.Paint(p, geom.Pt(ring.Min.X+(30-run.Advance)/2, ring.Min.Y+7), faded(numColor, in))
 	}
 	textX := ring.Max.X + 12

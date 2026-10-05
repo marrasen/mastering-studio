@@ -37,6 +37,8 @@ type settings struct {
 	// large it drew its content.
 	Window *driver.Placement `json:",omitempty"`
 	Zoom   float32           `json:",omitempty"`
+	// Background plays the session of listening not heard on.
+	Background bool `json:",omitempty"`
 }
 
 // appName is the studio's name, as its window and its sound are titled.
@@ -92,7 +94,8 @@ func (a *app) writeSettings() {
 	if a.settingsFile == "" {
 		return
 	}
-	s := settings{Albums: a.RecentAlbums, Plugins: a.Recent, LAME: a.lame, Window: a.window, Zoom: a.zoom}
+	s := settings{Albums: a.RecentAlbums, Plugins: a.Recent, LAME: a.lame, Window: a.window, Zoom: a.zoom,
+		Background: a.Background}
 	b, err := json.MarshalIndent(s, "", "\t")
 	if err == nil && os.MkdirAll(filepath.Dir(a.settingsFile), 0o755) == nil {
 		_ = os.WriteFile(a.settingsFile, b, 0o644)
@@ -171,20 +174,35 @@ func (a *app) switchTo(path string, fresh bool) {
 	if path == a.file {
 		return
 	}
+	a.dirty = true
 	a.save()
 	a.d.stop()
 	a.Playing = false
-	for id, cancel := range a.measurer {
-		cancel()
-		delete(a.measurer, id)
+	// The album's tracks let go; the references stay, as does a session
+	// on one.
+	for _, t := range a.Tracks {
+		if cancel := a.measurer[t.ID]; cancel != nil {
+			cancel()
+			delete(a.measurer, t.ID)
+		}
+		delete(a.settle, t.ID)
+		a.dropRack(t.ID)
+		for _, s := range t.Chain {
+			delete(a.states, s.ID)
+		}
 	}
-	clear(a.settle)
-	a.closeRacks()
-	clear(a.states)
+	if a.Side == SideB {
+		a.Current, a.Away.Current = a.Away.Current, a.Current
+		a.Looping, a.Away.Looping = a.Away.Looping, a.Looping
+	}
+	away := a.Away
+	if !a.isRef(away.Current) {
+		away = Session{}
+	}
 	keep := a.Album
 	a.Album = Album{Gap: keep.Gap, Target: keep.Target, Bits: keep.Bits, Dither: keep.Dither, Volume: keep.Volume,
 		Plugins: keep.Plugins, Scanning: keep.Scanning, Recent: keep.Recent, RecentAlbums: keep.RecentAlbums,
-		Follow: keep.Follow}
+		Follow: keep.Follow, References: keep.References, Away: away, Background: keep.Background}
 	a.queued = queuedKey{}
 	a.file = path
 	if fresh {

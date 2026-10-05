@@ -26,8 +26,10 @@ type (
 		// Release is what the album is released as, as its exports are
 		// tagged.
 		Release
-		// Tracks are the album's tracks, in order.
-		Tracks []Track
+		// Tracks are the album's tracks, in order, and References tracks
+		// to compare it with, the same in every project.
+		Tracks     []Track
+		References []Track
 		// Gap is the silence before every track.
 		Gap time.Duration
 		// Target is the loudness the album aims at, in LUFS, which the
@@ -50,6 +52,12 @@ type (
 		Current int
 		Playing bool
 		Starts  int
+		// Side is the session of listening heard, A or B, which Current,
+		// Playing and Looping are of; Away is the other, as it was left,
+		// and Background plays it on, unheard, while it is away.
+		Side       Side
+		Away       Session
+		Background bool
 		// Match plays every track at the target loudness, to compare
 		// them on their sound alone; Volume is the listening level.
 		Match  bool
@@ -143,8 +151,12 @@ type (
 	ChooseFiles struct{}
 	// RemoveTrack takes a track off the album.
 	RemoveTrack struct{ ID int }
-	// MoveTrack moves the track at From to To.
-	MoveTrack struct{ From, To int }
+	// MoveTrack moves the track at From to To, on the album, or, Refs,
+	// among the references.
+	MoveTrack struct {
+		From, To int
+		Refs     bool
+	}
 	// RenameTrack renames a track, as its file is named on export.
 	RenameTrack struct {
 		ID    int
@@ -329,6 +341,10 @@ type app struct {
 	ids  int
 	// scanCache keeps what reading each file told, for the next run.
 	scanCache scanCache
+	// refsFile is where the references are kept, and chosenRefs carries
+	// the files chosen to add to them.
+	refsFile   string
+	chosenRefs chan []string
 	// scans and measures carry what the background tells; measuring
 	// holds how to stop each track's measuring, and settle when it is
 	// due once its edits have paused.
@@ -432,7 +448,7 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 	a := &app{ctx: ctx, stop: stop, d: d, file: file,
 		scans: make(chan scanned, 16), measures: make(chan measured, 16),
 		measurer: map[int]context.CancelFunc{}, settle: map[int]time.Time{},
-		chosen: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
+		chosen: make(chan []string, 1), chosenRefs: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
 		racks: map[int]*rack{}, version: map[int]int{}, measuringVersion: map[int]int{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1),
 		replacing: make(chan ReplaceFile, 1), matches: make(chan matched, 4),
 		albums: make(chan albumChoice, 1), lames: make(chan string, 1)}
@@ -468,55 +484,78 @@ func (a *app) load() {
 	}
 	for i, k := range p.Tracks {
 		k.File = found(a.file, k.File, k.At)
-		id := a.add(k.File, k.Title, k.Edit)
+		id := a.restore(k, false)
 		if i == p.Current {
 			a.Current = id
-		}
-		t := a.track(id)
-		t.Note, t.Silence, t.Marks, t.Loop = k.Note, k.Silence, k.Marks, k.Loop
-		for _, m := range k.Marks {
-			a.markIDs = max(a.markIDs, m.ID)
-		}
-		for _, s := range k.Chain {
-			a.slots++
-			t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
-				Vendor: s.Vendor, Bypass: s.Bypass})
-			a.states[a.slots] = s.State
-		}
-		// Measured before, it waits for CalcLoudness, unless its file
-		// changed since.
-		if m, ok := k.Measure.measure(k.File); ok {
-			t.Measure, t.Measured, t.Measuring, t.Stale = m, true, false, k.Stale
-			delete(a.settle, id)
 		}
 	}
 	a.measureAlbum()
 }
 
-// save keeps the album, if it changed.
+// restore puts a track kept back on the album, or among the
+// references, its notes, chain and measure as they were kept, and
+// returns its ID.
+func (a *app) restore(k keptTrack, ref bool) int {
+	id := a.addTo(ref, k.File, k.Title, k.Edit)
+	t := a.track(id)
+	t.Note, t.Marks, t.Loop = k.Note, k.Marks, k.Loop
+	// A reference kept with no silence of its own has none.
+	if k.Silence != nil || !ref {
+		t.Silence = k.Silence
+	}
+	for _, m := range k.Marks {
+		a.markIDs = max(a.markIDs, m.ID)
+	}
+	for _, s := range k.Chain {
+		a.slots++
+		t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
+			Vendor: s.Vendor, Bypass: s.Bypass})
+		a.states[a.slots] = s.State
+	}
+	// Measured before, it waits for CalcLoudness, unless its file
+	// changed since.
+	if m, ok := k.Measure.measure(k.File); ok {
+		t.Measure, t.Measured, t.Measuring, t.Stale = m, true, false, k.Stale
+		delete(a.settle, id)
+	}
+	return id
+}
+
+// kept is track t as a project keeps it, its file from the album's
+// folder.
+func (a *app) kept(t *Track) keptTrack {
+	k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Silence: t.Silence,
+		Marks: t.Marks, Loop: t.Loop, Edit: t.Edit, Stale: t.Stale}
+	if t.Measured {
+		k.Measure = keep(t.File, t.Measure)
+	}
+	for _, s := range t.Chain {
+		k.Chain = append(k.Chain, keptSlot{Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor,
+			Bypass: s.Bypass, State: a.states[s.ID]})
+	}
+	return k
+}
+
+// save keeps the album, and the references, if they changed.
 func (a *app) save() {
-	if !a.dirty || a.file == "" {
+	if !a.dirty {
+		return
+	}
+	a.readStates()
+	a.saveRefs()
+	if a.file == "" {
 		return
 	}
 	a.dirty = false
-	a.readStates()
+	// The album keeps the track A plays.
+	cur, looping := a.sideA()
 	p := project{Release: a.Release, Gap: a.Gap, Target: a.Target, Bits: a.Bits, Dither: a.Dither,
 		ExportDir: relative(a.file, a.ExportDir), ExportAt: a.ExportDir, ExportWAV: &a.ExportWAV, ExportMP3: a.ExportMP3,
 		MP3Rate: a.MP3Rate, Report: a.ExportReport,
-		Volume: a.Volume, Match: a.Match, Current: a.place(a.Current), AlbumPlay: a.AlbumPlay,
-		Follow: a.Follow, View: a.View, Curves: &a.Curves, Looping: a.Looping}
-	for _, t := range a.Tracks {
-		k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Silence: t.Silence,
-			Marks: t.Marks, Loop: t.Loop,
-			Edit: t.Edit, Stale: t.Stale}
-		if t.Measured {
-			k.Measure = keep(t.File, t.Measure)
-		}
-		for _, s := range t.Chain {
-			k.Chain = append(k.Chain, keptSlot{Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor,
-				Bypass: s.Bypass, State: a.states[s.ID]})
-		}
-		p.Tracks = append(p.Tracks, k)
+		Volume: a.Volume, Match: a.Match, Current: a.place(cur), AlbumPlay: a.AlbumPlay,
+		Follow: a.Follow, View: a.View, Curves: &a.Curves, Looping: looping}
+	for i := range a.Tracks {
+		p.Tracks = append(p.Tracks, a.kept(&a.Tracks[i]))
 	}
 	b, err := json.MarshalIndent(p, "", "\t")
 	if err == nil {
@@ -533,15 +572,9 @@ func (a *app) save() {
 	}
 }
 
-// track returns the track with ID id, or nil.
-func (a *app) track(id int) *Track {
-	for i := range a.Tracks {
-		if a.Tracks[i].ID == id {
-			return &a.Tracks[i]
-		}
-	}
-	return nil
-}
+// track returns the track with ID id, of the album or the references,
+// or nil.
+func (a *app) track(id int) *Track { return a.find(id) }
 
 // place returns where track id is on the album, or -1.
 func (a *app) place(id int) int {
@@ -549,19 +582,28 @@ func (a *app) place(id int) int {
 }
 
 // add puts the file at path on the album and starts reading it.
-func (a *app) add(path, title string, e Edit) int {
+func (a *app) add(path, title string) { a.addTo(false, path, title, Edit{}) }
+
+// addTo puts the file at path on the album, or among the references,
+// and starts reading it. A reference has no silence before it.
+func (a *app) addTo(ref bool, path, title string, e Edit) int {
 	a.ids++
 	if title == "" {
 		title = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	}
 	t := Track{ID: a.ids, Title: title, File: path, Edit: e}
-	a.Tracks = append(a.Tracks, t)
+	if ref {
+		t.Silence = new(time.Duration)
+		a.References = append(a.References, t)
+	} else {
+		a.Tracks = append(a.Tracks, t)
+		a.Loudness = Measure{}
+	}
 	if a.Current == 0 {
 		a.Current = t.ID
 	}
 	a.scan(t.ID, path)
 	a.remeasure(t.ID)
-	a.Loudness = Measure{}
 	a.dirty = true
 	return t.ID
 }
@@ -615,7 +657,7 @@ func (a *app) measureSoon(id int, wait time.Duration) {
 // calcLoudness measures every track changed since it was measured, and
 // not being measured as it is now.
 func (a *app) calcLoudness() {
-	for _, t := range a.Tracks {
+	for _, t := range slices.Concat(a.Tracks, a.References) {
 		if t.Stale && (!t.Measuring || a.measuringVersion[t.ID] != a.version[t.ID]) {
 			a.measureSoon(t.ID, 0)
 		}
@@ -708,12 +750,17 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
 	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
+	a.Background = st.Background
+	if a.settingsFile != "" {
+		a.refsFile = filepath.Join(filepath.Dir(a.settingsFile), "references.json")
+	}
 	useLAME(findLAME(a.lame))
 	a.scanCache = scanCache{dir: scanCacheDir()}
+	a.loadRefs()
 	a.load()
 	a.opened(a.file)
 	for _, p := range o.paths {
-		a.add(p, "", Edit{})
+		a.add(p, "")
 	}
 	a.applyLevel()
 	a.Scanning = true
@@ -770,6 +817,8 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			}
 		case paths := <-a.chosen:
 			a.addPaths(paths)
+		case paths := <-a.chosenRefs:
+			a.handleAB(AddReferences{Paths: paths})
 		case dir := <-a.dirs:
 			a.ExportDir = dir
 			a.dirty = true
@@ -833,6 +882,14 @@ func (a *app) scanned(s scanned) {
 
 // addPaths adds files, the folders among them opened, in name order.
 func (a *app) addPaths(paths []string) {
+	for _, f := range soundFiles(paths) {
+		a.add(f, "")
+	}
+}
+
+// soundFiles returns the sound files among paths, and in the folders
+// among them, in name order.
+func soundFiles(paths []string) []string {
 	var files []string
 	for _, p := range paths {
 		fi, err := os.Stat(p)
@@ -854,9 +911,7 @@ func (a *app) addPaths(paths []string) {
 		}
 	}
 	slices.Sort(files)
-	for _, f := range files {
-		a.add(f, "", Edit{})
-	}
+	return files
 }
 
 // replayEdit plays the track picked again as edited, from where it is:
@@ -923,30 +978,15 @@ func (a *app) handle(in gunim.Intent) {
 			}
 		}()
 	case RemoveTrack:
-		if i := a.place(in.ID); i >= 0 {
-			if a.Current == in.ID {
-				a.d.stop()
-			}
-			a.dropRack(in.ID)
-			for _, s := range a.Tracks[i].Chain {
-				delete(a.states, s.ID)
-			}
-			a.Tracks = slices.Delete(a.Tracks, i, i+1)
-			a.measureAlbum()
-			if a.Current == in.ID {
-				a.d.stop()
-				a.Playing = false
-				a.Current = 0
-				if len(a.Tracks) > 0 {
-					a.Current = a.Tracks[min(i, len(a.Tracks)-1)].ID
-				}
-			}
-			a.dirty = true
-		}
+		a.remove(in.ID)
 	case MoveTrack:
-		if in.From >= 0 && in.From < len(a.Tracks) && in.To >= 0 && in.To < len(a.Tracks) && in.From != in.To {
-			t := a.Tracks[in.From]
-			a.Tracks = slices.Insert(slices.Delete(a.Tracks, in.From, in.From+1), in.To, t)
+		ts := &a.Tracks
+		if in.Refs {
+			ts = &a.References
+		}
+		if in.From >= 0 && in.From < len(*ts) && in.To >= 0 && in.To < len(*ts) && in.From != in.To {
+			t := (*ts)[in.From]
+			*ts = slices.Insert(slices.Delete(*ts, in.From, in.From+1), in.To, t)
 			a.dirty = true
 		}
 	case RenameTrack:
@@ -1145,7 +1185,7 @@ func (a *app) handle(in gunim.Intent) {
 			a.dirty = true
 		}
 	default:
-		if a.handleMarks(in) || a.handleLoop(in) {
+		if a.handleMarks(in) || a.handleLoop(in) || a.handleAB(in) {
 			return
 		}
 		a.handleChain(in)

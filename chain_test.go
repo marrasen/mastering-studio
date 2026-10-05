@@ -155,7 +155,7 @@ func chainApp(t *testing.T, mix *audio.Mixer) *app {
 	a := newApp(ctx, newDeck(mix), "")
 	t.Cleanup(a.closeRacks)
 	for _, p := range writeAlbum(t) {
-		a.add(p, "", Edit{})
+		a.add(p, "")
 	}
 	a.handle(AddPlugin{Track: a.Tracks[0].ID, Choice: PluginChoice{Path: s.Path, Class: s.Class, Name: s.Name}})
 	a.handle(CopyChain{From: a.Tracks[0].ID})
@@ -235,7 +235,7 @@ func TestAlbumPlayRunsOnIntoTheNextTrackWithoutAGap(t *testing.T) {
 	mix := audio.NewMixer()
 	a := newApp(ctx, newDeck(mix), "")
 	for _, p := range writeAlbum(t) {
-		a.add(p, "", Edit{})
+		a.add(p, "")
 	}
 	a.handle(SetAlbumPlay{On: true})
 	a.handle(TogglePlay{})
@@ -272,7 +272,7 @@ func TestReplacingATracksFileKeepsItsEditAndChain(t *testing.T) {
 	defer cancel()
 	a := newApp(ctx, newDeck(audio.NewMixer()), "")
 	paths := writeAlbum(t)
-	a.add(paths[0], "Opener", Edit{})
+	a.add(paths[0], "Opener")
 	tr := &a.Tracks[0]
 	e := Edit{Start: 200 * time.Millisecond, FadeIn: Fade{Length: 50 * time.Millisecond, Curve: Smooth}, Gain: -1.5}
 	tr.Edit = e
@@ -336,7 +336,7 @@ func measuredApp(t *testing.T) *app {
 	t.Cleanup(cancel)
 	a := newApp(ctx, newDeck(audio.NewMixer()), filepath.Join(t.TempDir(), "album.json"))
 	for _, p := range writeAlbum(t) {
-		a.add(p, "", Edit{})
+		a.add(p, "")
 	}
 	settle(t, a, func() bool {
 		for _, tr := range a.Tracks {
@@ -805,7 +805,7 @@ func TestALoopPlaysOverAndOverAndSaysWhereItIs(t *testing.T) {
 	mix := audio.NewMixer()
 	a := newApp(ctx, newDeck(mix), "")
 	for _, p := range writeAlbum(t) {
-		a.add(p, "", Edit{})
+		a.add(p, "")
 	}
 	// The first track's file, from 1 s to 2 s: in the render, after the
 	// second of silence, from 2 s to 3 s.

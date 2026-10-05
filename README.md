@@ -47,6 +47,16 @@ plays a stretch over and over. Autoplay next runs on into the next track
 with no gap, as the exported files will play. Listen in mono, or to the
 side channel alone.
 
+**A/B and references.** Two listening sessions, A and B, sit above the
+track list. Each has its own track, place, play state and loop. Press X,
+or click the other card, to switch: each takes up where it was left.
+With Play on in background, the session you don't hear keeps running,
+and its card shows where it has got to. Reference tracks, such as
+finished masters to compare with, sit at the foot of the track list.
+They are the same in every project, have no silence before them, and
+are measured, edited and run through plugins like the album's tracks.
+They are never exported. Match levels covers both sessions.
+
 ![The spectrogram, with the short-term and integrated loudness and the loudness range over it](docs/spectrogram.png)
 
 **Plugins.** Each track has its own chain of VST3 plugins, such as

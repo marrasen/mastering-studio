@@ -19,7 +19,9 @@
 // track. Keys: Space plays and pauses, 1 to 9 pick a track, Up and Down
 // step through them, Left and Right seek, Home starts over, M matches
 // levels, A plays on into the next track, B bypasses the chains, I and
-// O set a loop's in and out at the playhead, and L loops. Alt with the
+// O set a loop's in and out at the playhead, L loops, and X switches
+// between listening A and B, each its own track and moment, on the
+// album or among the references kept for every album. Alt with the
 // wheel, or the slider at the waveform's right, draws it louder, to see
 // quiet sound.
 package main

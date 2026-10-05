@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -44,7 +45,13 @@ type root struct {
 	list       *trackList
 	scroll     *widget.Scroll
 	drop       *widget.DropTarget
-	editor     *editor
+	// ab is the sessions of listening, over the tracks; refs the
+	// references, under them, under refHead.
+	ab      *abBar
+	refHead *refHead
+	refs    *trackList
+	refDrop *widget.DropTarget
+	editor  *editor
 	// edDrop takes a file dropped on the editor, as the track's new
 	// file.
 	edDrop *widget.DropTarget
@@ -64,12 +71,22 @@ func newRoot(d *deck) *root {
 	r.header = newHeader(r)
 	r.headerMenu = widget.NewContextMenu(r.header)
 	r.header.menu = r.headerMenu
-	r.list = newTrackList(r)
+	r.list = newTrackList(r, false)
 	r.list.menu = widget.NewContextMenu(r.list)
 	r.scroll = widget.NewScroll(r.list.menu)
 	r.drop = widget.NewDropTarget(r.scroll)
 	r.drop.Accept = func(_ any, paths []string) bool { return len(paths) > 0 }
 	r.drop.OnDrop = func(d input.Drop) gunim.Intent { return AddFiles{Paths: d.Paths} }
+	r.ab = newABBar(r)
+	r.refHead = newRefHead(r)
+	r.refs = newTrackList(r, true)
+	r.refs.menu = widget.NewContextMenu(r.refs)
+	r.refDrop = widget.NewDropTarget(widget.NewScroll(r.refs.menu))
+	r.refDrop.Accept = func(_ any, paths []string) bool { return len(paths) > 0 }
+	r.refDrop.Hint = func(input.DragOver) any {
+		return widget.DropHint{Text: "Add as reference tracks", Effect: widget.DropCopy}
+	}
+	r.refDrop.OnDrop = func(d input.Drop) gunim.Intent { return AddReferences{Paths: d.Paths} }
 	r.editor = newEditor(r)
 	r.edDrop = widget.NewDropTarget(r.editor)
 	r.edDrop.Accept = func(_ any, paths []string) bool { return len(paths) == 1 && r.state.Current != 0 }
@@ -91,12 +108,11 @@ func newRoot(d *deck) *root {
 	return r
 }
 
-// track returns the track picked, and false for none.
+// track returns the track picked, of the album or the references, and
+// false for none.
 func (r *root) track() (Track, bool) {
-	for _, t := range r.state.Tracks {
-		if t.ID == r.state.Current {
-			return t, true
-		}
+	if t := r.state.find(r.state.Current); t != nil {
+		return *t, true
 	}
 	return Track{}, false
 }
@@ -106,6 +122,8 @@ func (r *root) show(s Album, u *gunim.UI) {
 	r.state = s
 	r.header.show(s)
 	r.list.show(s, u)
+	r.refs.show(s, u)
+	r.ab.show(s)
 	t, _ := r.track()
 	r.editor.show(was, t)
 	r.tools.show(t)
@@ -119,7 +137,8 @@ func (r *root) show(s Album, u *gunim.UI) {
 
 // Children implements [gunim.Composite].
 func (r *root) Children() []gunim.Node {
-	return []gunim.Node{r.headerMenu, r.drop, r.edDrop, r.tools, r.trans, r.strip, r.meters, r.chainMenu, r.head}
+	return []gunim.Node{r.headerMenu, r.drop, r.edDrop, r.tools, r.trans, r.strip, r.meters, r.chainMenu, r.head,
+		r.ab, r.refHead, r.refDrop}
 }
 
 // Focusable implements [gunim.Focusable]: the window's keys come here.
@@ -149,7 +168,13 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	}
 	place(0, geom.Rect{Min: area.Min, Max: geom.Pt(area.Max.X, area.Min.Y+headerH)})
 	top := area.Min.Y + headerH
-	place(1, geom.Rect{Min: geom.Pt(area.Min.X, top), Max: geom.Pt(area.Min.X+listW, area.Max.Y)})
+	// Down the left: the sessions, the album's tracks, and the
+	// references at the foot.
+	refsTop := area.Max.Y - refsListH(len(r.state.References)) - refHeadH
+	place(9, geom.Rc(area.Min.X, top, listW, abH))
+	place(1, geom.Rect{Min: geom.Pt(area.Min.X, top+abH), Max: geom.Pt(area.Min.X+listW, refsTop)})
+	place(10, geom.Rc(area.Min.X, refsTop, listW, refHeadH))
+	place(11, geom.Rect{Min: geom.Pt(area.Min.X, refsTop+refHeadH), Max: geom.Pt(area.Min.X+listW, area.Max.Y)})
 	place(6, geom.Rect{Min: geom.Pt(area.Max.X-metersW, top), Max: area.Max})
 	x0, x1 := area.Min.X+listW+gutter, area.Max.X-metersW-gutter
 	bottom := area.Max.Y - gutter
@@ -211,20 +236,21 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 		u.Send(r, ShowHelp{})
 	case k.Key == input.KeyB:
 		u.Send(r, SetBypassAll{On: !r.state.Bypass})
+	case k.Key == input.KeyX:
+		u.Send(r, SwitchSide{})
 	default:
 		return false
 	}
 	return true
 }
 
-// step picks the track by places before or after the one picked.
+// step picks the track by places before or after the one picked, of
+// the album or the references, as it is.
 func (r *root) step(by int, u *gunim.UI) {
-	for i, t := range r.state.Tracks {
-		if t.ID == r.state.Current {
-			if j := i + by; j >= 0 && j < len(r.state.Tracks) {
-				u.Send(r, Pick{ID: r.state.Tracks[j].ID})
-			}
-			return
+	list := r.state.listOf(r.state.Current)
+	if i := indexOf(list, r.state.Current); i >= 0 {
+		if j := i + by; j >= 0 && j < len(list) {
+			u.Send(r, Pick{ID: list[j].ID})
 		}
 	}
 }
@@ -311,7 +337,7 @@ func (h *header) show(s Album) {
 	h.albumOff = s.Loudness.LUFS - s.Target
 	h.albumLoud = s.Loudness.Loud
 	stale, measuring := 0, 0
-	for _, t := range s.Tracks {
+	for _, t := range slices.Concat(s.Tracks, s.References) {
 		if t.Stale {
 			stale++
 		}

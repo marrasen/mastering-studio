@@ -215,7 +215,7 @@ func TestPickingAnotherTrackWhilePlayingKeepsTheMoment(t *testing.T) {
 	mix := audio.NewMixer()
 	a := newApp(ctx, newDeck(mix), "")
 	for _, p := range writeAlbum(t) {
-		a.add(p, "", Edit{})
+		a.add(p, "")
 	}
 	a.handle(TogglePlay{})
 	// Two seconds in.
@@ -233,7 +233,7 @@ func TestMatchingLevelsBringsEachTrackToTheTarget(t *testing.T) {
 	defer cancel()
 	a := newApp(ctx, newDeck(audio.NewMixer()), "")
 	for _, p := range writeAlbum(t) {
-		a.add(p, "", Edit{})
+		a.add(p, "")
 	}
 	settle(t, a, func() bool { return a.Tracks[2].Measured && a.Tracks[0].Measured })
 	a.handle(SetMatch{On: true})
@@ -249,7 +249,7 @@ func TestAnAlbumExportsEachTrackAtItsOwnLength(t *testing.T) {
 	a := newApp(ctx, newDeck(audio.NewMixer()), "")
 	paths := writeAlbum(t)
 	for _, p := range paths {
-		a.add(p, "", Edit{})
+		a.add(p, "")
 	}
 	a.Tracks[1].Edit = Edit{Start: 300 * time.Millisecond, End: 2 * time.Second}
 	a.ExportDir = t.TempDir()
