@@ -16,6 +16,19 @@ import (
 // specPoints is how many frequencies the spectrum is drawn at.
 const specPoints = 120
 
+type (
+	// SpectrumView is how the meters show the sound's spectrum: as a
+	// spectrogram, or as a spectrum, its output or input line hidden.
+	// Kept across runs, its zero is the spectrum with both lines.
+	SpectrumView struct {
+		Gram    bool `json:",omitempty"`
+		HideOut bool `json:",omitempty"`
+		HideIn  bool `json:",omitempty"`
+	}
+	// SetSpectrum sets how the spectrum is shown.
+	SetSpectrum struct{ View SpectrumView }
+)
+
 // meters read the sound as it is heard, frame by frame: its loudness,
 // as momentary, short-term and integrated since the track started, and
 // its true peak; its stereo image, as a vectorscope and the
@@ -98,6 +111,20 @@ func (m *meters) show(was, s Album) {
 		m.loud.Reset(audio.SampleRate)
 		m.in, m.out = audioui.NewLevels(), audioui.NewLevels()
 	}
+	// The spectrum as kept, where the application says it changed: a
+	// click shows its own at once.
+	if s.Spectrum != was.Spectrum {
+		m.setView(s.Spectrum)
+	}
+}
+
+// view is how the spectrum is shown.
+func (m *meters) view() SpectrumView {
+	return SpectrumView{Gram: m.showGram, HideOut: m.spectrum.HideOut, HideIn: !m.spectrum.ShowIn}
+}
+
+func (m *meters) setView(v SpectrumView) {
+	m.showGram, m.spectrum.HideOut, m.spectrum.ShowIn = v.Gram, v.HideOut, !v.HideIn
 }
 
 // listening returns the gain, in decibels, the track is heard at over
@@ -327,6 +354,7 @@ func (m *meters) Handle(e input.Event, u *gunim.UI) bool {
 		}
 		if out.Contains(d.Pos) || in.Contains(d.Pos) {
 			u.Cue(gunim.CueTick, m)
+			u.Send(m, SetSpectrum{View: m.view()})
 			u.Invalidate()
 			return true
 		}
@@ -336,6 +364,7 @@ func (m *meters) Handle(e input.Event, u *gunim.UI) bool {
 	}
 	m.showGram = !m.showGram
 	u.Cue(gunim.CueTick, m)
+	u.Send(m, SetSpectrum{View: m.view()})
 	u.Invalidate()
 	return true
 }

@@ -56,6 +56,8 @@ type (
 		Side       Side
 		Away       Session
 		Background bool
+		// Spectrum is how the meters show the spectrum, kept across runs.
+		Spectrum SpectrumView
 		// Match plays every track at the target loudness, to compare
 		// them on their sound alone; Volume is the listening level.
 		Match  bool
@@ -761,7 +763,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
 	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
-	a.Background = st.Background
+	a.Background, a.Spectrum = st.Background, st.Spectrum
 	if a.settingsFile != "" {
 		a.refsFile = filepath.Join(filepath.Dir(a.settingsFile), "references.json")
 	}
@@ -1246,6 +1248,9 @@ func (a *app) handle(in gunim.Intent) {
 	case SetCurves:
 		a.Curves = in.Curves
 		a.dirty = true
+	case SetSpectrum:
+		a.Spectrum = in.View
+		a.writeSettings()
 	case SetListen:
 		a.Listen = in.Listen
 		a.d.listen(in.Listen)

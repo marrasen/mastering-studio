@@ -131,14 +131,16 @@ func (e *editor) loopHere(at time.Duration) *Loop {
 	return &Loop{In: in, Out: min(in+loopLength, length)}
 }
 
-// toggleLoop turns looping on or off, making a loop at the playhead for
-// a track with none.
+// toggleLoop turns looping on or off: for a track with no loop, it makes
+// one at the playhead and loops it.
 func (e *editor) toggleLoop(u *gunim.UI) {
 	if e.track.ID == 0 {
 		return
 	}
 	if e.track.Loop == nil {
 		u.Send(e, SetLoop{Track: e.track.ID, Loop: e.loopHere(e.newMarkAt())})
+		u.Send(e, SetLooping{On: true})
+		return
 	}
 	u.Send(e, SetLooping{On: !e.r.state.Looping})
 }
@@ -177,15 +179,23 @@ func (e *editor) dragLoopEdge(t float64, u *gunim.UI) {
 	} else {
 		c.Out = max(at, c.In+100*time.Millisecond)
 	}
+	// Shown as it is dragged; the application hears of it as it is let
+	// go, as reading the file again for each move would fall behind.
 	e.dragLoop = &c
-	u.Send(e, SetLoop{Track: e.track.ID, Loop: &c})
+	u.Invalidate()
+}
+
+// sameLoop says two loops, or none, are alike.
+func sameLoop(x, y *Loop) bool {
+	return (x == nil) == (y == nil) && (x == nil || *x == *y)
 }
 
 // paintLoop draws the loop on the ruler: a band, bright while looping,
 // with its edges to drag, and over the lanes a faint light while it
 // loops; and the chip that turns it on.
 func (e *editor) paintLoop(p *paint.Painter, f gunim.Frame, box geom.Size) {
-	on := e.r.state.Looping
+	// Lit while this track loops: looping on, and a loop of its own.
+	on := e.r.state.Looping && e.loopShown() != nil
 	b := e.loopButton()
 	fill := faded(night, 0.75)
 	if on {

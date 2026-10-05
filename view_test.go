@@ -921,6 +921,7 @@ func TestTheLoopChipMakesALoopAndTheEdgesDragIt(t *testing.T) {
 	}
 	run(2)
 	from := b.Min.Add(geom.Pt(ed.xOf(5), rulerH/2))
+	_, _ = edits(w)
 	w.Input(input.PointerMove{Pos: from})
 	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
 	for i := 1; i <= 5; i++ {
@@ -930,7 +931,37 @@ func TestTheLoopChipMakesALoopAndTheEdgesDragIt(t *testing.T) {
 			t.Fatalf("step %d: the loop's out is at %v, want under the pointer", i, l)
 		}
 	}
+	if _, got := edits(w); len(got) != 0 {
+		t.Fatalf("while dragged, the loop sent %v", got)
+	}
 	w.Input(input.PointerUp{Pos: from, Button: input.ButtonPrimary})
+	run(1)
+	// Let go: sent once, and shown where it was let go until the
+	// application answers.
+	_, rest = edits(w)
+	if len(rest) != 1 {
+		t.Fatalf("let go, the loop sent %v", rest)
+	}
+	set, ok := rest[0].(SetLoop)
+	sent := set.Loop
+	if !ok || sent == nil || math.Abs(sent.Out.Seconds()-5.5) > 0.01 {
+		t.Fatalf("let go, the loop sent is %v, want out at 5.5 s", sent)
+	}
+	if l := ed.loopShown(); l == nil || *l != *sent {
+		t.Fatalf("waiting on the application, the loop shows as %v", l)
+	}
+	a.Tracks[0].Loop = sent
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	if ed.dragLoop != nil {
+		t.Fatal("answered, the loop dragged is still shown in place of the application's")
+	}
+	a.Tracks[0].Loop = &Loop{In: 3 * time.Second, Out: 5 * time.Second}
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
 	run(1)
 	if v0 := ed.v0.Value(); v0 != 2 {
 		t.Fatalf("dragging the loop's edge scrolled the view to %.2f", v0)
@@ -1153,5 +1184,83 @@ func TestASlotNamedAsItsPluginIsCalledAfterItAgain(t *testing.T) {
 	a.handle(RenamePlugin{Track: 1, Slot: 3, Label: "Limiter"})
 	if l := a.Tracks[0].Chain[0].Label; l != "" {
 		t.Fatalf("named as its plugin, the slot keeps %q", l)
+	}
+}
+
+func TestTheSpectrumAsLeftIsKeptForTheNextRun(t *testing.T) {
+	// Shown as kept.
+	a := album()
+	a.Spectrum = SpectrumView{HideIn: true}
+	w, r, run := stage(t, a)
+	m := r.meters
+	if m.showGram || m.spectrum.HideOut || m.spectrum.ShowIn {
+		t.Fatalf("the spectrum kept with its input hidden shows as %+v", m.view())
+	}
+	// A click on OUT hides it, and sends the view to keep.
+	b := boundsOf(t, w, run, m)
+	out, _ := m.spectrum.LegendRects(m.specArea)
+	at := b.Min.Add(out.Center())
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(1)
+	want := SpectrumView{HideOut: true, HideIn: true}
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (SetSpectrum{View: want}) {
+		t.Fatalf("a click on OUT sent %v", rest)
+	}
+	// Kept in the settings, and read back.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	app := newApp(ctx, newDeck(audio.NewMixer()), "")
+	app.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+	app.handle(SetSpectrum{View: want})
+	if got := readSettings(app.settingsFile).Spectrum; got != want {
+		t.Fatalf("the settings keep %+v, want %+v", got, want)
+	}
+}
+
+func TestTheLoopChipOnATrackWithNoLoopLoopsItEvenAsAnotherLoops(t *testing.T) {
+	a := album()
+	a.Looping = true
+	w, r, run := stage(t, a)
+	ed := r.editor
+	ed.v0.Jump(2)
+	ed.v1.Jump(6)
+	b := boundsOf(t, w, run, ed)
+	at := b.Min.Add(ed.loopButton().Center())
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(1)
+	_, rest := edits(w)
+	want := []gunim.Intent{SetLoop{Track: 1, Loop: &Loop{In: 2 * time.Second, Out: 10 * time.Second}}, SetLooping{On: true}}
+	if !reflect.DeepEqual(rest, want) {
+		t.Fatalf("with looping on and no loop, the chip sent %v, want %v", rest, want)
+	}
+}
+
+func TestAltLeftAndRightGoToTheLoopsInAndOut(t *testing.T) {
+	a := album()
+	a.Tracks[0].Loop = &Loop{In: 3 * time.Second, Out: 5 * time.Second}
+	w, _, run := stage(t, a)
+	w.Input(input.KeyPress{Key: input.KeyLeft, Mods: input.ModAlt})
+	w.Input(input.KeyPress{Key: input.KeyRight, Mods: input.ModAlt})
+	run(1)
+	// The second of silence before the track, then its file's time.
+	_, rest := edits(w)
+	want := []gunim.Intent{SeekTo{At: 4 * time.Second}, SeekTo{At: 6 * time.Second}}
+	if !reflect.DeepEqual(rest, want) {
+		t.Fatalf("Alt with Left and Right sent %v, want %v", rest, want)
+	}
+	// With no loop, they seek as Left and Right do.
+	a.Tracks[0].Loop = nil
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	w.Input(input.KeyPress{Key: input.KeyRight, Mods: input.ModAlt})
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (SeekTo{At: 5 * time.Second}) {
+		t.Fatalf("with no loop, Alt and Right sent %v", rest)
 	}
 }

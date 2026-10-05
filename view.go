@@ -243,6 +243,17 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 		return true
 	}
 	at, _, _ := r.d.position()
+	// Alt with Left or Right goes to the loop's in, or its out, looping
+	// or not; from the out the sound plays on past it.
+	if l := r.editor.track.Loop; l != nil && k.Mods.Has(input.ModAlt) &&
+		(k.Key == input.KeyLeft || k.Key == input.KeyRight) {
+		to := l.In
+		if k.Key == input.KeyRight {
+			to = l.Out
+		}
+		u.Send(r, SeekTo{At: r.editor.renderTime(to.Seconds())})
+		return true
+	}
 	switch {
 	case k.Key == input.KeySpace:
 		u.Send(r, TogglePlay{})

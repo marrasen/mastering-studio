@@ -17,7 +17,8 @@
 // a file dropped on the waveform replaces the track's, its edit and
 // chain kept. A double-click on the title over the waveform renames the
 // track. Keys: Space plays and pauses, 1 to 9 pick a track, Up and Down
-// step through them, Left and Right seek, Home starts over, M matches
+// step through them, Left and Right seek, with Alt to the loop's in and
+// out, Home starts over, M matches
 // levels, A plays on into the next track, B bypasses the chains, I and
 // O set a loop's in and out at the playhead, L loops, and X switches
 // between listening A and B, each its own track and moment, on the

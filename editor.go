@@ -107,8 +107,10 @@ type editor struct {
 	// second click writes the note anew instead.
 	seekMark func()
 	// dragLoop is the loop as a drag sets it, ahead of the application's
-	// answer, or nil.
+	// answer, or nil: sent once let go, and shown until the application
+	// answers with it, or another, than loopWas, the loop before.
 	dragLoop *Loop
+	loopWas  *Loop
 	size     geom.Size
 }
 
@@ -167,6 +169,11 @@ func (e *editor) fit() (v0, v1 float64) {
 }
 
 func (e *editor) show(was Album, t Track) {
+	// The loop let go, once the application has it, or another.
+	if l := e.dragLoop; l != nil && e.held == gripNone &&
+		(t.ID != e.track.ID || sameLoop(t.Loop, l) || !sameLoop(t.Loop, e.loopWas)) {
+		e.dragLoop = nil
+	}
 	// The view and the curves glide to what the album says; the first
 	// time, they are there at once.
 	s := e.r.state
@@ -394,7 +401,11 @@ func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 			u.Send(e, SeekTo{At: e.renderTime(e.tAt(ev.Pos.X))})
 		}
 	case input.PointerUp:
-		e.dragLoop = nil
+		// A loop's edge let go: the loop where it is, sent once.
+		if (e.held == gripLoopIn || e.held == gripLoopOut) && e.dragLoop != nil {
+			e.loopWas = e.track.Loop
+			u.Send(e, SetLoop{Track: e.track.ID, Loop: e.dragLoop})
+		}
 		// A ruler let go while it moves flings the view on.
 		if e.held == gripRuler && e.dragged {
 			e.fling.Release(0.05)
