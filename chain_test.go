@@ -288,7 +288,7 @@ func TestReplacingATracksFileKeepsItsEditAndChain(t *testing.T) {
 	if !tr.Stale {
 		t.Fatal("a new file leaves the track's measure as fresh")
 	}
-	a.handle(CalcLoudness{})
+	a.handle(MeasureLoudness{})
 	settle(t, a, func() bool { return tr.Scanned && !tr.Stale && !tr.Measuring })
 	if tr.Frames == 0 {
 		t.Fatal("the new file was never read")
@@ -349,7 +349,7 @@ func measuredApp(t *testing.T) *app {
 	return a
 }
 
-func TestAChangeWaitsForCalcLoudnessToBeMeasured(t *testing.T) {
+func TestAChangeWaitsForMeasureLoudnessToBeMeasured(t *testing.T) {
 	a := measuredApp(t)
 	tr := &a.Tracks[1]
 	was := tr.Measure.LUFS
@@ -357,9 +357,9 @@ func TestAChangeWaitsForCalcLoudnessToBeMeasured(t *testing.T) {
 	if !tr.Stale || tr.Measuring || len(a.settle) != 0 {
 		t.Fatalf("after a change the track is stale %v, measuring %v, with %d measurings due", tr.Stale, tr.Measuring, len(a.settle))
 	}
-	a.handle(CalcLoudness{})
+	a.handle(MeasureLoudness{})
 	if !a.Tracks[1].Measuring || a.Tracks[0].Measuring {
-		t.Fatal("Calc LUFS measures other than the track changed")
+		t.Fatal("Measure loudness measures other than the track changed")
 	}
 	settle(t, a, func() bool { return !tr.Measuring })
 	if tr.Stale || math.Abs(float64(tr.Measure.LUFS-(was-6))) > 0.1 {
@@ -371,7 +371,7 @@ func TestAChangeWhileMeasuringLeavesTheTrackStale(t *testing.T) {
 	a := measuredApp(t)
 	tr := &a.Tracks[0]
 	a.handle(SetEdit{ID: tr.ID, Edit: Edit{Gain: -3}, Seq: 1})
-	a.handle(CalcLoudness{})
+	a.handle(MeasureLoudness{})
 	a.startMeasures()
 	// Changed again before the measure comes back.
 	a.handle(SetEdit{ID: tr.ID, Edit: Edit{Gain: -9}, Seq: 2})
@@ -655,7 +655,7 @@ func TestATracksOwnSilenceIsMeasuredAndExported(t *testing.T) {
 	before := a.Tracks[1].Measure.Length
 	s := 2500 * time.Millisecond
 	a.handle(SetSilence{ID: a.Tracks[1].ID, Silence: &s})
-	a.handle(CalcLoudness{})
+	a.handle(MeasureLoudness{})
 	settle(t, a, func() bool { return !a.Tracks[1].Measuring })
 	if d := a.Tracks[1].Measure.Length - before; (d - 1500*time.Millisecond).Abs() > time.Millisecond {
 		t.Fatalf("with 2.5 s of silence for the album's 1, the track grew %v", d)

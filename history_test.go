@@ -68,7 +68,7 @@ func TestMeasuresAndListeningAreNoChange(t *testing.T) {
 	a.handle(Pick{ID: a.Tracks[1].ID})
 	a.handle(SetMatch{On: true})
 	a.handle(SetView{View: ViewGram})
-	a.handle(CalcLoudness{})
+	a.handle(MeasureLoudness{})
 	if a.Unsaved || a.UndoLabel != "" {
 		t.Fatalf("picking, matching and viewing left the album unsaved %v, with %q to undo", a.Unsaved, a.UndoLabel)
 	}

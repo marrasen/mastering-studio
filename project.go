@@ -38,9 +38,10 @@ type settings struct {
 	Window *driver.Placement `json:",omitempty"`
 	Zoom   float32           `json:",omitempty"`
 	// Background plays the session of listening not heard on, and
-	// Spectrum is how the meters show the spectrum.
-	Background bool         `json:",omitempty"`
-	Spectrum   SpectrumView `json:",omitempty"`
+	// Spectrum is how the meters show the spectrum: nil, as the program
+	// runs the first time, its output alone.
+	Background bool          `json:",omitempty"`
+	Spectrum   *SpectrumView `json:",omitempty"`
 }
 
 // appName is the studio's name, as its window and its sound are titled.
@@ -83,6 +84,15 @@ func untitled() string {
 	return ""
 }
 
+// spectrum is how the meters show the spectrum, as kept, or as the
+// program first shows it.
+func (s settings) spectrum() SpectrumView {
+	if s.Spectrum == nil {
+		return firstSpectrum
+	}
+	return *s.Spectrum
+}
+
 func readSettings(path string) settings {
 	var s settings
 	if b, err := os.ReadFile(path); err == nil {
@@ -97,7 +107,7 @@ func (a *app) writeSettings() {
 		return
 	}
 	s := settings{Albums: a.RecentAlbums, Plugins: a.Recent, LAME: a.lame, Window: a.window, Zoom: a.zoom,
-		Background: a.Background, Spectrum: a.Spectrum}
+		Background: a.Background, Spectrum: &a.Spectrum}
 	b, err := json.MarshalIndent(s, "", "\t")
 	if err == nil && os.MkdirAll(filepath.Dir(a.settingsFile), 0o755) == nil {
 		_ = os.WriteFile(a.settingsFile, b, 0o644)

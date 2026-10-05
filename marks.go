@@ -11,6 +11,7 @@ import (
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/text"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -145,29 +146,48 @@ func (e *editor) markUnder(p geom.Point) int {
 	return -1
 }
 
-// cardOf is where mark i's card shows, under its pin, and its button
-// that takes it away.
+// The note card's measures: its widest, and the room its text leaves
+// for the padding and the button that takes the note away.
+const (
+	cardMaxW = 320
+	cardPadW = 52
+)
+
+// noteText is mark m's note laid out in lines as wide as its card
+// lets it be, all of it, kept while it is shown.
+func (e *editor) noteText(m Mark) text.Paragraph {
+	if e.noteLaid.text == m.Text {
+		return e.noteLaid.para
+	}
+	e.noteLaid.text = m.Text
+	e.noteLaid.para = text.GoSans(false, false).Layout(m.Text, text.Style{Size: 12}, cardMaxW-cardPadW)
+	return e.noteLaid.para
+}
+
+// cardOf is where mark i's card shows, under its pin, as tall as its
+// note needs, and its button that takes it away.
 func (e *editor) cardOf(i int) (card, remove geom.Rect) {
 	m := e.track.Marks[i]
 	pin := e.markAt(m)
-	w := min(max(shaped(m.Text, 12, false).Advance+52, 120), 320)
+	para := e.noteText(m)
+	w := min(max(para.Size.W+cardPadW, 120), cardMaxW)
 	x := max(4, min(pin.Center().X-w/2, e.size.W-w-4))
-	card = geom.Rc(x, pin.Max.Y+6, w, 34)
+	card = geom.Rc(x, pin.Max.Y+6, w, max(34, 19+para.Size.H))
 	remove = geom.Rc(card.Max.X-30, card.Min.Y+5, 24, 24)
 	return card, remove
 }
 
 // startMark opens the field to write a note: anew at at, or over mark
 // id.
-func (e *editor) startMark(at time.Duration, id int, text string, u *gunim.UI) {
+func (e *editor) startMark(at time.Duration, id int, note string, u *gunim.UI) {
 	if e.track.ID == 0 {
 		return
 	}
 	e.writing, e.writeAt, e.writeID = true, at, id
 	e.lightMarks()
 	e.markField.Disabled = false
-	e.markField.SetText(text)
-	e.markField.Select(0, len([]rune(text)))
+	e.markField.SetText(note)
+	e.markField.Select(0, len([]rune(note)))
 	u.Focus(e.markField)
 	u.Invalidate()
 }
@@ -181,12 +201,12 @@ func (e *editor) keepMark(u *gunim.UI) {
 	e.writing = false
 	e.lightMarks()
 	e.markField.Disabled = true
-	text := strings.TrimSpace(e.markField.Text())
+	note := strings.TrimSpace(e.markField.Text())
 	switch {
-	case e.writeID == 0 && text != "":
-		u.Send(e, AddMark{Track: e.track.ID, At: e.writeAt, Text: text})
-	case e.writeID != 0 && text != "":
-		u.Send(e, SetMark{Track: e.track.ID, ID: e.writeID, Text: text})
+	case e.writeID == 0 && note != "":
+		u.Send(e, AddMark{Track: e.track.ID, At: e.writeAt, Text: note})
+	case e.writeID != 0 && note != "":
+		u.Send(e, SetMark{Track: e.track.ID, ID: e.writeID, Text: note})
 	case e.writeID != 0:
 		u.Send(e, RemoveMark{Track: e.track.ID, ID: e.writeID})
 	}
@@ -307,7 +327,7 @@ func (e *editor) paintMarks(p *paint.Painter, f gunim.Frame, box geom.Size) {
 		defer p.Push(paint.Scale(0.94+0.06*in, geom.Pt(card.Center().X, card.Min.Y)))()
 		p.ShadowRRect(card, 10, paint.Solid(raised), paint.Shadow{Blur: 14, Color: faded(night, 0.7)})
 		shapedFace(clock(m.At), 9, false).Paint(p, geom.Pt(card.Min.X+10, card.Min.Y+3), faded(amber, 0.9))
-		paintFit(p, m.Text, 12, false, geom.Pt(card.Min.X+10, card.Min.Y+15), card.Size().W-48, ink)
+		e.noteText(m).Paint(p, geom.Pt(card.Min.X+10, card.Min.Y+15), ink)
 		widget.PaintIcon(p, f.Theme, icon.Trash2, remove.Inset(geom.Uniform(5)), faded(coral, 0.9))
 	}
 }

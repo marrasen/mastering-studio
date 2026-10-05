@@ -29,6 +29,10 @@ type (
 	SetSpectrum struct{ View SpectrumView }
 )
 
+// firstSpectrum is how the spectrum is shown the first time the program
+// runs: the output alone.
+var firstSpectrum = SpectrumView{HideIn: true}
+
 // meters read the sound as it is heard, frame by frame: its loudness,
 // as momentary, short-term and integrated since the track started, and
 // its true peak; its stereo image, as a vectorscope and the
