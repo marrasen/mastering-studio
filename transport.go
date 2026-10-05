@@ -8,6 +8,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/widget"
 )
 
 // transport plays the track picked from its start, plays and pauses
@@ -22,8 +23,12 @@ type transport struct {
 	restart          *iconButton
 	match            *pill
 	album            *pill
-	// bypass plays the track without its chain and gains, to compare.
-	bypass *pill
+	// bypass plays the track without its chain and gains, to compare;
+	// carry turns through where a track picked while one plays starts,
+	// its tip saying which.
+	bypass  *pill
+	carry   *iconButton
+	carryTo *widget.Tooltip
 	// compact says the buttons are in fewer words, for a narrow window;
 	// pillsX is where they start, and matchMid where Match's middle is.
 	compact  bool
@@ -39,6 +44,10 @@ func newTransport(r *root) *transport {
 	t.play = newIconButton(icon.Play, func(u *gunim.UI) { u.Send(r, TogglePlay{}) })
 	t.play.primary = true
 	t.next = newIconButton(icon.SkipForward, func(u *gunim.UI) { r.step(1, u) })
+	t.carry = newIconButton(icon.Percent, func(u *gunim.UI) {
+		u.Send(r, SetCarry{Carry: (r.state.Carry + 1) % carries})
+	})
+	t.carryTo = widget.NewTooltip(t.carry, carryLooks[CarryPercent].tip)
 	t.match = newPill("Match levels", func(u *gunim.UI) {
 		// Matching a track not yet measured waits on its loudness: the
 		// button measures it.
@@ -72,13 +81,16 @@ func (t *transport) show(s Album) {
 		}
 	}
 	t.album.setLit(s.AlbumPlay)
+	look := carryLooks[s.Carry%carries]
+	t.carry.morph(look.icon)
+	t.carryTo.Text = look.tip
 	t.bypass.warn = s.Bypass
 	t.volume.value = float64(s.Volume)
 }
 
 // Children implements [gunim.Composite].
 func (t *transport) Children() []gunim.Node {
-	return []gunim.Node{t.back, t.play, t.next, t.match, t.volume, t.album, t.restart, t.bypass}
+	return []gunim.Node{t.back, t.play, t.next, t.match, t.volume, t.album, t.restart, t.bypass, t.carryTo}
 }
 
 // Layout implements [gunim.Node]: the buttons left, the level right.
@@ -93,6 +105,8 @@ func (t *transport) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	kids.At(1).Place(geom.Pt(100, mid-28))
 	kids.At(2).Layout(gunim.Tight(geom.Sz(40, 40)))
 	kids.At(2).Place(geom.Pt(164, mid-20))
+	kids.At(8).Layout(gunim.Tight(geom.Sz(34, 34)))
+	kids.At(8).Place(geom.Pt(210, mid-17))
 	// The buttons at the right in their words, or, where they would
 	// crowd the time, in fewer.
 	short := map[string]string{"Autoplay next": "Autoplay", "Match levels": "Match", "Measure loudness first": "Measure first"}
@@ -139,7 +153,7 @@ func (t *transport) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 const timeRoom = 180
 
 // timeX is where the time is written, after the buttons.
-const timeX = 222
+const timeX = 258
 
 // Paint implements [gunim.Node]: the buttons, and the time and the
 // track playing between them and the level.

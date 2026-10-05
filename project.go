@@ -42,6 +42,8 @@ type settings struct {
 	// runs the first time, its output alone.
 	Background bool          `json:",omitempty"`
 	Spectrum   *SpectrumView `json:",omitempty"`
+	// Carry is where a track picked while one plays starts.
+	Carry Carry `json:",omitempty"`
 }
 
 // appName is the studio's name, as its window and its sound are titled.
@@ -107,7 +109,7 @@ func (a *app) writeSettings() {
 		return
 	}
 	s := settings{Albums: a.RecentAlbums, Plugins: a.Recent, LAME: a.lame, Window: a.window, Zoom: a.zoom,
-		Background: a.Background, Spectrum: &a.Spectrum}
+		Background: a.Background, Spectrum: &a.Spectrum, Carry: a.Carry}
 	b, err := json.MarshalIndent(s, "", "\t")
 	if err == nil && os.MkdirAll(filepath.Dir(a.settingsFile), 0o755) == nil {
 		_ = os.WriteFile(a.settingsFile, b, 0o644)
@@ -215,7 +217,7 @@ func (a *app) switchTo(path string, fresh bool) {
 	a.Album = Album{Gap: keep.Gap, Target: keep.Target, Bits: keep.Bits, Dither: keep.Dither, Volume: keep.Volume,
 		Plugins: keep.Plugins, Scanning: keep.Scanning, Recent: keep.Recent, RecentAlbums: keep.RecentAlbums,
 		Follow: keep.Follow, References: keep.References, Away: away, Background: keep.Background,
-		Spectrum: keep.Spectrum, Presets: keep.Presets}
+		Spectrum: keep.Spectrum, Presets: keep.Presets, Carry: keep.Carry}
 	a.queued = queuedKey{}
 	a.file = path
 	if fresh {
