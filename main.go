@@ -37,6 +37,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/marrasen/gunim"
@@ -44,12 +45,16 @@ import (
 	"github.com/marrasen/gunim/audio/speaker"
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/install"
 )
 
 // version is the studio's version, set as a release is built.
 var version = "dev"
 
 func main() {
+	// Started from anywhere but its own folder, the studio opens its
+	// installer; installed, it goes on.
+	install.Run(installer())
 	state := flag.String("project", "", "the album to open; by default the one open last, or the untitled one")
 	shot := flag.String("shot", "", "write the window to this PNG file after -after, and quit")
 	after := flag.Duration("after", 2*time.Second, "how long -shot waits")
@@ -59,6 +64,11 @@ func main() {
 	iconOut := flag.String("write-icon", "", "write the icon, 256 pixels square, to this PNG file, and quit")
 	demo := flag.String("demo", "", "write six demo songs and a project of them to this folder, and open it")
 	flag.Parse()
+	paths := flag.Args()
+	// A project opened from the file manager comes as its path alone.
+	if *state == "" && len(paths) == 1 && strings.EqualFold(filepath.Ext(paths[0]), albumExt) {
+		*state, paths = paths[0], nil
+	}
 	if *demo != "" {
 		path, err := writeDemo(*demo)
 		if err != nil {
@@ -79,7 +89,7 @@ func main() {
 			log.Fatalf("mastering: -size %q: want a width and a height, as 1680x1040", *size)
 		}
 	}
-	o := options{file: *state, paths: flag.Args(), play: *play, shot: *shot, after: *after, size: geom.Sz(w, h)}
+	o := options{file: *state, paths: paths, play: *play, shot: *shot, after: *after, size: geom.Sz(w, h)}
 	if d := configDir(); d != "" {
 		o.settings = filepath.Join(d, "settings.json")
 	}
