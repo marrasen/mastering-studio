@@ -2,7 +2,7 @@ module github.com/marrasen/mastering-studio
 
 go 1.27.1
 
-require github.com/marrasen/gunim v0.0.0-20261006073230-8e1a017687b6
+require github.com/marrasen/gunim v0.0.0-20261006091035-1be80d5407e2
 
 require (
 	github.com/ebitengine/purego v0.11.0 // indirect
