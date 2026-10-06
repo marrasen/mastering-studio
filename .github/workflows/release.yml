@@ -3,8 +3,8 @@ name: Release
 # A tag such as v0.1.0 builds the programs for Windows and Linux and
 # publishes them as a release, each the one file a user downloads: run
 # from anywhere, it installs itself, and installed, it updates itself
-# from these releases. Their names and SHA256SUMS are what the updater
-# looks for. A run started by hand builds them and keeps them as an
+# from these releases. Their names, SHA256SUMS and its signature,
+# SHA256SUMS.sig, are what the updater looks for. A run started by hand builds them and keeps them as an
 # artifact of the run.
 on:
   push:
@@ -54,6 +54,12 @@ jobs:
               -o "dist/mastering-studio_${VERSION}_${goos}_${goarch}${ext}" .
           done
           cd dist && sha256sum mastering-studio_* > SHA256SUMS
+      # Installed copies run an update only with this signature, made
+      # with the private key whose public key is in install.go.
+      - name: Sign
+        env:
+          GUNIM_SIGN_KEY: ${{ secrets.GUNIM_SIGN_KEY }}
+        run: go run github.com/marrasen/gunim/tools/gunimsign dist/SHA256SUMS
       - uses: actions/upload-artifact@v7
         with:
           name: mastering-studio
