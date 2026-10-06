@@ -156,8 +156,14 @@ These flags help:
 A release is built by pushing a tag such as `v0.1.0`. The
 [Release workflow](.github/workflows/release.yml) builds the programs for
 Windows, with its icon, and for Linux, and publishes them with a
-`SHA256SUMS` of both. Installed copies that keep themselves up to date
-fetch the new release from there, checked against those sums.
+`SHA256SUMS` of both and its signature, `SHA256SUMS.sig`. Installed
+copies that keep themselves up to date fetch the new release from
+there, checked against those sums, and run it only when the signature
+matches the public key in `install.go`. The workflow signs with the
+private key, kept as the repository's `GUNIM_SIGN_KEY` secret; a
+release without it fails to build. See "Signed updates" in gunim's
+[`install` documentation](https://pkg.go.dev/github.com/marrasen/gunim/install)
+for how the key was made and what to do to change it.
 
 ## Built with gunim
 

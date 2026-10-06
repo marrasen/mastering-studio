@@ -37,9 +37,12 @@ func installer() install.App {
 		Files:       legal,
 		FileTypes:   []install.FileType{{Name: "Mastering project", Exts: []string{albumExt}, Default: true}},
 		Updates:     install.GitHub{Repo: "marrasen/mastering-studio"},
-		Available:   func(r install.Release) { tell(news{release: r}) },
-		Updated:     func(r install.Release) { tell(news{release: r, ready: true}) },
-		Data:        []string{configDir(), cacheDir()},
+		// The public key the releases are signed with. The release workflow
+		// signs with the private key, kept as the GUNIM_SIGN_KEY secret.
+		UpdateKey: "IZkWDVi0e0WckvJoEv0xfAB6xuNaEBO+lbb0B2r9VYQ=",
+		Available: func(r install.Release) { tell(news{release: r}) },
+		Updated:   func(r install.Release) { tell(news{release: r, ready: true}) },
+		Data:      []string{configDir(), cacheDir()},
 	}
 }
 
