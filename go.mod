@@ -2,7 +2,7 @@ module github.com/marrasen/mastering-studio
 
 go 1.27.1
 
-require github.com/marrasen/gunim v0.0.0-20261006051602-a7e86634649a
+require github.com/marrasen/gunim v0.0.0-20261006073230-8e1a017687b6
 
 require (
 	github.com/ebitengine/purego v0.11.0 // indirect
@@ -17,6 +17,7 @@ require (
 	github.com/mewkiz/flac v1.0.14 // indirect
 	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect
 	github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985 // indirect
+	github.com/yuin/goldmark v1.8.6 // indirect
 	golang.org/x/image v0.45.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
