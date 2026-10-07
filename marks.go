@@ -46,7 +46,7 @@ type (
 
 // markField is the field a note is written in, over its mark: it keeps
 // the note as Enter is pressed or it loses the keyboard, and Escape lets
-// it go.
+// it go. A press that takes the keyboard from it only closes it.
 type markField struct {
 	*widget.TextField
 	e *editor
@@ -55,6 +55,7 @@ type markField struct {
 // Handle implements [gunim.Handler].
 func (f *markField) Handle(ev input.Event, u *gunim.UI) bool {
 	if _, ok := ev.(input.FocusLost); ok && f.e.writing {
+		f.e.keptAt = u.Now()
 		f.e.keepMark(u)
 	}
 	return f.TextField.Handle(ev, u)

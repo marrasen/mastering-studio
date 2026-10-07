@@ -851,6 +851,41 @@ func TestAFlickOfTheRulerGlidesTheViewOnAndSlows(t *testing.T) {
 	}
 }
 
+func TestAClickInTheWaveOnlyClosesTheNoteBeingWritten(t *testing.T) {
+	w, r, run := stage(t, album())
+	ed := r.editor
+	ed.v0.Jump(2)
+	ed.v1.Jump(6)
+	b := boundsOf(t, w, run, ed)
+	at := b.Min.Add(ed.noteButton().Center())
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(2)
+	w.Input(input.TextInput{Text: "Snare too loud"})
+	run(1)
+	edits(w)
+	wave := b.Min.Add(geom.Pt(ed.xOf(5), b.Size().H/2))
+	w.Input(input.PointerMove{Pos: wave})
+	w.Input(input.PointerDown{Pos: wave, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: wave, Button: input.ButtonPrimary})
+	run(2)
+	_, rest := edits(w)
+	want := AddMark{Track: 1, At: 4 * time.Second, Text: "Snare too loud"}
+	if ed.writing || len(rest) != 1 || rest[0] != want {
+		t.Fatalf("a click in the wave while writing sent %v, want only %v", rest, want)
+	}
+	// The next click seeks.
+	w.Input(input.PointerDown{Pos: wave, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: wave, Button: input.ButtonPrimary})
+	run(2)
+	if _, rest := edits(w); len(rest) != 1 {
+		t.Fatalf("the click after sent %v, want a seek", rest)
+	} else if _, ok := rest[0].(SeekTo); !ok {
+		t.Fatalf("the click after sent %v, want a seek", rest)
+	}
+}
+
 func TestANoteIsWrittenAtATimeAndTakenAwayFromItsCard(t *testing.T) {
 	w, r, run := stage(t, album())
 	ed := r.editor

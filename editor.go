@@ -99,6 +99,9 @@ type editor struct {
 	writeAt   time.Duration
 	writeID   int
 	hotMark   int
+	// keptAt is when the field last lost the keyboard while writing: a
+	// press then, which took the keyboard, only closes the field.
+	keptAt time.Time
 	// markGlow lights each note's pin as the pointer comes over it, by
 	// its ID; cardIn brings in the card of note cardID.
 	markGlow map[int]*anim.Float
@@ -355,6 +358,9 @@ func (e *editor) DragsTouch() bool { return e.held != gripNone && e.held != grip
 func (e *editor) Handle(ev input.Event, u *gunim.UI) bool {
 	if !e.track.Scanned {
 		return false
+	}
+	if d, ok := ev.(input.PointerDown); ok && d.Focusing && e.keptAt.Equal(u.Now()) {
+		return true
 	}
 	if e.held == gripNone && e.handleMarks(ev, u) {
 		return true
