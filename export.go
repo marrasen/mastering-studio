@@ -79,6 +79,23 @@ func (a *app) exportDir() string {
 	return filepath.Join(filepath.Dir(a.Tracks[0].File), "Export")
 }
 
+// there is the nearest folder to dir that is there: dir, or the folder
+// it would be made in, as the Export folder beside the tracks before
+// the first export.
+func there(dir string) string {
+	for dir != "" {
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			return dir
+		}
+		up := filepath.Dir(dir)
+		if up == dir {
+			return ""
+		}
+		dir = up
+	}
+	return ""
+}
+
 // export renders tracks to files, each at its own length, from the
 // silence before it to its fade's end, measured as it is written: the
 // tracks named, or every one. Tracks export side by side, as many at

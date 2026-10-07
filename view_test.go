@@ -13,6 +13,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audioui"
+	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
@@ -241,6 +242,31 @@ func TestMatchingLevelsBringsEachTrackToTheTarget(t *testing.T) {
 	want := math.Pow(10, float64(a.Target-a.Tracks[0].Measure.LUFS)/20)
 	if math.Abs(float64(a.d.matchOf(a.Current))-want) > 1e-3 {
 		t.Fatalf("matched by %.3f, want %.3f: the target over the track's loudness", a.d.matchOf(a.Current), want)
+	}
+}
+
+func TestChangingTheExportFolderOpensWhereItIs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	paths := writeAlbum(t)
+	for _, p := range paths {
+		a.add(p, "")
+	}
+	asked := make(chan string, 1)
+	a.choose = func(o driver.ChooseOptions) ([]string, error) {
+		asked <- o.Folder
+		return nil, nil
+	}
+	// No Export folder yet: the dialog opens beside the tracks.
+	a.handle(ChooseExportDir{})
+	if got, want := <-asked, filepath.Dir(paths[0]); got != want {
+		t.Fatalf("with no Export folder yet the dialog opened in %q, want %q", got, want)
+	}
+	a.ExportDir = t.TempDir()
+	a.handle(ChooseExportDir{})
+	if got := <-asked; got != a.ExportDir {
+		t.Fatalf("the dialog opened in %q, want the folder chosen, %q", got, a.ExportDir)
 	}
 }
 

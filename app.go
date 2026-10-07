@@ -1137,8 +1137,9 @@ func (a *app) handle(in gunim.Intent) {
 			}
 		}()
 	case ChooseExportDir:
+		dir := a.exportDir()
 		go func() {
-			paths, err := a.choose(driver.ChooseOptions{Title: "Export to", Folders: true})
+			paths, err := a.choose(driver.ChooseOptions{Title: "Export to", Folders: true, Folder: there(dir)})
 			if err == nil && len(paths) > 0 {
 				a.dirs <- paths[0]
 			}
