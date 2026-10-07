@@ -46,6 +46,10 @@ type settings struct {
 	Carry Carry `json:",omitempty"`
 	// Beta takes pre-releases as updates too.
 	Beta bool `json:",omitempty"`
+	// Output is how the studio plays its sound, and Theme the theme it
+	// is painted in.
+	Output Output
+	Theme  string `json:",omitempty"`
 }
 
 // appName is the studio's name, as its window and its sound are titled.
@@ -98,7 +102,7 @@ func (s settings) spectrum() SpectrumView {
 }
 
 func readSettings(path string) settings {
-	var s settings
+	s := settings{Output: firstOutput}
 	if b, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(b, &s)
 	}
@@ -111,7 +115,8 @@ func (a *app) writeSettings() {
 		return
 	}
 	s := settings{Albums: a.RecentAlbums, Plugins: a.Recent, LAME: a.lame, Window: a.window, Zoom: a.zoom,
-		Background: a.Background, Spectrum: &a.Spectrum, Carry: a.Carry, Beta: a.Beta}
+		Background: a.Background, Spectrum: &a.Spectrum, Carry: a.Carry, Beta: a.Beta,
+		Output: a.output, Theme: a.theme}
 	b, err := json.MarshalIndent(s, "", "\t")
 	if err == nil && os.MkdirAll(filepath.Dir(a.settingsFile), 0o755) == nil {
 		_ = os.WriteFile(a.settingsFile, b, 0o644)

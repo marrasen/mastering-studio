@@ -42,7 +42,6 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/speaker"
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/install"
@@ -156,12 +155,8 @@ func run(o options) error {
 	defer stop()
 	mix := audio.NewMixer()
 	d := newDeck(mix)
-	// Mastering wants no quick answer from the sound: a buffer that rides
-	// out a busy moment, the meters following it as heard.
-	if spk, err := speaker.Open(mix, speaker.Options{Name: appName, Latency: 150 * time.Millisecond}); err != nil {
+	if err := d.openOutput(readSettings(o.settings).Output); err != nil {
 		log.Printf("mastering: no sound: %v", err)
-	} else {
-		d.spk = spk
 	}
 	err := gunim.Main(ctx, func(a *gunim.App) error {
 		w, err := a.NewWindow(gunim.WindowOptions{Title: appName, Size: o.size, Place: o.place, Icons: icons(),

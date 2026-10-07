@@ -51,6 +51,7 @@ var helpGroups = []struct {
 		{"Ctrl + S", "Save; Ctrl + Shift + S saves as"},
 		{"Ctrl + Z", "Undo the last change"},
 		{"Ctrl + Shift + Z", "Redo it"},
+		{"Ctrl + ,", "Open the settings"},
 	}},
 	{"Help", [][2]string{
 		{"F1, ?", "This help"},

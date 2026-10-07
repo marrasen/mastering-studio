@@ -464,6 +464,17 @@ type app struct {
 	reveal    func(path string) error
 	// queued is what the deck has waiting to play next, in album play.
 	queued queuedKey
+	// output is how the studio plays its sound, and theme the theme it
+	// is painted in, both kept for the computer. settingsOpen says the
+	// settings' dialog is up, told anew at each of settingsTick, with
+	// the ASIO drivers found as it opened, and the studio as installed,
+	// or nil.
+	output       Output
+	theme        string
+	settingsOpen bool
+	settingsTick *time.Ticker
+	drivers      []string
+	installed    *install.Installation
 	// version counts each track's changes, so a measuring tells whether
 	// it measured the track as it is.
 	version map[int]int
@@ -823,6 +834,10 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	st := readSettings(a.settingsFile)
 	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
 	a.Background, a.Spectrum, a.Carry, a.Beta = st.Background, st.spectrum(), st.Carry, st.Beta
+	a.output, a.theme = st.Output, themeNamed(st.Theme)
+	if o.theme != "" {
+		a.theme = themeNamed(o.theme)
+	}
 	if a.settingsFile != "" {
 		a.refsFile = filepath.Join(filepath.Dir(a.settingsFile), "references.json")
 		a.presetsFile = filepath.Join(filepath.Dir(a.settingsFile), "presets.json")
@@ -850,7 +865,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	watch := time.NewTicker(time.Second)
 	defer watch.Stop()
 	_ = c.Focus("album")
-	_ = c.SetTheme(themeNamed(o.theme))
+	_ = c.SetTheme(a.theme)
 	if o.play {
 		a.play(0, 10*time.Millisecond)
 	}
@@ -939,6 +954,13 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			}
 		case <-a.profiled:
 			a.profileDone()
+		case <-a.d.outputChanged():
+			// The speakers opened again, at a rate of their own.
+			a.playAgain()
+		case <-a.ticks():
+			// The sound as it plays now, for the settings' dialog alone.
+			_ = c.Publish(settingsTopic, a.settingsDraft())
+			continue
 		case n := <-updateNews:
 			a.newsOf(n)
 		case <-a.d.done():
@@ -977,6 +999,9 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		a.queueNext()
 		a.applyLoop()
 		_ = c.Publish(albumTopic, a.Album)
+		if a.settingsOpen {
+			_ = c.Publish(settingsTopic, a.settingsDraft())
+		}
 	}
 }
 
@@ -1326,6 +1351,8 @@ func (a *app) handle(in gunim.Intent) {
 	case SetCurves:
 		a.Curves = in.Curves
 		a.dirty = true
+	case OpenSettings, SettingsClosed, SetOutput, OpenControlPanel, ChooseTheme, SetUpdates:
+		a.handleSettings(in)
 	case SetBeta:
 		a.Beta = in.On
 		a.writeSettings()

@@ -32,6 +32,8 @@ func registerViews(w *gunim.Window, d *deck) {
 	gunim.RegisterView(w, "preset", newPresetDialog, nil)
 	gunim.RegisterView(w, "export", newExportDialog,
 		func(e *exportDialog, d ExportDraft, u *gunim.UI) { e.show(d, u) })
+	gunim.RegisterView(w, "settings", newSettingsDialog,
+		func(s *settingsDialog, d SettingsDraft, u *gunim.UI) { s.show(d, u) })
 }
 
 // root is the whole window: the header along the top; the tracks down
@@ -241,10 +243,13 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 	if !ok {
 		return false
 	}
-	// Ctrl, or Command, with S saves, and with Z undoes.
+	// Ctrl, or Command, with S saves, with Z undoes, and with a comma
+	// opens the settings.
 	if k.Mods.Has(input.ModControl) || k.Mods.Has(input.ModSuper) {
 		shift := k.Mods.Has(input.ModShift)
 		switch {
+		case k.Key == input.KeyComma:
+			u.Send(r, OpenSettings{})
 		case k.Key == input.KeyS && shift:
 			u.Send(r, SaveAlbumAs{})
 		case k.Key == input.KeyS:
@@ -589,7 +594,7 @@ func (h *header) openMenu(u *gunim.UI) {
 		{"Open project…", "", icon.FolderOpen, false, OpenAlbum{}, false},
 		{"Edit release details…", "", icon.Disc3, false, EditRelease{}, false},
 		{"Keyboard shortcuts", "", icon.Keyboard, false, ShowHelp{}, false},
-		{"Beta updates", "", icon.FlaskConical, false, SetBeta{On: !s.Beta}, s.Beta},
+		{"Settings…", "Ctrl+,", icon.Settings, false, OpenSettings{}, false},
 		{profile, "", icon.Activity, s.Profiling, RecordProfile{}, false},
 	}
 	m.Breaks, m.Captions, m.Checked = []int{2, 4, 6, 8}, nil, nil

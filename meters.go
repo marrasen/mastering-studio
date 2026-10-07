@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
-	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
@@ -43,6 +42,8 @@ type meters struct {
 	r    *root
 	from int64
 	buf  []float32
+	// rate is the rate the sound is heard at, the mixer's.
+	rate int
 	loud *audioui.Loudness
 	// scope is the stereo image.
 	scope *audioui.Scope
@@ -78,7 +79,8 @@ type meters struct {
 }
 
 func newMeters(r *root) *meters {
-	m := &meters{r: r, loud: audioui.NewLoudness(audio.SampleRate), scope: audioui.NewScope(),
+	rate := r.d.mix.Rate()
+	m := &meters{r: r, rate: rate, loud: audioui.NewLoudness(rate), scope: audioui.NewScope(),
 		in: audioui.NewLevels(), out: audioui.NewLevels(), spectrum: audioui.NewSpectrum(specPoints),
 		inMeter: audioui.NewSpectrometer(4096)}
 	m.spectrum.ShowIn, m.spectrum.Switches = true, true
@@ -112,7 +114,7 @@ func (m *meters) fader(out bool) *audioui.Fader {
 // is picked.
 func (m *meters) show(was, s Album) {
 	if s.Starts != was.Starts || s.Current != was.Current {
-		m.loud.Reset(audio.SampleRate)
+		m.loud.Reset(m.rate)
 		m.in, m.out = audioui.NewLevels(), audioui.NewLevels()
 	}
 	// The spectrum as kept, where the application says it changed: a
@@ -147,6 +149,12 @@ func (m *meters) listening() float64 {
 // been heard since the last.
 func (m *meters) Step(dt time.Duration) bool {
 	var now int64
+	if rate := m.r.d.mix.Rate(); rate != m.rate {
+		// The speakers opened again at another rate: the sound heard
+		// comes at it from now.
+		m.rate = rate
+		m.loud.Reset(rate)
+	}
 	m.buf, now = m.r.d.heard(m.buf[:0], m.from)
 	m.from = now
 	if len(m.buf) > 0 {
@@ -156,7 +164,7 @@ func (m *meters) Step(dt time.Duration) bool {
 			m.buf[i] *= back
 		}
 		m.loud.Write(m.buf)
-		m.out.Take(m.buf, audio.SampleRate, dt)
+		m.out.Take(m.buf, m.rate, dt)
 		m.scope.Write(m.buf)
 	} else {
 		m.out.Quiet(dt)
