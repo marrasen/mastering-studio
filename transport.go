@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/anim"
+	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/paint"
@@ -18,6 +21,7 @@ import (
 // plays on through the album, track into track, and the volume sets how
 // loud to listen.
 type transport struct {
+	anim.Group
 	r                *root
 	back, play, next *iconButton
 	restart          *iconButton
@@ -35,13 +39,44 @@ type transport struct {
 	pillsX   float32
 	matchMid float32
 	volume   *valueChip
+	// waiting says play was pressed and the sound has yet to start, as
+	// while the track's plugins load: from waitSince, with Starts and
+	// Note as they were then. ring brings in the arc that turns round
+	// the play button meanwhile, and spin is how far it has turned.
+	waiting   bool
+	waitSince time.Time
+	waitFrom  Album
+	ring      *anim.Float
+	spin      float64
+}
+
+// The wait for the sound to start: how long before the ring shows, so
+// a quick start shows none, and how long before it gives up.
+const (
+	ringAfter  = 150 * time.Millisecond
+	ringGiveUp = 20 * time.Second
+)
+
+// expectPlay starts the wait for the sound, as play is pressed.
+func (t *transport) expectPlay() {
+	t.waiting, t.waitSince, t.waitFrom = true, time.Now(), t.r.state
+}
+
+// stopWaiting ends the wait, the ring going.
+func (t *transport) stopWaiting() {
+	t.waiting = false
+	t.ring.Animate(0, anim.Spring{Response: 0.25, Damping: 1})
 }
 
 func newTransport(r *root) *transport {
-	t := &transport{r: r}
-	t.restart = newIconButton(icon.RotateCcw, func(u *gunim.UI) { u.Send(r, PlayFromStart{}) })
+	t := &transport{r: r, ring: anim.NewFloat(0)}
+	t.Add(t.ring)
+	t.restart = newIconButton(icon.RotateCcw, func(u *gunim.UI) {
+		t.expectPlay()
+		u.Send(r, PlayFromStart{})
+	})
 	t.back = newIconButton(icon.SkipBack, func(u *gunim.UI) { r.step(-1, u) })
-	t.play = newIconButton(icon.Play, func(u *gunim.UI) { u.Send(r, TogglePlay{}) })
+	t.play = newIconButton(icon.Play, func(u *gunim.UI) { t.toggle(u) })
 	t.play.primary = true
 	t.next = newIconButton(icon.SkipForward, func(u *gunim.UI) { r.step(1, u) })
 	t.carry = newIconButton(icon.Percent, func(u *gunim.UI) {
@@ -64,7 +99,20 @@ func newTransport(r *root) *transport {
 	return t
 }
 
+// toggle plays, waiting for the sound to start, or pauses.
+func (t *transport) toggle(u *gunim.UI) {
+	if !t.r.state.Playing {
+		t.expectPlay()
+	}
+	u.Send(t.r, TogglePlay{})
+}
+
 func (t *transport) show(s Album) {
+	// The sound started, or will not: it started anew, or played on, or
+	// the application tells what went wrong.
+	if t.waiting && (s.Playing || s.Starts != t.waitFrom.Starts || s.Note != t.waitFrom.Note) {
+		t.stopWaiting()
+	}
 	if s.Playing {
 		t.play.morph(icon.Pause)
 	} else {
@@ -182,8 +230,51 @@ func (t *transport) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids g
 	for k := range kids.All {
 		k.Paint(p)
 	}
+	t.paintRing(p, geom.Pt(128, box.H/2))
 }
 
 // Step implements [gunim.Animator]: the time moves while a track
-// plays.
-func (t *transport) Step(time.Duration) bool { return t.r.state.Playing }
+// plays; and while play waits on the sound, a moment on, the ring turns
+// round the play button.
+func (t *transport) Step(dt time.Duration) bool {
+	if t.waiting {
+		switch since := time.Since(t.waitSince); {
+		case since > ringGiveUp:
+			t.stopWaiting()
+		case since > ringAfter && t.ring.Target() == 0:
+			t.ring.Animate(1, anim.Spring{Response: 0.35, Damping: 0.8})
+		}
+	}
+	moving := t.Group.Step(dt)
+	if t.waiting || t.ring.Value() > 0.001 {
+		t.spin += dt.Seconds()
+		return true
+	}
+	return moving || t.r.state.Playing
+}
+
+// paintRing draws the arc that turns round the play button, centred on
+// c, while play waits on the sound: it runs round, stretching and
+// drawing in as it goes, its tail fading, as it fades and grows in.
+func (t *transport) paintRing(p *paint.Painter, c geom.Point) {
+	in := min(max(t.ring.Value(), 0), 1.2)
+	if in < 0.01 {
+		return
+	}
+	radius := float32(30 + 3*min(in, 1))
+	// The head runs round a turn and a half a second; the arc stretches
+	// from a tenth of the circle to two thirds and back, every 1.6 s.
+	head := t.spin * 1.5 * 2 * math.Pi
+	sweep := 2 * math.Pi * (0.1 + 0.56*(0.5-0.5*math.Cos(t.spin*2*math.Pi/1.6)))
+	const pieces = 40
+	at := func(a float64) geom.Point {
+		return geom.Pt(c.X+radius*float32(math.Cos(a)), c.Y+radius*float32(math.Sin(a)))
+	}
+	prev := at(head - sweep)
+	for i := 1; i <= pieces; i++ {
+		u := float64(i) / pieces
+		pt := at(head - sweep*(1-u))
+		audioui.Segment(p, prev, pt, 3, faded(teal, float32(u)*min(in, 1)))
+		prev = pt
+	}
+}
