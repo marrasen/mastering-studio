@@ -850,7 +850,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	watch := time.NewTicker(time.Second)
 	defer watch.Stop()
 	_ = c.Focus("album")
-	_ = c.SetTheme(themeName)
+	_ = c.SetTheme(themeNamed(o.theme))
 	if o.play {
 		a.play(0, 10*time.Millisecond)
 	}

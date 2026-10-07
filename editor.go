@@ -710,8 +710,9 @@ func (e *editor) Children() []gunim.Node { return []gunim.Node{e.markField} }
 
 // Paint implements [gunim.Node].
 func (e *editor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	pal := colours(f.Theme)
 	whole := geom.Rect{Max: box.Point()}
-	p.RRect(whole, 16, paint.Solid(panel))
+	p.RRect(whole, 16, paint.Solid(pal.panel))
 	end := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: 1, Clip: true, Radius: 16})
 	defer end()
 	if !e.track.Scanned || e.track.Wave == nil {
@@ -720,11 +721,11 @@ func (e *editor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 			msg = "Reading " + e.track.Title + "…"
 		}
 		run := shaped(msg, 14, false)
-		run.Paint(p, geom.Pt((box.W-run.Advance)/2, box.H/2-8), faded(ink, 0.5))
+		run.Paint(p, geom.Pt((box.W-run.Advance)/2, box.H/2-8), pal.quiet(0.5))
 		return
 	}
-	e.paintRuler(p, box)
-	e.paintGap(p, box)
+	e.paintRuler(p, pal, box)
+	e.paintGap(p, pal, box)
 	// The waveform and the spectrogram, the one fading into the other.
 	whole2 := geom.Rect{Max: box.Point()}
 	if g := e.gram.Value(); g < 0.99 {
@@ -738,11 +739,11 @@ func (e *editor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 		end()
 	}
 	e.paintCurves(p, f, box)
-	e.paintFades(p, box)
-	e.paintCut(p, box)
-	e.paintPlayhead(p, box)
+	e.paintFades(p, pal, box)
+	e.paintCut(p, pal, box)
+	e.paintPlayhead(p, pal, box)
 	if e.r.state.View == ViewWave {
-		e.paintZoom(p, box)
+		e.paintZoom(p, pal, box)
 	}
 	audioui.PaintLegend(p, f.Theme, e.legendRects(), e.r.state.Curves)
 	e.paintLoop(p, f, box)
@@ -753,7 +754,7 @@ func (e *editor) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids guni
 		}
 	}
 	if g := e.glow.Value(); g > 0.01 {
-		p.RRectStroke(whole.Inset(geom.Uniform(1)), 15, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 2, Color: faded(teal, g)})
+		p.RRectStroke(whole.Inset(geom.Uniform(1)), 15, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 2, Color: faded(pal.teal, g)})
 	}
 }
 
@@ -769,12 +770,12 @@ func (e *editor) tick() float64 {
 	return 120
 }
 
-func (e *editor) paintRuler(p *paint.Painter, box geom.Size) {
+func (e *editor) paintRuler(p *paint.Painter, pal palette, box geom.Size) {
 	step := e.tick()
 	for t := math.Floor(float64(e.v0.Value())/step) * step; t <= float64(e.v1.Value()); t += step {
 		x := e.xOf(t)
-		p.RRect(geom.Rc(x, rulerH-6, 1, 6), 0, paint.Solid(faded(ink, 0.3)))
-		p.RRect(geom.Rc(x, rulerH, 1, box.H-rulerH), 0, paint.Solid(faded(ink, 0.04)))
+		p.RRect(geom.Rc(x, rulerH-6, 1, 6), 0, paint.Solid(faded(pal.ink, 0.3)))
+		p.RRect(geom.Rc(x, rulerH, 1, box.H-rulerH), 0, paint.Solid(faded(pal.ink, 0.04)))
 		label := short(time.Duration(t * float64(time.Second)))
 		if step < 1 {
 			label = fmt.Sprintf("%.2f", t)
@@ -782,26 +783,26 @@ func (e *editor) paintRuler(p *paint.Painter, box geom.Size) {
 		if t < 0 {
 			continue
 		}
-		shapedFace(label, 10, false).Paint(p, geom.Pt(x+4, 5), faded(ink, 0.45))
+		shapedFace(label, 10, false).Paint(p, geom.Pt(x+4, 5), pal.quiet(0.45))
 	}
-	p.RRect(geom.Rc(0, rulerH, box.W, 1), 0, paint.Solid(faded(ink, 0.08)))
+	p.RRect(geom.Rc(0, rulerH, box.W, 1), 0, paint.Solid(faded(pal.ink, 0.08)))
 }
 
 // paintGap draws the album's silence before the cut start: a band
 // striped across, with its length.
-func (e *editor) paintGap(p *paint.Painter, box geom.Size) {
+func (e *editor) paintGap(p *paint.Painter, pal palette, box geom.Size) {
 	start, _ := e.span()
 	x0, x1 := e.xOf(start-e.gap()), e.xOf(start)
 	if x1-x0 < 1 {
 		return
 	}
 	top := float32(rulerH)
-	p.RRect(geom.Rc(x0, top, x1-x0, box.H-top), 0, paint.Solid(faded(sky, 0.07)))
+	p.RRect(geom.Rc(x0, top, x1-x0, box.H-top), 0, paint.Solid(faded(pal.sky, 0.07)))
 	for x := x0 - box.H; x < x1; x += 14 {
 		// Stripes across the band, cut to it.
 		a, b := max(x, x0), min(x+box.H-top, x1)
 		if b > a {
-			audioui.Segment(p, geom.Pt(a, top+(a-x)), geom.Pt(b, top+(b-x)), 1, faded(sky, 0.12))
+			audioui.Segment(p, geom.Pt(a, top+(a-x)), geom.Pt(b, top+(b-x)), 1, faded(pal.sky, 0.12))
 		}
 	}
 	label := fmt.Sprintf("%.2f s silence", e.gap())
@@ -811,16 +812,16 @@ func (e *editor) paintGap(p *paint.Painter, box geom.Size) {
 	}
 	run := shaped(label, 11, true)
 	if run.Advance < x1-x0-8 {
-		run.Paint(p, geom.Pt((x0+x1-run.Advance)/2, top+8), faded(sky, 0.85))
+		run.Paint(p, geom.Pt((x0+x1-run.Advance)/2, top+8), faded(pal.sky, 0.85))
 	}
 	// Its start, a handle to set the track's own silence by.
 	w := float32(1.5)
 	if e.hot == gripSilence || e.held == gripSilence {
 		w = 3
 	}
-	p.RRect(geom.Rc(x0-w/2, top, w, box.H-top), w/2, paint.Solid(faded(sky, 0.4+0.4*onOff(own))))
+	p.RRect(geom.Rc(x0-w/2, top, w, box.H-top), w/2, paint.Solid(faded(pal.sky, 0.4+0.4*onOff(own))))
 	if e.hot == gripSilence || e.held == gripSilence {
-		e.bubble(p, box, geom.Pt(x0, box.H-44), fmt.Sprintf("%.2f s", e.gap()), sky)
+		e.bubble(p, pal, box, geom.Pt(x0, box.H-44), fmt.Sprintf("%.2f s", e.gap()), pal.sky)
 	}
 }
 
@@ -846,13 +847,13 @@ func (e *editor) paintWave(p *paint.Painter, f gunim.Frame, box geom.Size) {
 		e.track.Wave.PaintChannel(p, f.Theme, ch, top+laneH*float32(ch)+laneH/2, laneH/2-4, v, raw)
 	}
 	// Outside the cut, the file is shaded away.
-	e.paintOutside(p, box)
+	e.paintOutside(p, colours(f.Theme), box)
 }
 
 // paintZoom draws the vertical zoom's slider up the editor's right edge:
 // filled to how far the waveform is drawn louder, with its knob, and how
 // many decibels, while it is under the pointer, held or up.
-func (e *editor) paintZoom(p *paint.Painter, box geom.Size) {
+func (e *editor) paintZoom(p *paint.Painter, pal palette, box geom.Size) {
 	top, laneH := e.lanes()
 	x := box.W - zoomW/2
 	y0, y1 := top+8, top+2*laneH-8
@@ -862,25 +863,25 @@ func (e *editor) paintZoom(p *paint.Painter, box geom.Size) {
 	if on {
 		alpha = 0.9
 	}
-	p.RRect(geom.Rc(x-2, y0, 4, y1-y0), 2, paint.Solid(faded(ink, 0.12*alpha+0.04)))
+	p.RRect(geom.Rc(x-2, y0, 4, y1-y0), 2, paint.Solid(faded(pal.ink, 0.12*alpha+0.04)))
 	ky := y1 - (y1-y0)*z
-	p.RRect(geom.Rc(x-2, ky, 4, y1-ky), 2, paint.Solid(faded(sky, alpha)))
+	p.RRect(geom.Rc(x-2, ky, 4, y1-ky), 2, paint.Solid(faded(pal.sky, alpha)))
 	r := float32(5)
 	if on {
 		r = 7
 	}
-	p.ShadowRRect(geom.Rc(x-r, ky-r, 2*r, 2*r), r, paint.Solid(faded(sky, max(alpha, 0.6))),
-		paint.Shadow{Blur: 8, Color: faded(sky, 0.4*alpha)})
+	p.ShadowRRect(geom.Rc(x-r, ky-r, 2*r, 2*r), r, paint.Solid(faded(pal.sky, max(alpha, 0.6))),
+		paint.Shadow{Blur: 8, Color: faded(pal.sky, 0.4*alpha)})
 	if on || e.zoom.Value() > 0.5 {
 		words := fmt.Sprintf("+%.0f dB", e.zoom.Value())
 		run := shapedFace(words, 10, true)
-		run.Paint(p, geom.Pt(x-run.Advance-12, ky-6), faded(sky, max(alpha, 0.7)))
+		run.Paint(p, geom.Pt(x-run.Advance-12, ky-6), faded(pal.sky, max(alpha, 0.7)))
 	}
 }
 
 // paintFades draws each fade's curve over the lanes, the sound it
 // takes away shaded above it, and its handle.
-func (e *editor) paintFades(p *paint.Painter, box geom.Size) {
+func (e *editor) paintFades(p *paint.Painter, pal palette, box geom.Size) {
 	top, laneH := e.lanes()
 	start, end := e.span()
 	in, out := e.handles()
@@ -908,10 +909,10 @@ func (e *editor) paintFades(p *paint.Painter, box geom.Size) {
 				for x := x0; x <= x1; x += 2 {
 					g := float32(e.envelope(e.tAt(x)) / gain)
 					y := lt + laneH*(1-min(g, 1))
-					p.RRect(geom.Rc(x, lt, 2, y-lt), 0, paint.Solid(faded(night, 0.35)))
+					p.RRect(geom.Rc(x, lt, 2, y-lt), 0, paint.Solid(faded(pal.night, 0.35)))
 					pt := geom.Pt(x, y)
 					if x > x0 {
-						audioui.Segment(p, prev, pt, 2, amber)
+						audioui.Segment(p, prev, pt, 2, pal.amber)
 					}
 					prev = pt
 				}
@@ -923,20 +924,20 @@ func (e *editor) paintFades(p *paint.Painter, box geom.Size) {
 			r = 8
 		}
 		h := f.handle
-		p.ShadowRRect(geom.Rc(h.X-r, h.Y-r, 2*r, 2*r), r, paint.Solid(amber), paint.Shadow{Blur: 10, Color: faded(amber, 0.5)})
+		p.ShadowRRect(geom.Rc(h.X-r, h.Y-r, 2*r, 2*r), r, paint.Solid(pal.amber), paint.Shadow{Blur: 10, Color: faded(pal.amber, 0.5)})
 		if e.held == f.g || e.hot == f.g {
 			length := e.edit.FadeIn.Length
 			if f.g == gripFadeOut {
 				length = e.edit.FadeOut.Length
 			}
-			e.bubble(p, box, geom.Pt(h.X, h.Y+16), fmt.Sprintf("%.2f s", length.Seconds()), amber)
+			e.bubble(p, pal, box, geom.Pt(h.X, h.Y+16), fmt.Sprintf("%.2f s", length.Seconds()), pal.amber)
 		}
 	}
 }
 
 // paintCut draws the cut's start and end as lines across the lanes,
 // each with a tab to take it by.
-func (e *editor) paintCut(p *paint.Painter, box geom.Size) {
+func (e *editor) paintCut(p *paint.Painter, pal palette, box geom.Size) {
 	start, end := e.span()
 	for _, c := range []struct {
 		t float64
@@ -947,17 +948,17 @@ func (e *editor) paintCut(p *paint.Painter, box geom.Size) {
 		if e.hot == c.g || e.held == c.g {
 			w = 3
 		}
-		p.RRect(geom.Rc(x-w/2, rulerH, w, box.H-rulerH), w/2, paint.Solid(teal))
+		p.RRect(geom.Rc(x-w/2, rulerH, w, box.H-rulerH), w/2, paint.Solid(pal.teal))
 		tab := geom.Rc(x-7, box.H-22, 14, 18)
-		p.RRect(tab, 5, paint.Solid(teal))
+		p.RRect(tab, 5, paint.Solid(pal.teal))
 		if e.held == c.g || e.hot == c.g {
-			e.bubble(p, box, geom.Pt(x, box.H-44), clock(time.Duration(c.t*float64(time.Second))), teal)
+			e.bubble(p, pal, box, geom.Pt(x, box.H-44), clock(time.Duration(c.t*float64(time.Second))), pal.teal)
 		}
 	}
 }
 
 // paintPlayhead draws where the speakers are.
-func (e *editor) paintPlayhead(p *paint.Painter, box geom.Size) {
+func (e *editor) paintPlayhead(p *paint.Painter, pal palette, box geom.Size) {
 	t, ok := e.playhead()
 	if !ok {
 		return
@@ -966,18 +967,18 @@ func (e *editor) paintPlayhead(p *paint.Painter, box geom.Size) {
 	if x < -2 || x > box.W+2 {
 		return
 	}
-	p.ShadowRRect(geom.Rc(x-1, 0, 2, box.H), 1, paint.Solid(ink), paint.Shadow{Blur: 8, Color: faded(ink, 0.5)})
-	p.RRect(geom.Rc(x-5, 0, 10, 8), 3, paint.Solid(ink))
+	p.ShadowRRect(geom.Rc(x-1, 0, 2, box.H), 1, paint.Solid(pal.ink), paint.Shadow{Blur: 8, Color: faded(pal.ink, 0.5)})
+	p.RRect(geom.Rc(x-5, 0, 10, 8), 3, paint.Solid(pal.ink))
 }
 
 // bubble draws words in a small pill at about at.
-func (e *editor) bubble(p *paint.Painter, box geom.Size, at geom.Point, words string, c color.NRGBA) {
+func (e *editor) bubble(p *paint.Painter, pal palette, box geom.Size, at geom.Point, words string, c color.NRGBA) {
 	run := shapedFace(words, 11, true)
 	w, h := run.Advance+16, float32(22)
 	x := max(4, min(at.X-w/2, box.W-w-4))
-	p.RRect(geom.Rc(x, at.Y, w, h), h/2, paint.Solid(faded(night, 0.92)))
+	p.RRect(geom.Rc(x, at.Y, w, h), h/2, paint.Solid(faded(pal.night, 0.92)))
 	p.RRectStroke(geom.Rc(x, at.Y, w, h), h/2, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1, Color: faded(c, 0.8)})
-	run.Paint(p, geom.Pt(x+8, at.Y+4), ink)
+	run.Paint(p, geom.Pt(x+8, at.Y+4), pal.ink)
 }
 
 // Cursor implements [gunim.CursorShaper]: the ruler and the cut's ends move

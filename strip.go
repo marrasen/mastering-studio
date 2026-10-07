@@ -104,11 +104,12 @@ func (s *strip) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geo
 }
 
 // Paint implements [gunim.Node].
-func (s *strip) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Children) {
+func (s *strip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	pal := colours(f.Theme)
 	whole := geom.Rect{Max: box.Point()}
-	p.RRect(whole, 16, paint.Solid(panel))
+	p.RRect(whole, 16, paint.Solid(pal.panel))
 	a := s.r.state
-	shaped("ALBUM", 10, true).Paint(p, geom.Pt(14, 10), faded(teal, 0.85))
+	shaped("ALBUM", 10, true).Paint(p, geom.Pt(14, 10), faded(pal.teal, 0.85))
 	band := geom.Rc(10, 28, box.W-20, box.H-38)
 	at, _, playing := s.r.d.position()
 	for i, t := range a.Tracks {
@@ -121,11 +122,11 @@ func (s *strip) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Ch
 		length := lengthOf(t, a.gapOf(&t)).Seconds()
 		gapX := left + (right-left)*float32(a.gapOf(&t).Seconds()/max(length, 0.001))
 		// The silence, then the sound.
-		p.RRect(geom.Rc(left, band.Min.Y, max(gapX-left, 0), band.Size().H), 0, paint.Solid(faded(sky, 0.05)))
+		p.RRect(geom.Rc(left, band.Min.Y, max(gapX-left, 0), band.Size().H), 0, paint.Solid(faded(pal.sky, 0.05)))
 		block := geom.Rc(gapX, band.Min.Y, max(right-gapX-2, 1), band.Size().H)
-		c := faded(ink, 0.3)
+		c := faded(pal.ink, 0.3)
 		if t.Measured && t.Measure.Loud {
-			c = loudnessColor(t.Measure.LUFS - a.Target)
+			c = loudnessColor(f.Theme, t.Measure.LUFS-a.Target)
 		}
 		picked := t.ID == a.Current
 		fill := float32(0.12)
@@ -145,11 +146,11 @@ func (s *strip) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Ch
 			p.RRectStroke(block, 6, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1.5, Color: c})
 		}
 		if block.Size().W > 24 {
-			shaped(strconv.Itoa(i+1), 10, true).Paint(p, block.Min.Add(geom.Pt(5, 4)), faded(ink, 0.8))
+			shaped(strconv.Itoa(i+1), 10, true).Paint(p, block.Min.Add(geom.Pt(5, 4)), pal.quiet(0.8))
 		}
 		if playing == t.ID {
 			x := left + (right-left)*float32(at.Seconds()/max(length, 0.001))
-			p.ShadowRRect(geom.Rc(x-1, band.Min.Y-3, 2, band.Size().H+6), 1, paint.Solid(ink), paint.Shadow{Blur: 6, Color: faded(ink, 0.5)})
+			p.ShadowRRect(geom.Rc(x-1, band.Min.Y-3, 2, band.Size().H+6), 1, paint.Solid(pal.ink), paint.Shadow{Blur: 6, Color: faded(pal.ink, 0.5)})
 		}
 	}
 }

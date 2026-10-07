@@ -54,11 +54,11 @@ func (b *abBar) show(s Album) {
 }
 
 // sideColor is the colour of session A, or B.
-func sideColor(s Side) color.NRGBA {
+func sideColor(pal palette, s Side) color.NRGBA {
 	if s == SideA {
-		return teal
+		return pal.teal
 	}
-	return sky
+	return pal.sky
 }
 
 // card is where session s's card is.
@@ -118,24 +118,27 @@ func (b *abBar) Handle(e input.Event, u *gunim.UI) bool {
 
 // Paint implements [gunim.Node].
 func (b *abBar) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	pal := colours(f.Theme)
 	s := b.r.state
 	for i := range 2 {
 		b.paintCard(p, f, Side(i), s)
 	}
-	shaped("LISTEN A / B", 10, true).Paint(p, geom.Pt(12, 73), faded(teal, 0.85))
+	shaped("LISTEN A / B", 10, true).Paint(p, geom.Pt(12, 73), faded(pal.teal, 0.85))
 	for k := range kids.All {
 		k.Paint(p)
 	}
-	p.RRect(geom.Rc(10, box.H-1, box.W-20, 1), 0, paint.Solid(faded(ink, 0.06)))
+	p.RRect(geom.Rc(10, box.H-1, box.W-20, 1), 0, paint.Solid(faded(pal.ink, 0.06)))
 }
 
 // paintCard draws session side's card: its letter, its track, and
 // whether it plays, and where.
 func (b *abBar) paintCard(p *paint.Painter, f gunim.Frame, side Side, s Album) {
+	pal := colours(f.Theme)
 	r := b.card(side)
-	c := sideColor(side)
+	c := sideColor(pal, side)
 	lit, hover := b.lit[side].Value(), b.hover[side].Value()
-	p.RRect(r, 12, paint.Solid(faded(mix(raised, c, 0.16*lit), 0.6+0.4*lit+0.1*hover)))
+	p.RRect(r, 12, paint.Solid(faded(mix(pal.raised, c, 0.16*lit), 0.6+0.4*lit+0.1*hover)))
+	pal.outline(p, r, 12, 1)
 	if lit > 0.01 {
 		p.RRectStroke(r, 12, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1.5, Color: faded(c, 0.85*lit)})
 	}
@@ -143,7 +146,7 @@ func (b *abBar) paintCard(p *paint.Painter, f gunim.Frame, side Side, s Album) {
 	ring := geom.Rc(r.Min.X+8, r.Min.Y+(r.Size().H-26)/2, 26, 26)
 	p.RRect(ring, 13, paint.Solid(faded(c, 0.15+0.85*lit)))
 	letter := shaped([]string{"A", "B"}[side], 13, true)
-	letter.Paint(p, geom.Pt(ring.Min.X+(26-letter.Advance)/2, ring.Min.Y+5), mix(c, night, lit))
+	letter.Paint(p, geom.Pt(ring.Min.X+(26-letter.Advance)/2, ring.Min.Y+5), mix(c, pal.night, lit))
 	// Where the session is: the deck's own place for the one heard.
 	var at time.Duration
 	var id int
@@ -161,21 +164,21 @@ func (b *abBar) paintCard(p *paint.Painter, f gunim.Frame, side Side, s Album) {
 	room := r.Max.X - x - 8
 	t := s.find(id)
 	if t == nil {
-		paintFit(p, "No track yet", 12, true, geom.Pt(x, r.Min.Y+10), room, faded(ink, 0.45))
+		paintFit(p, "No track yet", 12, true, geom.Pt(x, r.Min.Y+10), room, pal.quiet(0.45))
 		hint := "Starts on this track"
 		if len(s.References) > 0 {
 			hint = "Starts on the first reference"
 		}
-		paintFit(p, hint, 10, false, geom.Pt(x, r.Min.Y+30), room, faded(ink, 0.35))
+		paintFit(p, hint, 10, false, geom.Pt(x, r.Min.Y+30), room, pal.quiet(0.35))
 		return
 	}
 	title := t.Title
 	if s.isRef(id) {
 		title = "Ref · " + title
 	}
-	paintFit(p, title, 12, true, geom.Pt(x, r.Min.Y+10), room, faded(ink, 0.6+0.4*lit))
+	paintFit(p, title, 12, true, geom.Pt(x, r.Min.Y+10), room, pal.quiet(0.6+0.4*lit))
 	// Playing, waiting to play on, or paused; and where.
-	words, ic, sc := "Paused", icon.Pause, faded(ink, 0.5)
+	words, ic, sc := "Paused", icon.Pause, pal.quiet(0.5)
 	switch {
 	case playing && (side == s.Side || s.Background):
 		words, ic, sc = "Playing", icon.Play, c
@@ -209,9 +212,10 @@ func (h *refHead) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children
 }
 
 // Paint implements [gunim.Node].
-func (h *refHead) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
-	p.RRect(geom.Rc(10, 0, box.W-20, 1), 0, paint.Solid(faded(ink, 0.08)))
-	shaped("REFERENCES", 10, true).Paint(p, geom.Pt(12, (box.H-12)/2), faded(sky, 0.85))
+func (h *refHead) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	pal := colours(f.Theme)
+	p.RRect(geom.Rc(10, 0, box.W-20, 1), 0, paint.Solid(faded(pal.ink, 0.08)))
+	shaped("REFERENCES", 10, true).Paint(p, geom.Pt(12, (box.H-12)/2), faded(pal.sky, 0.85))
 	for k := range kids.All {
 		k.Paint(p)
 	}

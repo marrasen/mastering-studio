@@ -226,8 +226,10 @@ func (c *curveChip) Layout(cs gunim.Constraints, _ gunim.Frame, _ gunim.Children
 
 // Paint implements [gunim.Node]: the curve, rising or falling, and its
 // name under it.
-func (c *curveChip) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Children) {
-	p.RRect(geom.Rect{Max: box.Point()}, 10, paint.Solid(faded(ink, 0.05+0.06*c.hover.Value())))
+func (c *curveChip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	pal := colours(f.Theme)
+	p.RRect(geom.Rect{Max: box.Point()}, 10, paint.Solid(faded(pal.ink, 0.05+0.06*c.hover.Value())))
+	pal.outline(p, geom.Rect{Max: box.Point()}, 10, 1)
 	area := geom.Rc(8, 6, box.W-16, box.H-22)
 	m := float64(c.turn.Value())
 	var prev geom.Point
@@ -240,10 +242,10 @@ func (c *curveChip) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ guni
 		v := c.was.at(u)*(1-m) + c.curve.at(u)*m
 		pt := geom.Pt(area.Min.X+area.Size().W*float32(x), area.Max.Y-area.Size().H*float32(v))
 		if i > 0 {
-			audioui.Segment(p, prev, pt, 1.6, amber)
+			audioui.Segment(p, prev, pt, 1.6, pal.amber)
 		}
 		prev = pt
 	}
 	run := shaped(curveNames[c.curve], 8, true)
-	run.Paint(p, geom.Pt((box.W-run.Advance)/2, box.H-14), faded(ink, 0.6))
+	run.Paint(p, geom.Pt((box.W-run.Advance)/2, box.H-14), pal.quiet(0.6))
 }

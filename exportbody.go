@@ -206,39 +206,42 @@ func (b *exportBody) Handle(e input.Event, u *gunim.UI) bool {
 
 // Paint implements [gunim.Node].
 func (b *exportBody) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	pal := colours(f.Theme)
 	at := b.places(box.W)
 	path, wavCard, mp3Card, head, list, sum := at.path, at.wav, at.mp3, at.head, at.list, at.sum
 	heading := func(s string, y float32) {
-		shaped(s, 10, true).Paint(p, geom.Pt(0, y-exHead+4), faded(teal, 0.9))
+		shaped(s, 10, true).Paint(p, geom.Pt(0, y-exHead+4), faded(pal.teal, 0.9))
 	}
 	heading("DESTINATION", path.Min.Y)
-	p.RRect(path, 8, paint.Solid(faded(ink, 0.06)))
-	widget.PaintIcon(p, f.Theme, icon.FolderOpen, geom.Rc(path.Min.X+10, path.Min.Y+10, 16, 16), faded(ink, 0.6))
-	paintTail(p, b.dir, 12, geom.Pt(path.Min.X+34, path.Min.Y+10), path.Size().W-44, ink)
+	p.RRect(path, 8, paint.Solid(faded(pal.ink, 0.06)))
+	pal.outline(p, path, 8, 1)
+	widget.PaintIcon(p, f.Theme, icon.FolderOpen, geom.Rc(path.Min.X+10, path.Min.Y+10, 16, 16), pal.quiet(0.6))
+	paintTail(p, b.dir, 12, geom.Pt(path.Min.X+34, path.Min.Y+10), path.Size().W-44, pal.ink)
 	heading("FORMAT", wavCard.Min.Y)
 	for _, card := range []struct {
 		r  geom.Rect
 		on bool
 	}{{wavCard, b.wav.On}, {mp3Card, b.mp3.On}} {
-		p.RRect(card.r, 12, paint.Solid(faded(ink, 0.05)))
+		p.RRect(card.r, 12, paint.Solid(faded(pal.ink, 0.05)))
+		pal.outline(p, card.r, 12, 1)
 		if card.on {
-			p.RRectStroke(card.r, 12, paint.Solid(faded(ink, 0)), paint.Stroke{Width: 1, Color: faded(teal, 0.5)})
+			p.RRectStroke(card.r, 12, paint.Solid(faded(pal.ink, 0)), paint.Stroke{Width: 1, Color: faded(pal.teal, 0.5)})
 		}
 	}
 	lame := "Encoded by LAME"
 	if b.lameAt == "" {
 		lame = "LAME is not found"
 	}
-	paintFit(p, lame, 11, false, geom.Pt(mp3Card.Min.X+14, mp3Card.Max.Y-36), mp3Card.Size().W-150, faded(ink, 0.55))
+	paintFit(p, lame, 11, false, geom.Pt(mp3Card.Min.X+14, mp3Card.Max.Y-36), mp3Card.Size().W-150, pal.quiet(0.55))
 	heading("TRACKS", head.Min.Y)
 	// The list's head: a tick for every track, how many are ticked, and
 	// the columns' names.
 	n, of := len(b.list.ticked()), len(b.list.tracks)
 	paintTick(p, f, geom.Pt(head.Min.X+10, head.Min.Y+7), n == of, n > 0 && n < of)
-	shaped(fmt.Sprintf("%d of %d", n, of), 12, true).Paint(p, geom.Pt(head.Min.X+38, head.Min.Y+7), ink)
-	shaped("LENGTH", 9, true).Paint(p, geom.Pt(head.Max.X-exColLen, head.Min.Y+10), faded(ink, 0.45))
-	shaped("LUFS", 9, true).Paint(p, geom.Pt(head.Max.X-exColLUFS, head.Min.Y+10), faded(ink, 0.45))
-	p.RRect(list, 10, paint.Solid(faded(night, 0.5)))
+	shaped(fmt.Sprintf("%d of %d", n, of), 12, true).Paint(p, geom.Pt(head.Min.X+38, head.Min.Y+7), pal.ink)
+	shaped("LENGTH", 9, true).Paint(p, geom.Pt(head.Max.X-exColLen, head.Min.Y+10), pal.quiet(0.45))
+	shaped("LUFS", 9, true).Paint(p, geom.Pt(head.Max.X-exColLUFS, head.Min.Y+10), pal.quiet(0.45))
+	p.RRect(list, 10, paint.Solid(faded(pal.night, 0.5)))
 	for k := range kids.All {
 		k.Paint(p)
 	}
@@ -261,7 +264,7 @@ func (b *exportBody) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids 
 		formats = append(formats, "MP3 "+b.rate.Items[b.rate.Selected])
 	}
 	words := fmt.Sprintf("%d tracks · %s · %s", n, short(total), strings.Join(formats, " + "))
-	paintFit(p, words, 12, false, geom.Pt(0, sum), box.W, faded(ink, 0.6))
+	paintFit(p, words, 12, false, geom.Pt(0, sum), box.W, pal.quiet(0.6))
 }
 
 // The list's columns, from its right.
@@ -326,20 +329,21 @@ func (l *exportList) Handle(e input.Event, u *gunim.UI) bool {
 
 // Paint implements [gunim.Node].
 func (l *exportList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	pal := colours(f.Theme)
 	for i, t := range l.tracks {
 		y := float32(i) * exRowH
 		if i == l.hot {
-			p.RRect(geom.Rc(4, y+2, box.W-8, exRowH-4), 8, paint.Solid(faded(ink, 0.05)))
+			p.RRect(geom.Rc(4, y+2, box.W-8, exRowH-4), 8, paint.Solid(faded(pal.ink, 0.05)))
 		}
 		if i > 0 {
-			p.RRect(geom.Rc(12, y, box.W-24, 1), 0, paint.Solid(faded(ink, 0.05)))
+			p.RRect(geom.Rc(12, y, box.W-24, 1), 0, paint.Solid(faded(pal.ink, 0.05)))
 		}
 		alpha := float32(1)
 		if !l.on[i] {
 			alpha = 0.45
 		}
 		paintTick(p, f, geom.Pt(10, y+8), l.on[i], false)
-		shapedFace(fmt.Sprintf("%02d", t.Number), 12, false).Paint(p, geom.Pt(38, y+9), faded(ink, 0.5*alpha))
+		shapedFace(fmt.Sprintf("%02d", t.Number), 12, false).Paint(p, geom.Pt(38, y+9), faded(pal.quiet(0.5), alpha))
 		// The title, then whether the track has a note, and how many
 		// notes at times.
 		room := box.W - 66 - exColLen - 12
@@ -353,24 +357,24 @@ func (l *exportList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 			badges += 26 + shapedFace(count, 11, true).Advance
 		}
 		title := min(shaped(t.Title, 13, false).Advance, room-badges)
-		paintFit(p, t.Title, 13, false, geom.Pt(66, y+8), title, faded(ink, alpha))
+		paintFit(p, t.Title, 13, false, geom.Pt(66, y+8), title, faded(pal.ink, alpha))
 		x := 66 + title + 8
 		if strings.TrimSpace(t.Note) != "" {
-			widget.PaintIcon(p, f.Theme, icon.MessageSquareText, geom.Rc(x, y+10, 14, 14), faded(amber, 0.9*alpha))
+			widget.PaintIcon(p, f.Theme, icon.MessageSquareText, geom.Rc(x, y+10, 14, 14), faded(pal.amber, 0.9*alpha))
 			x += 22
 		}
 		if count != "" {
 			run := shapedFace(count, 11, true)
 			pill := geom.Rc(x, y+8, 22+run.Advance, 18)
-			p.RRect(pill, 9, paint.Solid(faded(amber, 0.16*alpha)))
-			widget.PaintIcon(p, f.Theme, icon.Clock, geom.Rc(x+5, y+10, 13, 13), faded(amber, 0.9*alpha))
-			run.Paint(p, geom.Pt(x+19, y+10), faded(amber, alpha))
+			p.RRect(pill, 9, paint.Solid(faded(pal.amber, 0.16*alpha)))
+			widget.PaintIcon(p, f.Theme, icon.Clock, geom.Rc(x+5, y+10, 13, 13), faded(pal.amber, 0.9*alpha))
+			run.Paint(p, geom.Pt(x+19, y+10), faded(pal.amber, alpha))
 		}
-		shapedFace(clock(t.Length), 12, false).Paint(p, geom.Pt(box.W-exColLen, y+9), faded(ink, 0.6*alpha))
-		lufs, c := "—", faded(ink, 0.4*alpha)
+		shapedFace(clock(t.Length), 12, false).Paint(p, geom.Pt(box.W-exColLen, y+9), faded(pal.quiet(0.6), alpha))
+		lufs, c := "—", faded(pal.quiet(0.4), alpha)
 		if t.Measured {
 			lufs = fmt.Sprintf("%.1f", t.LUFS)
-			c = faded(loudnessColor(t.LUFS-t.Target), alpha)
+			c = faded(loudnessColor(f.Theme, t.LUFS-t.Target), alpha)
 			if t.Stale {
 				c = faded(c, 0.5)
 				lufs += "*"
@@ -381,18 +385,20 @@ func (l *exportList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 }
 
 // paintTick draws a tick box at at, 18 square: ticked, or with a dash
-// for some ticked, or empty.
+// for some ticked, or empty. It is filled with the accent, as the
+// window's own tick boxes are.
 func paintTick(p *paint.Painter, f gunim.Frame, at geom.Point, on, some bool) {
+	pal, accent := colours(f.Theme), widget.Accent.Get(f.Theme)
 	r := geom.Rc(at.X, at.Y, 18, 18)
 	switch {
 	case on:
-		p.RRect(r, 5, paint.Solid(teal))
-		widget.PaintIcon(p, f.Theme, icon.Check, r.Inset(geom.Uniform(3)), night)
+		p.RRect(r, 5, paint.Solid(accent))
+		widget.PaintIcon(p, f.Theme, icon.Check, r.Inset(geom.Uniform(3)), pal.night)
 	case some:
-		p.RRect(r, 5, paint.Solid(teal))
-		p.RRect(geom.Rc(at.X+4, at.Y+8, 10, 2), 1, paint.Solid(night))
+		p.RRect(r, 5, paint.Solid(accent))
+		p.RRect(geom.Rc(at.X+4, at.Y+8, 10, 2), 1, paint.Solid(pal.night))
 	default:
-		p.RRectStroke(r, 5, paint.Solid(faded(ink, 0)), paint.Stroke{Width: 1.5, Color: faded(ink, 0.4)})
+		p.RRectStroke(r, 5, paint.Solid(faded(pal.ink, 0)), paint.Stroke{Width: 1.5, Color: pal.quiet(0.4)})
 	}
 }
 
