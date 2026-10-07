@@ -91,6 +91,12 @@ type (
 		Note string
 		// Update is the newer release the window tells of.
 		Update Update
+		// Beta takes pre-releases as updates too; Profiling says a CPU
+		// profile records; Told is news to show, which Tolds counts.
+		Beta      bool
+		Profiling bool
+		Told      string
+		Tolds     int
 		// Loudness is the album's, every track measured together, as
 		// bs1770gain measures an album, once every track is measured.
 		Loudness Measure
@@ -410,6 +416,12 @@ type app struct {
 	quitAfterSave bool
 	// history is the album's changes, to undo and redo.
 	history
+	// profile is the CPU profile recorded last, or recording; profiled
+	// fires as it is to stop, which stopProfile does.
+	profile     string
+	profileDir  string
+	profiled    <-chan time.Time
+	stopProfile func()
 	// presets are the plugin chains kept by name, in presetsFile;
 	// naming says the dialog that names one is up, and lastDeleted is
 	// the one deleted last, to bring back.
@@ -810,10 +822,11 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
 	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
-	a.Background, a.Spectrum, a.Carry = st.Background, st.spectrum(), st.Carry
+	a.Background, a.Spectrum, a.Carry, a.Beta = st.Background, st.spectrum(), st.Carry, st.Beta
 	if a.settingsFile != "" {
 		a.refsFile = filepath.Join(filepath.Dir(a.settingsFile), "references.json")
 		a.presetsFile = filepath.Join(filepath.Dir(a.settingsFile), "presets.json")
+		a.profileDir = filepath.Join(filepath.Dir(a.settingsFile), "profiles")
 	}
 	a.loadPresets()
 	useLAME(findLAME(a.lame))
@@ -924,6 +937,8 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			if !a.watchPlugins() {
 				continue
 			}
+		case <-a.profiled:
+			a.profileDone()
 		case n := <-updateNews:
 			a.newsOf(n)
 		case <-a.d.done():
@@ -1310,6 +1325,20 @@ func (a *app) handle(in gunim.Intent) {
 	case SetCurves:
 		a.Curves = in.Curves
 		a.dirty = true
+	case SetBeta:
+		a.Beta = in.On
+		a.writeSettings()
+		if in.On {
+			a.checkNow()
+		}
+	case RecordProfile:
+		a.recordProfile()
+	case ShowProfile:
+		if a.profile != "" && a.reveal != nil {
+			if err := a.reveal(a.profile); err != nil {
+				a.Note = err.Error()
+			}
+		}
 	case SetCarry:
 		a.Carry = in.Carry % carries
 		a.writeSettings()

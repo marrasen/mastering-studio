@@ -21,7 +21,9 @@ itself for you alone, with no administrator needed: into
 `~/.local/share` on Linux, with an entry among your applications. Projects
 then open in it with a double-click, and it can keep itself up to date
 from the releases here: by itself, or, if you untick that as you
-install, by asking first when a new release is out. Installed apps on Windows removes it again, and
+install, by asking first when a new release is out. Tick Beta updates
+in the project menu to take pre-releases too, to try a release before
+it is out. Installed apps on Windows removes it again, and
 so does `mastering-studio -uninstall`. "Or run it without installing"
 runs the downloaded file as it is.
 
@@ -153,7 +155,9 @@ These flags help:
 | `-install` | Install this copy with no window, as a script would, then quit. |
 | `-uninstall` | Remove the installed studio, asking first; with `-quiet` too, asking nothing. |
 
-A release is built by pushing a tag such as `v0.1.0`. The
+A release is built by pushing a tag such as `v0.1.0`; a tag with a
+pre-release in it, such as `v0.3.0-beta.1`, is published as a GitHub
+pre-release, which only copies with Beta updates ticked take. The
 [Release workflow](.github/workflows/release.yml) builds the programs for
 Windows, with its icon, and for Linux, and publishes them with a
 `SHA256SUMS` of both and its signature, `SHA256SUMS.sig`. Installed

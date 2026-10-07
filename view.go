@@ -155,6 +155,11 @@ func (r *root) show(s Album, u *gunim.UI) {
 	if s.Update.Seq != was.Update.Seq && s.Update.Version != "" {
 		r.toasts.Show(updateToast(s.Update), u)
 	}
+	// News, as a CPU profile saved, and a way to see it.
+	if s.Tolds != was.Tolds && s.Told != "" {
+		r.toasts.Show(widget.Toast{Title: s.Told, Kind: widget.ToastSuccess, Key: "told", Action: "Show",
+			On: ShowProfile{}}, u)
+	}
 	// What went wrong, as saving.
 	if s.Note != was.Note && s.Note != "" {
 		r.toasts.Show(widget.Toast{Title: s.Note, Kind: widget.ToastError, Key: "note"}, u)
@@ -567,24 +572,31 @@ func (h *header) openMenu(u *gunim.UI) {
 		ic          *icon.Icon
 		off         bool
 		send        gunim.Intent
+		ticked      bool
+	}
+	profile := "Record CPU profile (1 min)"
+	if s.Profiling {
+		profile = "Recording CPU profile…"
 	}
 	items := []item{
-		{undo, "Ctrl+Z", icon.Undo2, s.UndoLabel == "", Undo{}},
-		{redo, "Ctrl+Shift+Z", icon.Redo2, s.RedoLabel == "", Redo{}},
-		{"Save project", "Ctrl+S", icon.Save, false, SaveAlbum{}},
-		{"Save project as…", "Ctrl+Shift+S", icon.Save, false, SaveAlbumAs{}},
-		{"New project…", "", icon.FilePlus, false, NewAlbum{}},
-		{"Open project…", "", icon.FolderOpen, false, OpenAlbum{}},
-		{"Edit release details…", "", icon.Disc3, false, EditRelease{}},
-		{"Keyboard shortcuts", "", icon.Keyboard, false, ShowHelp{}},
+		{undo, "Ctrl+Z", icon.Undo2, s.UndoLabel == "", Undo{}, false},
+		{redo, "Ctrl+Shift+Z", icon.Redo2, s.RedoLabel == "", Redo{}, false},
+		{"Save project", "Ctrl+S", icon.Save, false, SaveAlbum{}, false},
+		{"Save project as…", "Ctrl+Shift+S", icon.Save, false, SaveAlbumAs{}, false},
+		{"New project…", "", icon.FilePlus, false, NewAlbum{}, false},
+		{"Open project…", "", icon.FolderOpen, false, OpenAlbum{}, false},
+		{"Edit release details…", "", icon.Disc3, false, EditRelease{}, false},
+		{"Keyboard shortcuts", "", icon.Keyboard, false, ShowHelp{}, false},
+		{"Beta updates", "", icon.FlaskConical, false, SetBeta{On: !s.Beta}, s.Beta},
+		{profile, "", icon.Activity, s.Profiling, RecordProfile{}, false},
 	}
-	m.Breaks, m.Captions, m.Checked = []int{2, 4, 6}, nil, nil
+	m.Breaks, m.Captions, m.Checked = []int{2, 4, 6, 8}, nil, nil
 	if len(recent) > 0 {
 		m.Breaks = append(m.Breaks, len(items))
 		m.Captions = []int{len(items)}
 		items = append(items, item{words: "Recent"})
 		for _, p := range recent {
-			items = append(items, item{albumName(p), lastDirs(filepath.Dir(p)), icon.Disc3, false, OpenAlbumPath{Path: p}})
+			items = append(items, item{albumName(p), lastDirs(filepath.Dir(p)), icon.Disc3, false, OpenAlbumPath{Path: p}, false})
 		}
 	}
 	m.Items, m.Icons, m.Hints, m.Disabled = nil, nil, nil, nil
@@ -593,6 +605,7 @@ func (h *header) openMenu(u *gunim.UI) {
 		m.Icons = append(m.Icons, it.ic)
 		m.Hints = append(m.Hints, it.hint)
 		m.Disabled = append(m.Disabled, it.off)
+		m.Checked = append(m.Checked, it.ticked)
 	}
 	m.Picked = func(i int, u *gunim.UI) {
 		if i >= 0 && i < len(items) && items[i].send != nil {
