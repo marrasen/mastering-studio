@@ -100,3 +100,52 @@ func TestTheCarryTipSaysWhatTheButtonIsOn(t *testing.T) {
 		t.Fatalf("pressed, the button's tip reads %q", r.trans.carryTo.Text)
 	}
 }
+
+func TestTheRingTurnsRoundPlayWhileTheSoundIsSlowToStart(t *testing.T) {
+	a := album()
+	w, r, run := stage(t, a)
+	tr := r.trans
+	b := boundsOf(t, w, run, tr.play)
+	press := func() {
+		w.Input(input.PointerMove{Pos: b.Center()})
+		w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
+		w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
+		run(1)
+	}
+	// A quick start: no ring.
+	press()
+	a.Playing, a.Starts = true, 1
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
+	run(30)
+	if tr.waiting || tr.ring.Target() != 0 {
+		t.Fatal("a quick start showed the ring")
+	}
+	// Paused, then played, slow to start: the ring comes, turning.
+	a.Playing = false
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	press()
+	time.Sleep(ringAfter + 20*time.Millisecond)
+	run(10)
+	if !tr.waiting || tr.ring.Target() != 1 || tr.ring.Value() < 0.1 {
+		t.Fatalf("slow to start, the ring is at %.2f", tr.ring.Value())
+	}
+	spun := tr.spin
+	run(5)
+	if tr.spin <= spun {
+		t.Fatal("the ring does not turn")
+	}
+	// The sound starts: the ring goes.
+	a.Playing = true
+	if err := w.Client().Update("album", a); err != nil {
+		t.Fatal(err)
+	}
+	run(60)
+	if tr.waiting || tr.ring.Value() > 0.01 {
+		t.Fatalf("playing, the ring is still at %.2f", tr.ring.Value())
+	}
+}

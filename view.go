@@ -266,7 +266,7 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 	}
 	switch {
 	case k.Key == input.KeySpace:
-		u.Send(r, TogglePlay{})
+		r.trans.toggle(u)
 	case k.Key >= input.Key1 && k.Key <= input.Key9:
 		// A track by its number: the same moment of it, to compare.
 		if i := int(k.Key - input.Key1); i < len(r.state.Tracks) {
@@ -279,6 +279,7 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 	case k.Key == input.KeyRight:
 		u.Send(r, SeekTo{At: at + 5*time.Second})
 	case k.Key == input.KeyHome:
+		r.trans.expectPlay()
 		u.Send(r, PlayFromStart{})
 	case k.Key == input.KeyM:
 		u.Send(r, SetMatch{On: !r.state.Match})
