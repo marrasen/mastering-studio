@@ -13,7 +13,6 @@ import (
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
-	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -22,10 +21,11 @@ func registerViews(w *gunim.Window, d *deck) {
 	gunim.RegisterView(w, "album",
 		func(Album) *root { return newRoot(d) },
 		func(r *root, s Album, u *gunim.UI) { r.show(s, u) })
-	// The window's own widgets, as its dialogs', in the studio's teal.
-	w.RegisterTheme(theme.Make(themeName, theme.Set(widget.Accent, teal),
-		theme.Set(widget.ButtonPrimaryFill, rgb(0x1f, 0x8f, 0x80)),
-		theme.Set(widget.ButtonPrimaryHover, rgb(0x2a, 0xa3, 0x92))))
+	// Every theme to pick from, for the window's own pieces and its
+	// dialogs alike.
+	for _, t := range studioThemes {
+		w.RegisterTheme(t.Theme)
+	}
 	gunim.RegisterView(w, "release", newReleaseDialog, nil)
 	gunim.RegisterView(w, "help", newHelp, nil)
 	gunim.RegisterView(w, "unsaved", newUnsavedDialog, nil)
@@ -225,10 +225,11 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 }
 
 // Paint implements [gunim.Node].
-func (r *root) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
-	p.RRect(geom.Rect{Max: box.Point()}, 0, paint.Solid(night))
+func (r *root) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	pal := colours(f.Theme)
+	p.RRect(geom.Rect{Max: box.Point()}, 0, paint.Solid(pal.night))
 	// A faint light from the top, in what plays' colour.
-	p.RRect(geom.Rc(0, 0, box.W, headerH), 0, paint.Solid(panel))
+	p.RRect(geom.Rc(0, 0, box.W, headerH), 0, paint.Solid(pal.panel))
 	for k := range kids.All {
 		k.Paint(p)
 	}
@@ -491,22 +492,23 @@ func (h *header) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children)
 
 // Paint implements [gunim.Node].
 func (h *header) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	pal := colours(f.Theme)
 	// The release's name, the menu of projects under it.
 	if hv := h.hover.Value(); hv > 0.01 {
-		p.RRect(h.titleRect(), 10, paint.Solid(faded(ink, 0.06*hv)))
+		p.RRect(h.titleRect(), 10, paint.Solid(faded(pal.ink, 0.06*hv)))
 	}
 	p.Image(logo(), geom.Rc(15, (box.H-32)/2, 32, 32), paint.ImageOpts{Opacity: 1})
-	paintFit(p, h.name, 18, true, geom.Pt(54, 12), titleW-36, ink)
+	paintFit(p, h.name, 18, true, geom.Pt(54, 12), titleW-36, pal.ink)
 	name := min(shaped(h.name, 18, true).Advance, titleW-36)
-	widget.PaintIcon(p, f.Theme, icon.ChevronDown, geom.Rc(54+name+4, 16, 14, 14), faded(ink, 0.4+0.4*h.hover.Value()))
-	shaped(h.sum, 12, false).Paint(p, geom.Pt(54, 36), faded(ink, 0.5))
+	widget.PaintIcon(p, f.Theme, icon.ChevronDown, geom.Rc(54+name+4, 16, 14, 14), pal.quiet(0.4+0.4*h.hover.Value()))
+	shaped(h.sum, 12, false).Paint(p, geom.Pt(54, 36), pal.quiet(0.5))
 	if len(h.r.state.Tracks) > 0 {
 		// The album's loudness, by the target's chip, as a chip reads.
 		x, y := float32(540), (box.H-44)/2
-		shaped("ALBUM", 9, true).Paint(p, geom.Pt(x, y+6), faded(teal, 0.85))
-		c := faded(ink, 0.5)
+		shaped("ALBUM", 9, true).Paint(p, geom.Pt(x, y+6), faded(pal.teal, 0.85))
+		c := pal.quiet(0.5)
 		if h.albumLoud {
-			c = loudnessColor(h.albumOff)
+			c = loudnessColor(f.Theme, h.albumOff)
 		}
 		if h.albumStale {
 			c = faded(c, 0.45)
@@ -614,9 +616,6 @@ func (h *header) openMenu(u *gunim.UI) {
 	}
 	m.Open(geom.Pt(16, headerH-6), u)
 }
-
-// themeName is the window's theme: dark, with the studio's teal.
-const themeName = "mastering"
 
 // updateToast asks about a newer release: whether to fetch it, or, once
 // it is in place, whether to restart into it. It stays until answered.

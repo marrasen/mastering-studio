@@ -18,9 +18,10 @@ import (
 // paintIO draws the input's and output's meters, their faders placed by
 // Layout, from y, and returns where they end.
 func (m *meters) paintIO(p *paint.Painter, f gunim.Frame, box geom.Size, y float32) float32 {
-	shaped("IN", 10, true).Paint(p, geom.Pt(16, y), faded(teal, 0.85))
+	pal := colours(f.Theme)
+	shaped("IN", 10, true).Paint(p, geom.Pt(16, y), faded(pal.teal, 0.85))
 	run := shaped("OUT", 10, true)
-	run.Paint(p, geom.Pt(box.W-16-run.Advance, y), faded(teal, 0.85))
+	run.Paint(p, geom.Pt(box.W-16-run.Advance, y), faded(pal.teal, 0.85))
 	bars := m.ioArea(box)
 	top, bottom := bars.Min.Y, bars.Max.Y
 	// The scale, between the two.
@@ -33,7 +34,7 @@ func (m *meters) paintIO(p *paint.Painter, f gunim.Frame, box geom.Size, y float
 	for side, fd := range []*audioui.Fader{m.inFader, m.outFader} {
 		fx := m.faderX(box, side == 1)
 		r := shapedFace(fmt.Sprintf("%+.1f", fd.Value()), 9, false)
-		r.Paint(p, geom.Pt(fx+12-r.Advance/2, bottom+6), faded(ink, 0.7))
+		r.Paint(p, geom.Pt(fx+12-r.Advance/2, bottom+6), pal.quiet(0.7))
 	}
 	return bottom + 22
 }

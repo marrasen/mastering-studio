@@ -54,7 +54,7 @@ func TestANewerReleaseIsAskedAbout(t *testing.T) {
 
 // The news waits for the studio's own goroutine, and a burst of it does
 // not hold the updates up.
-func TestTellNeverBlocks(t *testing.T) {
+func TestTellNeverBlocks(_ *testing.T) {
 	for range cap(updateNews) + 3 {
 		tell(news{release: install.Release{Version: "v9.9.9"}})
 	}

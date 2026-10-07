@@ -568,29 +568,30 @@ func (c *chainRow) openPresets(u *gunim.UI, del bool) {
 
 // Paint implements [gunim.Node]: the label, the sound's line through the
 // cards, and the cards.
-func (c *chainRow) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
+func (c *chainRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	pal := colours(f.Theme)
 	mid := box.H / 2
-	shaped("CHAIN", 9, true).Paint(p, geom.Pt(4, mid-12), faded(teal, 0.85))
+	shaped("CHAIN", 9, true).Paint(p, geom.Pt(4, mid-12), faded(pal.teal, 0.85))
 	what := "no plugins"
 	if n := len(c.order); n > 0 {
 		what = fmt.Sprintf("%d plugin%s", n, map[bool]string{true: "", false: "s"}[n == 1])
 	}
-	shaped(what, 9, false).Paint(p, geom.Pt(4, mid+2), faded(ink, 0.45))
+	shaped(what, 9, false).Paint(p, geom.Pt(4, mid+2), pal.quiet(0.45))
 	// The line the sound runs along, from the label to the add button,
 	// dotted with the sound flowing while it plays.
 	addX := c.addX
 	if addX > chainLabelW {
-		c.paintRanges(p, mid, addX-4)
-		line := faded(ink, 0.12)
+		c.paintRanges(p, pal, mid, addX-4)
+		line := faded(pal.ink, 0.12)
 		audioui.Segment(p, geom.Pt(chainLabelW-10, mid), geom.Pt(addX-4, mid), 1.5, line)
 		if c.r.state.Playing {
 			for x := chainLabelW - 10 + float32(math.Mod(float64(c.flow), 18)); x < addX-4; x += 18 {
-				p.RRect(geom.Rc(x-1.5, mid-1.5, 3, 3), 1.5, paint.Solid(faded(teal, 0.7)))
+				p.RRect(geom.Rc(x-1.5, mid-1.5, 3, 3), 1.5, paint.Solid(faded(pal.teal, 0.7)))
 			}
 		}
 	}
 	for _, id := range c.drawOrder() {
-		c.paintCard(p, c.cards[id])
+		c.paintCard(p, pal, c.cards[id])
 	}
 	kids.At(0).Paint(p)
 	kids.At(1).Paint(p)
@@ -607,7 +608,7 @@ const lraScale = 2.4
 // loudness range: of the sound fed in, from the label to the first
 // card, then of the sound out of each plugin, to the next, and the last
 // to end.
-func (c *chainRow) paintRanges(p *paint.Painter, mid, end float32) {
+func (c *chainRow) paintRanges(p *paint.Painter, pal palette, mid, end float32) {
 	alpha := float32(1)
 	if c.stale {
 		alpha = 0.45
@@ -618,9 +619,9 @@ func (c *chainRow) paintRanges(p *paint.Painter, mid, end float32) {
 			return
 		}
 		r := geom.Rc(x0, mid-h/2, x1-x0, h)
-		p.RRect(r, min(h/2, 6), paint.Solid(faded(sky, 0.13*alpha)))
-		p.RRect(geom.Rc(x0, r.Min.Y, x1-x0, 1), 0, paint.Solid(faded(sky, 0.35*alpha)))
-		p.RRect(geom.Rc(x0, r.Max.Y-1, x1-x0, 1), 0, paint.Solid(faded(sky, 0.35*alpha)))
+		p.RRect(r, min(h/2, 6), paint.Solid(faded(pal.sky, 0.13*alpha)))
+		p.RRect(geom.Rc(x0, r.Min.Y, x1-x0, 1), 0, paint.Solid(faded(pal.sky, 0.35*alpha)))
+		p.RRect(geom.Rc(x0, r.Max.Y-1, x1-x0, 1), 0, paint.Solid(faded(pal.sky, 0.35*alpha)))
 	}
 	// Each stretch runs a little under the cards either side, so the
 	// band reads as one.
@@ -645,7 +646,7 @@ func (c *chainRow) drawOrder() []int {
 	return append(out, c.order...)
 }
 
-func (c *chainRow) paintCard(p *paint.Painter, k *chainCard) {
+func (c *chainRow) paintCard(p *paint.Painter, pal palette, k *chainCard) {
 	a := k.appear.Value()
 	if a < 0.01 {
 		return
@@ -658,30 +659,31 @@ func (c *chainRow) paintCard(p *paint.Painter, k *chainCard) {
 	defer end()
 	on, open, hover := k.on.Value(), k.open.Value(), k.hover.Value()
 	failed := k.slot.Failed != ""
-	edge := mix(teal, coral, onOff(failed))
+	edge := mix(pal.teal, pal.coral, onOff(failed))
 	if open > 0.01 {
-		p.ShadowRRect(r, 10, paint.Solid(raised), paint.Shadow{Blur: 16 * open, Color: faded(edge, 0.35*open)})
+		p.ShadowRRect(r, 10, paint.Solid(pal.raised), paint.Shadow{Blur: 16 * open, Color: faded(edge, 0.35*open)})
 	}
-	p.RRect(r, 10, paint.Solid(mix(raised, mix(raised, ink, 0.06), hover)))
+	p.RRect(r, 10, paint.Solid(mix(pal.raised, mix(pal.raised, pal.ink, 0.06), hover)))
+	pal.outline(p, r, 10, 1)
 	if open > 0.01 || failed {
 		w := max(open, onOff(failed))
 		p.RRect(geom.Rc(r.Min.X+10, r.Max.Y-2.5, r.Size().W-20, 2.5), 1.25, paint.Solid(faded(edge, w)))
 	}
 	// The light: lit while the plugin runs.
 	at := c.powerAt(k)
-	lit := mix(faded(ink, 0.25), teal, on)
+	lit := mix(faded(pal.ink, 0.25), pal.teal, on)
 	if on > 0.01 {
-		p.ShadowRRect(geom.Rc(at.X-6, at.Y-6, 12, 12), 6, paint.Solid(faded(teal, on)),
-			paint.Shadow{Blur: 10 * on, Color: faded(teal, 0.5*on)})
+		p.ShadowRRect(geom.Rc(at.X-6, at.Y-6, 12, 12), 6, paint.Solid(faded(pal.teal, on)),
+			paint.Shadow{Blur: 10 * on, Color: faded(pal.teal, 0.5*on)})
 	}
 	p.RRect(geom.Rc(at.X-7, at.Y-7, 14, 14), 7, paint.Solid(faded(lit, 0.25+0.2*(1-on))))
-	p.RRect(geom.Rc(at.X-4, at.Y-4, 8, 8), 4, paint.Solid(mix(faded(ink, 0.3), night, on)))
+	p.RRect(geom.Rc(at.X-4, at.Y-4, 8, 8), 4, paint.Solid(mix(faded(pal.ink, 0.3), pal.night, on)))
 	room := r.Size().W - 44
-	words := mix(faded(ink, 0.45), ink, on)
+	words := mix(pal.quiet(0.45), pal.ink, on)
 	paintFit(p, k.slot.title(), 12, true, geom.Pt(r.Min.X+34, r.Min.Y+8), room, words)
-	detail := faded(ink, 0.45)
+	detail := pal.quiet(0.45)
 	if failed {
-		detail = coral
+		detail = pal.coral
 	}
 	paintFit(p, cardDetail(k.slot), 9, false, geom.Pt(r.Min.X+34, r.Min.Y+26), room, detail)
 }

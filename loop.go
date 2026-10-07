@@ -194,17 +194,18 @@ func sameLoop(x, y *Loop) bool {
 // with its edges to drag, and over the lanes a faint light while it
 // loops; and the chip that turns it on.
 func (e *editor) paintLoop(p *paint.Painter, f gunim.Frame, box geom.Size) {
+	pal := colours(f.Theme)
 	// Lit while this track loops: looping on, and a loop of its own.
 	on := e.r.state.Looping && e.loopShown() != nil
 	b := e.loopButton()
-	fill := faded(night, 0.75)
+	fill := faded(pal.night, 0.75)
 	if on {
-		fill = faded(teal, 0.25)
+		fill = faded(pal.teal, 0.25)
 	}
 	p.RRect(b, 10, paint.Solid(fill))
-	p.RRectStroke(b, 10, paint.Solid(faded(ink, 0)), paint.Stroke{Width: 1, Color: faded(teal, 0.5)})
-	widget.PaintIcon(p, f.Theme, icon.Repeat, geom.Rc(b.Min.X+8, b.Min.Y+3, 14, 14), teal)
-	shaped("Loop", 10, true).Paint(p, geom.Pt(b.Min.X+26, b.Min.Y+4), ink)
+	p.RRectStroke(b, 10, paint.Solid(faded(pal.ink, 0)), paint.Stroke{Width: 1, Color: faded(pal.teal, 0.5)})
+	widget.PaintIcon(p, f.Theme, icon.Repeat, geom.Rc(b.Min.X+8, b.Min.Y+3, 14, 14), pal.teal)
+	shaped("Loop", 10, true).Paint(p, geom.Pt(b.Min.X+26, b.Min.Y+4), pal.ink)
 	l := e.loopShown()
 	if l == nil {
 		return
@@ -216,9 +217,9 @@ func (e *editor) paintLoop(p *paint.Painter, f gunim.Frame, box geom.Size) {
 	alpha := float32(0.25)
 	if on {
 		alpha = 0.6
-		p.RRect(geom.Rc(x0, rulerH, x1-x0, box.H-rulerH), 0, paint.Solid(faded(teal, 0.05)))
+		p.RRect(geom.Rc(x0, rulerH, x1-x0, box.H-rulerH), 0, paint.Solid(faded(pal.teal, 0.05)))
 	}
-	p.RRect(geom.Rc(x0, 2, x1-x0, rulerH-4), 4, paint.Solid(faded(teal, alpha*0.5)))
+	p.RRect(geom.Rc(x0, 2, x1-x0, rulerH-4), 4, paint.Solid(faded(pal.teal, alpha*0.5)))
 	for i, x := range []float32{x0, x1} {
 		g := gripLoopIn
 		if i == 1 {
@@ -228,6 +229,6 @@ func (e *editor) paintLoop(p *paint.Painter, f gunim.Frame, box geom.Size) {
 		if e.hot == g || e.held == g {
 			w = 5
 		}
-		p.RRect(geom.Rc(x-w/2, 0, w, rulerH), w/2, paint.Solid(faded(teal, alpha+0.3)))
+		p.RRect(geom.Rc(x-w/2, 0, w, rulerH), w/2, paint.Solid(faded(pal.teal, alpha+0.3)))
 	}
 }
