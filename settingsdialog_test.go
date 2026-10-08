@@ -88,3 +88,19 @@ func TestTheSettingsSayWhereTheSystemResamples(t *testing.T) {
 		t.Errorf("now: %q", got)
 	}
 }
+
+func TestADriverThatFailedSaysWhatPlaysInItsPlace(t *testing.T) {
+	d := SettingsDraft{Output: Output{Driver: "Realtek ASIO"}, Drivers: []string{"Realtek ASIO"},
+		Now: OutputState{Rate: 48000, Problem: "asio: starting Realtek ASIO: the driver refused to start"}}
+	if got := soundProblem(d); !strings.HasSuffix(got, systemSound()+" plays in its place.") {
+		t.Errorf("the problem says %q", got)
+	}
+	// Its settings open all the same, as a change there may let it start.
+	if s := newSettingsDialog(d); s.panel.Disabled {
+		t.Error("the settings of a driver that failed are out of reach")
+	}
+	d.Output.Driver = ""
+	if got := soundProblem(d); strings.Contains(got, "in its place") {
+		t.Errorf("with the system's sound chosen, the problem says %q", got)
+	}
+}

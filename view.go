@@ -12,6 +12,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/install"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/widget"
 )
@@ -619,19 +620,15 @@ func (h *header) openMenu(u *gunim.UI) {
 	m.Open(geom.Pt(16, headerH-6), u)
 }
 
-// updateToast asks about a newer release: whether to fetch it, or, once
-// it is in place, whether to restart into it. It stays until answered.
+// updateToast tells of a release, as gunim's installer words it: one
+// out, to fetch; one in place, to restart into; or the one running, put
+// in place by itself, with what it changed. It stays until answered.
 func updateToast(up Update) widget.Toast {
-	if up.Ready {
-		return widget.Toast{Title: appName + " " + up.Version + " is ready", Body: "Restart now, or it starts the next time you open the studio.",
-			Key: "update", Icon: icon.RefreshCw, Buttons: []widget.ToastButton{
-				{Label: "Restart Now", OnClick: func(bool, *gunim.UI) gunim.Intent { return RestartToUpdate{} }},
-				{Label: "Later"},
-			}}
+	switch {
+	case up.From != "":
+		return install.UpdatedToast(installer(), up.From, ShowWhatsNew{})
+	case up.Ready:
+		return install.ReadyToast(installer(), up.Version, RestartToUpdate{})
 	}
-	return widget.Toast{Title: appName + " " + up.Version + " is out", Body: "Fetch it now? It starts the next time you open the studio.",
-		Key: "update", Icon: icon.Download, Buttons: []widget.ToastButton{
-			{Label: "Update", OnClick: func(bool, *gunim.UI) gunim.Intent { return FetchUpdate{} }},
-			{Label: "Not Now"},
-		}}
+	return install.AvailableToast(installer(), up.Version, FetchUpdate{})
 }

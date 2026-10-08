@@ -148,6 +148,9 @@ type options struct {
 	zoom float32
 	// placement says where the window is, to keep as it closes.
 	placement func() (driver.Placement, bool)
+	// app is the program's gunim app, which opens windows of its own,
+	// as what an update changed.
+	app *gunim.App
 }
 
 func run(o options) error {
@@ -166,6 +169,7 @@ func run(o options) error {
 		}
 		registerViews(w, d)
 		o.placement = w.Placement
+		o.app = a
 		c := w.Client()
 		if o.shot != "" {
 			go func() {
