@@ -26,7 +26,7 @@ func TestANewerReleaseIsAskedAbout(t *testing.T) {
 	if a.Update.Seq != 1 || a.Update.Version != "0.3.0" || a.Update.Ready {
 		t.Fatalf("told of a release, the window is told %+v", a.Update)
 	}
-	if to := updateToast(a.Update); !strings.Contains(to.Title, "0.3.0 is out") || to.Buttons[0].On(false) != (FetchUpdate{}) {
+	if to := updateToast(a.Update); !strings.Contains(to.Title, "0.3.0 is out") || to.Buttons[0].OnClick(false, nil) != (FetchUpdate{}) {
 		t.Fatalf("the toast asks %+v", to)
 	}
 	a.handle(FetchUpdate{})
@@ -42,7 +42,7 @@ func TestANewerReleaseIsAskedAbout(t *testing.T) {
 	if !a.Update.Ready || a.Update.Seq != 2 {
 		t.Fatalf("fetched, the window is told %+v", a.Update)
 	}
-	if to := updateToast(a.Update); !strings.Contains(to.Title, "0.3.0 is ready") || to.Buttons[0].On(false) != (RestartToUpdate{}) {
+	if to := updateToast(a.Update); !strings.Contains(to.Title, "0.3.0 is ready") || to.Buttons[0].OnClick(false, nil) != (RestartToUpdate{}) {
 		t.Fatalf("the restart toast is %+v", to)
 	}
 

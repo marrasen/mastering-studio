@@ -232,9 +232,9 @@ func newUnsavedDialog(s Unsaved) *widget.Dialog {
 		save = "Save as…"
 	}
 	d.SetButtons(save, "Cancel")
-	d.Accept = CloseAnswer{Choice: CloseSave}
-	d.Dismiss = CloseAnswer{Choice: CloseCancel}
-	d.AddButton("Discard changes", func() gunim.Intent { return CloseAnswer{Choice: CloseDiscard} })
-	d.AddButton("Keep draft", func() gunim.Intent { return CloseAnswer{Choice: CloseKeep} })
+	d.OnAccept = widget.Sends(CloseAnswer{Choice: CloseSave})
+	d.OnDismiss = widget.Sends(CloseAnswer{Choice: CloseCancel})
+	d.AddButton("Discard changes", widget.Sends(CloseAnswer{Choice: CloseDiscard}))
+	d.AddButton("Keep draft", widget.Sends(CloseAnswer{Choice: CloseKeep}))
 	return d
 }

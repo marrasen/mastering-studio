@@ -100,7 +100,7 @@ func newChainRow(r *root) *chainRow {
 	c.more.menu = true
 	c.Add(c.add, c.more)
 	c.field = &slotField{TextField: widget.NewTextField(), c: c}
-	c.field.OnSubmit = func(text string) gunim.Intent {
+	c.field.OnCommit = func(text string, u *gunim.UI) gunim.Intent {
 		in := c.named(text)
 		c.renaming = 0
 		return in
@@ -127,7 +127,7 @@ func (c *chainRow) rename(id int, u *gunim.UI) {
 	c.field.Disabled = false
 	c.field.Placeholder = k.slot.Name
 	title := k.slot.title()
-	c.field.SetText(title)
+	c.field.SetText(title, u)
 	c.field.Select(0, len([]rune(title)))
 	u.Focus(c.field)
 	u.Invalidate()
@@ -392,27 +392,30 @@ func (c *chainRow) openMenu(p geom.Point, u *gunim.UI) bool {
 	if k.slot.Bypass {
 		run = "Switch on"
 	}
-	c.menu.Items = []string{"Open editor", run, "Rename…", "Move earlier", "Move later", "Remove from the chain"}
-	c.menu.Icons = []*icon.Icon{icon.SlidersHorizontal, icon.Power, icon.Pencil, icon.ArrowLeft, icon.ArrowRight,
-		icon.Trash2}
-	c.menu.Disabled = []bool{k.slot.Failed != "", false, false, i == 0, i == len(c.order)-1, false}
-	c.menu.Breaks = []int{3, 5}
-	c.menu.Captions, c.menu.Hints, c.menu.Checked = nil, nil, nil
-	c.menu.Picked = func(item int, u *gunim.UI) {
+	c.menu.SetItems([]widget.MenuItem{
+		{Label: "Open editor", Icon: icon.SlidersHorizontal, Disabled: k.slot.Failed != ""},
+		{Label: run, Icon: icon.Power},
+		{Label: "Rename…", Icon: icon.Pencil},
+		{Label: "Move earlier", Icon: icon.ArrowLeft, Disabled: i == 0, Break: true},
+		{Label: "Move later", Icon: icon.ArrowRight, Disabled: i == len(c.order)-1},
+		{Label: "Remove from the chain", Icon: icon.Trash2, Break: true},
+	})
+	c.menu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
 		switch item {
 		case 0:
-			u.Send(c, ShowEditor{Track: c.track, Slot: id})
+			return ShowEditor{Track: c.track, Slot: id}
 		case 1:
-			u.Send(c, SetBypass{Track: c.track, Slot: id, On: !k.slot.Bypass})
+			return SetBypass{Track: c.track, Slot: id, On: !k.slot.Bypass}
 		case 2:
 			c.rename(id, u)
 		case 3:
-			u.Send(c, MovePlugin{Track: c.track, From: i, To: i - 1})
+			return MovePlugin{Track: c.track, From: i, To: i - 1}
 		case 4:
-			u.Send(c, MovePlugin{Track: c.track, From: i, To: i + 1})
+			return MovePlugin{Track: c.track, From: i, To: i + 1}
 		case 5:
-			u.Send(c, RemovePlugin{Track: c.track, Slot: id})
+			return RemovePlugin{Track: c.track, Slot: id}
 		}
+		return nil
 	}
 	c.menu.Open(p, u)
 	return true
@@ -459,10 +462,11 @@ func (c *chainRow) openPicker(u *gunim.UI) {
 		c.picker.Status = "No VST3 plugins found in the system's plugin folders"
 	}
 	track := c.track
-	c.picker.Pick = func(i int, u *gunim.UI) {
+	c.picker.OnPick = func(i int, u *gunim.UI) gunim.Intent {
 		if i >= 0 && i < len(choices) {
-			u.Send(c, AddPlugin{Track: track, Choice: choices[i]})
+			return AddPlugin{Track: track, Choice: choices[i]}
 		}
+		return nil
 	}
 	c.add.setLit(true)
 	c.picker.Open(c, geom.Rect{Max: c.size.Point()}, u)
@@ -474,24 +478,24 @@ func (c *chainRow) openCopy(u *gunim.UI) {
 		return
 	}
 	var ids []int
-	items := []string{"Every other track"}
+	items := []widget.MenuItem{{Label: "Every other track"}}
 	for i, t := range c.r.state.Tracks {
 		if t.ID != c.track {
 			ids = append(ids, t.ID)
-			items = append(items, fmt.Sprintf("%02d %s", i+1, t.Title))
+			items = append(items, widget.MenuItem{Label: fmt.Sprintf("%02d %s", i+1, t.Title)})
 		}
 	}
-	c.menu.Items, c.menu.Icons, c.menu.Captions, c.menu.Hints, c.menu.Checked = items, nil, nil, nil, nil
-	c.menu.Disabled = make([]bool, len(items))
-	c.menu.Disabled[0] = len(ids) == 0
-	c.menu.Breaks = []int{1}
+	items[0].Disabled = len(ids) == 0
+	if len(items) > 1 {
+		items[1].Break = true
+	}
+	c.menu.SetItems(items)
 	from := c.track
-	c.menu.Picked = func(item int, u *gunim.UI) {
+	c.menu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
 		if item == 0 {
-			u.Send(c, CopyChain{From: from})
-			return
+			return CopyChain{From: from}
 		}
-		u.Send(c, CopyChain{From: from, To: []int{ids[item-1]}})
+		return CopyChain{From: from, To: []int{ids[item-1]}}
 	}
 	c.menu.Open(c.moreAt(), u)
 }
@@ -514,25 +518,28 @@ func (c *chainRow) openMore(u *gunim.UI) {
 		save = "Save preset “" + c.preset + "”"
 	}
 	empty := len(c.slots) == 0
-	c.menu.Items = []string{"Copy to…", save, "Save preset as…", "Load preset…", "Delete preset…"}
-	c.menu.Icons = []*icon.Icon{icon.Copy, icon.Save, icon.Save, icon.FolderOpen, icon.Trash2}
-	c.menu.Disabled = []bool{false, empty || !has, empty, len(presets) == 0, len(presets) == 0}
-	c.menu.Hints, c.menu.Checked, c.menu.Captions = nil, nil, nil
-	c.menu.Breaks = []int{1, 3}
+	c.menu.SetItems([]widget.MenuItem{
+		{Label: "Copy to…", Icon: icon.Copy},
+		{Label: save, Icon: icon.Save, Disabled: empty || !has, Break: true},
+		{Label: "Save preset as…", Icon: icon.Save, Disabled: empty},
+		{Label: "Load preset…", Icon: icon.FolderOpen, Disabled: len(presets) == 0, Break: true},
+		{Label: "Delete preset…", Icon: icon.Trash2, Disabled: len(presets) == 0},
+	})
 	track := c.track
-	c.menu.Picked = func(item int, u *gunim.UI) {
+	c.menu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
 		switch item {
 		case 0:
 			c.openCopy(u)
 		case 1:
-			u.Send(c, SavePreset{Track: track})
+			return SavePreset{Track: track}
 		case 2:
-			u.Send(c, NamePreset{Track: track})
+			return NamePreset{Track: track}
 		case 3:
 			c.openPresets(u, false)
 		case 4:
 			c.openPresets(u, true)
 		}
+		return nil
 	}
 	c.menu.Open(c.moreAt(), u)
 }
@@ -541,27 +548,23 @@ func (c *chainRow) openMore(u *gunim.UI) {
 // del, to delete one.
 func (c *chainRow) openPresets(u *gunim.UI, del bool) {
 	presets := slices.Clone(c.r.state.Presets)
-	c.menu.Items = presets
-	c.menu.Icons = make([]*icon.Icon, len(presets))
-	c.menu.Checked = make([]bool, len(presets))
+	items := make([]widget.MenuItem, len(presets))
 	for i, p := range presets {
-		c.menu.Icons[i] = icon.AudioLines
+		items[i] = widget.MenuItem{Label: p, Icon: icon.AudioLines, Checked: !del && p == c.preset}
 		if del {
-			c.menu.Icons[i] = icon.Trash2
+			items[i].Icon = icon.Trash2
 		}
-		c.menu.Checked[i] = !del && p == c.preset
 	}
-	c.menu.Disabled, c.menu.Hints, c.menu.Captions, c.menu.Breaks = nil, nil, nil, nil
+	c.menu.SetItems(items)
 	track := c.track
-	c.menu.Picked = func(item int, u *gunim.UI) {
+	c.menu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
 		if item < 0 || item >= len(presets) {
-			return
+			return nil
 		}
 		if del {
-			u.Send(c, DeletePreset{Name: presets[item]})
-			return
+			return DeletePreset{Name: presets[item]}
 		}
-		u.Send(c, LoadPreset{Track: track, Name: presets[item]})
+		return LoadPreset{Track: track, Name: presets[item]}
 	}
 	c.menu.Open(c.moreAt(), u)
 }
