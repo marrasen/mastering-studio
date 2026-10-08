@@ -62,3 +62,11 @@ func TestTellNeverBlocks(_ *testing.T) {
 		<-updateNews
 	}
 }
+
+func TestTheFirstStartOfAnUpdateTellsOfIt(t *testing.T) {
+	to := updateToast(Update{Seq: 1, Version: "0.4.0", From: "v0.3.2"})
+	if !strings.Contains(to.Title, "updated to") || !strings.Contains(to.Body, "0.3.2") || len(to.Buttons) != 2 ||
+		to.Buttons[0].OnClick(false, nil) != (ShowWhatsNew{}) {
+		t.Fatalf("the toast says %q, %q, with %d buttons", to.Title, to.Body, len(to.Buttons))
+	}
+}

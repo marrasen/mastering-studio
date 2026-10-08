@@ -47,14 +47,19 @@ func installer() install.App {
 	}
 }
 
-// Update is the newer release the window tells of: one out, to ask
-// whether to fetch, or one put in place, to offer the restart into. Seq
-// counts the news, so the window tells each once.
+// Update is the release the window tells of: one out, to ask whether
+// to fetch; one put in place, to offer the restart into; or, where From
+// names the version it replaced, the one running, put in place by
+// itself. Seq counts the news, so the window tells each once.
 type Update struct {
 	Seq     int
 	Version string
 	Ready   bool
+	From    string
 }
+
+// ShowWhatsNew shows what the releases since Update.From changed.
+type ShowWhatsNew struct{}
 
 // news is what the updates tell the studio: a newer release, put in
 // place already when ready, or what kept one from it.

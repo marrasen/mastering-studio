@@ -469,8 +469,10 @@ type app struct {
 	// settings' dialog is up, told anew at each of settingsTick, with
 	// the ASIO drivers found as it opened, and the studio as installed,
 	// or nil.
-	output       Output
-	theme        string
+	output Output
+	theme  string
+	// gunim is the program's gunim app, for windows of its own.
+	gunim        *gunim.App
 	settingsOpen bool
 	settingsTick *time.Ticker
 	drivers      []string
@@ -835,6 +837,12 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
 	a.Background, a.Spectrum, a.Carry, a.Beta = st.Background, st.spectrum(), st.Carry, st.Beta
 	a.output, a.theme = st.Output, themeNamed(st.Theme)
+	a.gunim = o.app
+	if from := install.UpdatedFrom(); from != "" {
+		// The first start of a release put in place by itself.
+		a.Update = Update{Seq: 1, Version: version, From: from}
+	}
+	a.tellFallback()
 	if o.theme != "" {
 		a.theme = themeNamed(o.theme)
 	}
@@ -1137,6 +1145,12 @@ func (a *app) handle(in gunim.Intent) {
 		a.record(label, track, key)
 	}
 	switch in := in.(type) {
+	case ShowWhatsNew:
+		if a.gunim != nil && a.Update.From != "" {
+			if err := install.ShowWhatsNew(a.ctx, a.gunim, installer(), a.Update.From); err != nil {
+				a.Note = err.Error()
+			}
+		}
 	case FetchUpdate:
 		a.fetchUpdate()
 	case SaveAlbum:

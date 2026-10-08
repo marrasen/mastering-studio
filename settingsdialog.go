@@ -176,7 +176,9 @@ func (s *settingsDialog) show(d SettingsDraft, u *gunim.UI) {
 // fill sets what follows from the draft: which choices apply, the
 // buffer an auto buffer has grown to, and what the sound does now.
 func (s *settingsDialog) fill(d SettingsDraft, u *gunim.UI) {
-	s.panel.Disabled = d.Output.Driver == "" || d.Now.Driver == ""
+	// A driver that failed to start opens its settings too: a change
+	// there may let it.
+	s.panel.Disabled = d.Output.Driver == ""
 	s.dither.Disabled = d.Output.bits() == 32
 	s.buffer.Disabled = !d.Output.Fixed
 	if !d.Output.Fixed && d.Now.Frames > 0 {
@@ -194,7 +196,7 @@ func (s *settingsDialog) fill(d SettingsDraft, u *gunim.UI) {
 	if !d.Installed {
 		s.installNote.Text = "The studio takes newer releases once it is installed."
 	}
-	s.now.Text, s.path.Text, s.problem.Text = soundNow(d.Now), soundPath(d), d.Now.Problem
+	s.now.Text, s.path.Text, s.problem.Text = soundNow(d.Now), soundPath(d), soundProblem(d)
 }
 
 // output returns the sound's settings as the dialog shows them.
@@ -309,6 +311,16 @@ func soundPath(d SettingsDraft) string {
 	return fmt.Sprintf("The system plays it at %s.", hz(n.Rate))
 }
 
+// soundProblem says why the output chosen plays otherwise, and, where
+// the system's sound plays in place of a driver, says so.
+func soundProblem(d SettingsDraft) string {
+	p := d.Now.Problem
+	if p != "" && d.Output.Driver != "" && d.Now.Driver == "" && !d.Now.Silent {
+		p += ". " + systemSound() + " plays in its place."
+	}
+	return p
+}
+
 // The app's half of the dialog.
 
 // settingsDraft is the settings' dialog's state.
@@ -352,6 +364,17 @@ func (a *app) openSettings(open bool) {
 	}
 }
 
+// tellFallback tells, as a note, of a driver chosen that failed to
+// start, while the system's sound plays in its place.
+func (a *app) tellFallback() {
+	if a.output.Driver == "" {
+		return
+	}
+	if st := a.d.outputState(); st.Driver == "" && !st.Silent {
+		a.Note = fmt.Sprintf("%s didn't start, so %s plays. Settings says why.", a.output.Driver, systemSound())
+	}
+}
+
 // ticks returns the channel the settings' dialog is told anew on, or
 // nil while it is closed.
 func (a *app) ticks() <-chan time.Time {
@@ -374,6 +397,7 @@ func (a *app) handleSettings(in gunim.Intent) {
 		if err := a.d.openOutput(a.output); err != nil {
 			a.Note = "The sound: " + err.Error()
 		}
+		a.tellFallback()
 	case OpenControlPanel:
 		// The driver's settings show until closed: the studio plays on.
 		go func() {
