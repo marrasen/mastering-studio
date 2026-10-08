@@ -32,6 +32,10 @@ type (
 		Installed bool
 		Updates   string
 		Beta      bool
+		// Checking says a look for a newer release is under way, and
+		// Checked how the last one went.
+		Checking bool
+		Checked  string
 	}
 
 	// OpenSettings opens the settings' dialog.
@@ -43,6 +47,9 @@ type (
 	// SetUpdates sets how the installed studio takes newer releases, as
 	// install.UpdateMode names it.
 	SetUpdates struct{ Mode string }
+	// CheckForUpdates looks for a newer release now, and opens the
+	// window to update to one.
+	CheckForUpdates struct{}
 )
 
 // settingsTopic is what the settings' dialog watches.
@@ -71,6 +78,7 @@ type settingsDialog struct {
 	// The look's, and the updates'.
 	look, updates *widget.Dropdown
 	beta          *widget.Checkbox
+	check         *widget.Button
 	installNote   *widget.Label
 }
 
@@ -152,7 +160,10 @@ func newSettingsDialog(d SettingsDraft) *settingsDialog {
 	s.beta.SetChecked(d.Beta, nil)
 	s.beta.OnChange = func(on bool, _ *gunim.UI) gunim.Intent { return SetBeta{On: on} }
 	s.installNote = widget.NewLabel("")
-	updates := widget.NewForm().Add("Newer releases", widget.Row(s.updates)).Add("", s.beta)
+	s.check = widget.NewButton("Check for Updates")
+	s.check.OnClick = widget.Sends(CheckForUpdates{})
+	updates := widget.NewForm().Add("Newer releases", widget.Row(s.updates)).Add("", s.beta).
+		Add("", widget.Row(s.check))
 	updatesPage := widget.Column(updates, s.installNote)
 
 	dlg.Body = widget.NewTabs([]string{"Sound", "Look", "Updates"}, soundPage, lookPage, updatesPage)
@@ -192,7 +203,11 @@ func (s *settingsDialog) fill(d SettingsDraft, u *gunim.UI) {
 	})
 	s.updates.SetSelected(max(0, i), u)
 	s.updates.Disabled = !d.Installed
-	s.installNote.Text = ""
+	s.check.Disabled = !d.Installed || d.Checking
+	s.installNote.Text = d.Checked
+	if d.Checking {
+		s.installNote.Text = "Checking for updates…"
+	}
 	if !d.Installed {
 		s.installNote.Text = "The studio takes newer releases once it is installed."
 	}
@@ -326,7 +341,7 @@ func soundProblem(d SettingsDraft) string {
 // settingsDraft is the settings' dialog's state.
 func (a *app) settingsDraft() SettingsDraft {
 	return SettingsDraft{Output: a.output, Drivers: a.drivers, Now: a.d.outputState(), Theme: a.theme,
-		Installed: a.installed != nil, Updates: a.updatesMode(), Beta: a.Beta}
+		Installed: a.installed != nil, Updates: a.updatesMode(), Beta: a.Beta, Checking: a.checking, Checked: a.checked}
 }
 
 // updatesMode is how the installed studio takes newer releases.
@@ -375,6 +390,60 @@ func (a *app) tellFallback() {
 	}
 }
 
+// checkForUpdates looks for a newer release, in the background, as the
+// settings ask; checks carries what it found.
+func (a *app) checkForUpdates() {
+	if a.checking {
+		return
+	}
+	a.checking, a.checked = true, ""
+	go func() {
+		// Made anew, so Beta as it is now holds.
+		r, newer, err := install.Check(a.ctx, installer())
+		select {
+		case a.checks <- checked{r, newer, err}:
+		case <-a.ctx.Done():
+		}
+	}()
+}
+
+// checked is what a look for a newer release found.
+type checked struct {
+	release install.Release
+	newer   bool
+	err     error
+}
+
+// tookCheck takes what a look for a newer release found: a newer one
+// opens gunim's window to update to it, which restarts the studio.
+func (a *app) tookCheck(c checked) {
+	a.checking = false
+	switch {
+	case c.err != nil:
+		a.checked = "Couldn't check: " + c.err.Error()
+	case !c.newer:
+		a.checked = appName + " " + strings.TrimPrefix(version, "v") + " is up to date."
+	case a.gunim == nil:
+		a.checked = strings.TrimPrefix(c.release.Version, "v") + " is out."
+	default:
+		a.checked = strings.TrimPrefix(c.release.Version, "v") + " is out: its window shows what it brings."
+		u := install.Update{Release: c.release, Quit: a.quitForUpdate}
+		if err := install.ShowUpdate(a.ctx, a.gunim, installer(), u); err != nil {
+			a.checked = "Couldn't open the update: " + err.Error()
+		}
+	}
+}
+
+// quitForUpdate asks the studio to close, as the new release it updated
+// to starts: as Quit does, asking first of changes not saved.
+func (a *app) quitForUpdate() error {
+	select {
+	case a.quitNow <- struct{}{}:
+	case <-a.ctx.Done():
+	}
+	return nil
+}
+
 // ticks returns the channel the settings' dialog is told anew on, or
 // nil while it is closed.
 func (a *app) ticks() <-chan time.Time {
@@ -411,6 +480,8 @@ func (a *app) handleSettings(in gunim.Intent) {
 		if a.c != nil {
 			_ = a.c.SetTheme(a.theme)
 		}
+	case CheckForUpdates:
+		a.checkForUpdates()
 	case SetUpdates:
 		if err := install.SetUpdates(installer(), install.UpdateMode(in.Mode)); err != nil {
 			a.Note = err.Error()
