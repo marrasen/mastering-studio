@@ -79,7 +79,7 @@ func (pal palette) outline(p *paint.Painter, r geom.Rect, radius, a float32) {
 // the spectrum match the rest of the window.
 func (pal palette) entries() []theme.Entry {
 	return []theme.Entry{
-		theme.Set(studioInk, pal.ink), theme.Set(audioui.Ink, pal.ink),
+		theme.Set(studioInk, pal.ink),
 		theme.Set(studioNight, pal.night), theme.Set(audioui.Ground, pal.night),
 		theme.Set(studioPanel, pal.panel),
 		theme.Set(studioRaised, pal.raised), theme.Set(audioui.Raised, pal.raised),

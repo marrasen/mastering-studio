@@ -75,7 +75,7 @@ func newTrackHead(r *root) *trackHead {
 	h := &trackHead{r: r, hover: anim.NewFloat(0)}
 	h.Add(h.hover)
 	h.field = &renameField{TextField: widget.NewTextField(), h: h}
-	h.field.OnSubmit = func(text string) gunim.Intent {
+	h.field.OnCommit = func(text string, _ *gunim.UI) gunim.Intent {
 		h.renaming = false
 		return h.renamed(text)
 	}
@@ -90,7 +90,7 @@ func newTrackHead(r *root) *trackHead {
 	}
 	h.note = widget.NewTextField()
 	h.note.Placeholder = "Add a note, as what the track still needs"
-	h.note.OnChange = func(text string) gunim.Intent {
+	h.note.OnChange = func(text string, _ *gunim.UI) gunim.Intent {
 		if h.track.ID == 0 {
 			return nil
 		}
@@ -144,7 +144,7 @@ func (h *trackHead) show(t Track, s Album, u *gunim.UI) {
 	h.view.setLit(s.View == ViewGram)
 	// The note as kept, but while it is typed in: the field is ahead.
 	if u.Focused() != h.note || switched {
-		h.note.SetText(t.Note)
+		h.note.SetText(t.Note, u)
 	}
 }
 
@@ -165,7 +165,7 @@ func (h *trackHead) rename(u *gunim.UI) {
 	}
 	h.renaming = true
 	h.field.Disabled = false
-	h.field.SetText(h.track.Title)
+	h.field.SetText(h.track.Title, u)
 	h.field.Select(0, len([]rune(h.track.Title)))
 	u.Focus(h.field)
 	u.Invalidate()

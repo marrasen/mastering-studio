@@ -55,16 +55,16 @@ func TestTheSettingsDialogSendsWhatItShows(t *testing.T) {
 	if got := s.output(); got != d.Output {
 		t.Errorf("the dialog sends %+v, want %+v", got, d.Output)
 	}
-	if s.buffer.Disabled || s.dither.Disabled || s.look.Selected != 2 {
-		t.Errorf("buffer disabled %v, dither disabled %v, theme %d", s.buffer.Disabled, s.dither.Disabled, s.look.Selected)
+	if s.buffer.Disabled || s.dither.Disabled || s.look.Selected() != 2 {
+		t.Errorf("buffer disabled %v, dither disabled %v, theme %d", s.buffer.Disabled, s.dither.Disabled, s.look.Selected())
 	}
 	// An auto buffer shows the size it has grown to, to hold once
 	// Auto is unticked; floats take no dither.
 	d.Output = Output{Rate: 48000}
 	d.Now = OutputState{Rate: 48000, Frames: 8000, Latency: 166 * time.Millisecond}
 	s = newSettingsDialog(d)
-	if !s.buffer.Disabled || !s.dither.Disabled || bufferSizes[s.buffer.Selected] != 8192 {
-		t.Errorf("auto: buffer disabled %v at %d, dither disabled %v", s.buffer.Disabled, bufferSizes[s.buffer.Selected], s.dither.Disabled)
+	if !s.buffer.Disabled || !s.dither.Disabled || bufferSizes[s.buffer.Selected()] != 8192 {
+		t.Errorf("auto: buffer disabled %v at %d, dither disabled %v", s.buffer.Disabled, bufferSizes[s.buffer.Selected()], s.dither.Disabled)
 	}
 	if got := s.output(); got.Bits != 0 || got.Fixed || got.Driver != "" {
 		t.Errorf("auto, floats, the system's sound: the dialog sends %+v", got)

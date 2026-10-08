@@ -20,7 +20,7 @@ func TestDarkThemeIsTheDefaults(t *testing.T) {
 	if got := colours(l); got != darkColours {
 		t.Errorf("the dark theme gives %+v, want %+v", got, darkColours)
 	}
-	for _, tok := range []theme.Token[color.NRGBA]{audioui.Ink, audioui.Ground, audioui.Raised, audioui.Sound,
+	for _, tok := range []theme.Token[color.NRGBA]{audioui.Ground, audioui.Raised, audioui.Sound,
 		audioui.Near, audioui.Over, audioui.Spread} {
 		if tok.Get(l) != tok.Default() {
 			t.Errorf("the dark theme gives %s %v, want its default %v", tok.Key(), tok.Get(l), tok.Default())

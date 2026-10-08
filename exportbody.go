@@ -57,9 +57,9 @@ const (
 func newExportBody(d ExportDraft) *exportBody {
 	b := &exportBody{dir: d.Dir}
 	b.change = widget.NewButton("Change…")
-	b.change.On = ChooseExportDir{}
+	b.change.OnClick = widget.Sends(ChooseExportDir{})
 	b.wav = widget.NewCheckbox("WAV")
-	b.wav.On = d.WAV
+	b.wav.SetChecked(d.WAV, nil)
 	names := make([]string, len(bitsChoices))
 	for i, c := range bitsChoices {
 		names[i] = c.name
@@ -67,25 +67,25 @@ func newExportBody(d ExportDraft) *exportBody {
 	b.bits = widget.NewSegmented(names...)
 	b.bits.SetSelected(max(0, slices.IndexFunc(bitsChoices, func(c bitsChoice) bool { return c.bits == d.Bits })), nil)
 	b.dither = widget.NewCheckbox("Dither")
-	b.dither.On = d.Dither
+	b.dither.SetChecked(d.Dither, nil)
 	b.mp3 = widget.NewCheckbox("MP3")
-	b.mp3.On = d.MP3
-	rates := make([]string, len(d.MP3Rates))
+	b.mp3.SetChecked(d.MP3, nil)
+	rates := make([]widget.MenuItem, len(d.MP3Rates))
 	for i, r := range d.MP3Rates {
-		rates[i] = fmt.Sprintf("%d kbps", r)
+		rates[i].Label = fmt.Sprintf("%d kbps", r)
 	}
-	b.rate = widget.NewDropdown(rates...)
-	b.rate.Selected = max(0, slices.Index(d.MP3Rates, d.MP3Rate))
+	b.rate = widget.NewDropdown(rates)
+	b.rate.SetSelected(max(0, slices.Index(d.MP3Rates, d.MP3Rate)), nil)
 	b.locate = widget.NewButton("Locate LAME…")
-	b.locate.On = LocateLAME{}
+	b.locate.OnClick = widget.Sends(LocateLAME{})
 	b.report = widget.NewCheckbox("Write report")
-	b.report.On = d.Report
+	b.report.SetChecked(d.Report, nil)
 	b.notesText = notesText(d)
 	b.notes = widget.NewButton("Copy notes to clipboard")
 	b.notes.Disabled = !slices.ContainsFunc(d.Tracks, func(t ExportTrack) bool {
 		return strings.TrimSpace(t.Note) != "" || len(t.Marks) > 0
 	})
-	b.notes.OnActivate(func(u *gunim.UI) {
+	b.notes.OnClick = func(u *gunim.UI) gunim.Intent {
 		u.SetClipboard(b.notesText)
 		// Told as done a moment, then as it was.
 		b.notes.Label = "Copied"
@@ -94,7 +94,8 @@ func newExportBody(d ExportDraft) *exportBody {
 			u.Invalidate()
 		})
 		u.Invalidate()
-	})
+		return nil
+	}
 	b.list = newExportList(d.Tracks)
 	b.scroll = widget.NewScroll(b.list)
 	b.box = widget.NewSized(b.scroll, 0, float32(min(max(len(d.Tracks), 3), exRows))*exRowH)
@@ -108,7 +109,7 @@ func (b *exportBody) lame(path string) {
 	b.lameAt = path
 	b.mp3.Disabled, b.rate.Disabled = !found, !found
 	if !found {
-		b.mp3.On = false
+		b.mp3.SetChecked(false, nil)
 	}
 }
 
@@ -221,7 +222,7 @@ func (b *exportBody) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids 
 	for _, card := range []struct {
 		r  geom.Rect
 		on bool
-	}{{wavCard, b.wav.On}, {mp3Card, b.mp3.On}} {
+	}{{wavCard, b.wav.Checked()}, {mp3Card, b.mp3.Checked()}} {
 		p.RRect(card.r, 12, paint.Solid(faded(pal.ink, 0.05)))
 		pal.outline(p, card.r, 12, 1)
 		if card.on {
@@ -253,15 +254,15 @@ func (b *exportBody) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids 
 		}
 	}
 	var formats []string
-	if b.wav.On {
+	if b.wav.Checked() {
 		w := bitsChoices[b.bits.Selected()].name
-		if b.dither.On && bitsChoices[b.bits.Selected()].bits != 32 {
+		if b.dither.Checked() && bitsChoices[b.bits.Selected()].bits != 32 {
 			w += ", dithered"
 		}
 		formats = append(formats, "WAV "+w)
 	}
-	if b.mp3.On && b.rate.Selected < len(b.rate.Items) {
-		formats = append(formats, "MP3 "+b.rate.Items[b.rate.Selected])
+	if rates := b.rate.Items(); b.mp3.Checked() && b.rate.Selected() < len(rates) {
+		formats = append(formats, "MP3 "+rates[b.rate.Selected()].Label)
 	}
 	words := fmt.Sprintf("%d tracks · %s · %s", n, short(total), strings.Join(formats, " + "))
 	paintFit(p, words, 12, false, geom.Pt(0, sum), box.W, pal.quiet(0.6))

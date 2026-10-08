@@ -579,7 +579,7 @@ func TestAnAlbumFindsItsTracksOutsideItsFolderAsTheyMoveTogether(t *testing.T) {
 
 func TestTheReleasesDialogSaysWhatWasWritten(t *testing.T) {
 	r := Release{Artist: "The Oscillators", Title: "Night Drive", Year: "2026", Genre: "Synthwave"}
-	if got := newReleaseDialog(r).OnAccept(); got != (SetRelease{Release: r}) {
+	if got := newReleaseDialog(r).OnAccept(nil); got != (SetRelease{Release: r}) {
 		t.Fatalf("the dialog, saved as it opened, says %v", got)
 	}
 }
@@ -619,7 +619,7 @@ func TestTheExportDialogSendsWhatIsTicked(t *testing.T) {
 	d := ExportDraft{Dir: "/x", Bits: 24, Dither: true, WAV: true, MP3Rates: mp3Rates, MP3Rate: 256,
 		Tracks: []ExportTrack{{ID: 1, Number: 1, Title: "One", Ticked: true}, {ID: 2, Number: 2, Title: "Two"}}}
 	e := newExportDialog(d)
-	got := e.OnAccept()
+	got := e.OnAccept(nil)
 	want := StartExport{IDs: []int{1}, Bits: 24, Dither: true, WAV: true, MP3Rate: 256}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the dialog, as it opened, sends %+v, want %+v", got, want)

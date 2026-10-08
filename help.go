@@ -101,7 +101,7 @@ func newHelp(struct{}) *widget.Dialog {
 	d.Width = 560
 	d.Body = &helpBody{}
 	d.SetButtons("Close", "")
-	d.Accept, d.Dismiss = HelpClosed{}, HelpClosed{}
+	d.OnAccept, d.OnDismiss = widget.Sends(HelpClosed{}), widget.Sends(HelpClosed{})
 	return d
 }
 

@@ -76,24 +76,24 @@ type root struct {
 func newRoot(d *deck) *root {
 	r := &root{d: d}
 	r.header = newHeader(r)
-	r.headerMenu = widget.NewContextMenu(r.header)
+	r.headerMenu = widget.NewContextMenu(r.header, nil)
 	r.header.menu = r.headerMenu
 	r.list = newTrackList(r, false)
-	r.list.menu = widget.NewContextMenu(r.list)
+	r.list.menu = widget.NewContextMenu(r.list, nil)
 	r.scroll = widget.NewScroll(r.list.menu)
 	r.drop = widget.NewDropTarget(r.scroll)
 	r.drop.Accept = func(_ any, paths []string) bool { return len(paths) > 0 }
-	r.drop.OnDrop = func(d input.Drop) gunim.Intent { return AddFiles{Paths: d.Paths} }
+	r.drop.OnDrop = func(d input.Drop, _ *gunim.UI) gunim.Intent { return AddFiles{Paths: d.Paths} }
 	r.ab = newABBar(r)
 	r.refHead = newRefHead(r)
 	r.refs = newTrackList(r, true)
-	r.refs.menu = widget.NewContextMenu(r.refs)
+	r.refs.menu = widget.NewContextMenu(r.refs, nil)
 	r.refDrop = widget.NewDropTarget(widget.NewScroll(r.refs.menu))
 	r.refDrop.Accept = func(_ any, paths []string) bool { return len(paths) > 0 }
 	r.refDrop.Hint = func(input.DragOver) any {
 		return widget.DropHint{Text: "Add as reference tracks", Effect: widget.DropCopy}
 	}
-	r.refDrop.OnDrop = func(d input.Drop) gunim.Intent { return AddReferences{Paths: d.Paths} }
+	r.refDrop.OnDrop = func(d input.Drop, _ *gunim.UI) gunim.Intent { return AddReferences{Paths: d.Paths} }
 	r.toasts = &widget.Toasts{Life: 3 * time.Second}
 	r.editor = newEditor(r)
 	r.edDrop = widget.NewDropTarget(r.editor)
@@ -102,7 +102,7 @@ func newRoot(d *deck) *root {
 		t, _ := r.track()
 		return widget.DropHint{Text: "Replace the file of " + t.Title, Effect: widget.DropCopy}
 	}
-	r.edDrop.OnDrop = func(d input.Drop) gunim.Intent {
+	r.edDrop.OnDrop = func(d input.Drop, _ *gunim.UI) gunim.Intent {
 		return ReplaceFile{ID: r.state.Current, Path: d.Paths[0]}
 	}
 	r.tools = newEditTools(r)
@@ -111,7 +111,7 @@ func newRoot(d *deck) *root {
 	r.meters = newMeters(r)
 	r.chain = newChainRow(r)
 	r.head = newTrackHead(r)
-	r.chainMenu = widget.NewContextMenu(r.chain)
+	r.chainMenu = widget.NewContextMenu(r.chain, nil)
 	r.chain.menu = r.chainMenu
 	return r
 }
@@ -142,16 +142,16 @@ func (r *root) show(s Album, u *gunim.UI) {
 	r.meters.show(was, s)
 	if s.Undos != was.Undos && s.Undone != "" {
 		// What was undone, and a way to take it back.
-		to := widget.Toast{Title: s.Undone, Key: "undo", Icon: icon.Undo2, Action: "Redo", On: Redo{}}
+		to := widget.Toast{Title: s.Undone, Key: "undo", Icon: icon.Undo2, Action: "Redo", OnClick: widget.Sends(Redo{})}
 		if strings.HasPrefix(s.Undone, "Redid") {
-			to.Icon, to.Action, to.On = icon.Redo2, "Undo", Undo{}
+			to.Icon, to.Action, to.OnClick = icon.Redo2, "Undo", widget.Sends(Undo{})
 		}
 		r.toasts.Show(to, u)
 	}
 	// A preset deleted, and a way to bring it back.
 	if s.Deletes != was.Deletes && s.DeletedPreset != "" {
 		r.toasts.Show(widget.Toast{Title: "Deleted the preset " + s.DeletedPreset, Key: "preset", Icon: icon.Trash2,
-			Action: "Undo", On: RestorePreset{}}, u)
+			Action: "Undo", OnClick: widget.Sends(RestorePreset{})}, u)
 	}
 	// A newer release: out, to fetch, or in place, to restart into.
 	if s.Update.Seq != was.Update.Seq && s.Update.Version != "" {
@@ -160,7 +160,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 	// News, as a CPU profile saved, and a way to see it.
 	if s.Tolds != was.Tolds && s.Told != "" {
 		r.toasts.Show(widget.Toast{Title: s.Told, Kind: widget.ToastSuccess, Key: "told", Action: "Show",
-			On: ShowProfile{}}, u)
+			OnClick: widget.Sends(ShowProfile{})}, u)
 	}
 	// What went wrong, as saving.
 	if s.Note != was.Note && s.Note != "" {
@@ -597,27 +597,24 @@ func (h *header) openMenu(u *gunim.UI) {
 		{"Settings…", "Ctrl+,", icon.Settings, false, OpenSettings{}, false},
 		{profile, "", icon.Activity, s.Profiling, RecordProfile{}, false},
 	}
-	m.Breaks, m.Captions, m.Checked = []int{2, 4, 6, 8}, nil, nil
+	recentAt := len(items)
 	if len(recent) > 0 {
-		m.Breaks = append(m.Breaks, len(items))
-		m.Captions = []int{len(items)}
 		items = append(items, item{words: "Recent"})
 		for _, p := range recent {
 			items = append(items, item{albumName(p), lastDirs(filepath.Dir(p)), icon.Disc3, false, OpenAlbumPath{Path: p}, false})
 		}
 	}
-	m.Items, m.Icons, m.Hints, m.Disabled = nil, nil, nil, nil
-	for _, it := range items {
-		m.Items = append(m.Items, it.words)
-		m.Icons = append(m.Icons, it.ic)
-		m.Hints = append(m.Hints, it.hint)
-		m.Disabled = append(m.Disabled, it.off)
-		m.Checked = append(m.Checked, it.ticked)
+	menu := make([]widget.MenuItem, len(items))
+	for i, it := range items {
+		menu[i] = widget.MenuItem{Label: it.words, Hint: it.hint, Icon: it.ic, Disabled: it.off, Checked: it.ticked,
+			Caption: i == recentAt, Break: i == 2 || i == 4 || i == 6 || i == 8 || i == recentAt}
 	}
-	m.Picked = func(i int, u *gunim.UI) {
-		if i >= 0 && i < len(items) && items[i].send != nil {
-			u.Send(h, items[i].send)
+	m.SetItems(menu)
+	m.OnPick = func(i int, u *gunim.UI) gunim.Intent {
+		if i >= 0 && i < len(items) {
+			return items[i].send
 		}
+		return nil
 	}
 	m.Open(geom.Pt(16, headerH-6), u)
 }
@@ -628,13 +625,13 @@ func updateToast(up Update) widget.Toast {
 	if up.Ready {
 		return widget.Toast{Title: appName + " " + up.Version + " is ready", Body: "Restart now, or it starts the next time you open the studio.",
 			Key: "update", Icon: icon.RefreshCw, Buttons: []widget.ToastButton{
-				{Label: "Restart Now", On: func(bool) gunim.Intent { return RestartToUpdate{} }},
+				{Label: "Restart Now", OnClick: func(bool, *gunim.UI) gunim.Intent { return RestartToUpdate{} }},
 				{Label: "Later"},
 			}}
 	}
 	return widget.Toast{Title: appName + " " + up.Version + " is out", Body: "Fetch it now? It starts the next time you open the studio.",
 		Key: "update", Icon: icon.Download, Buttons: []widget.ToastButton{
-			{Label: "Update", On: func(bool) gunim.Intent { return FetchUpdate{} }},
+			{Label: "Update", OnClick: func(bool, *gunim.UI) gunim.Intent { return FetchUpdate{} }},
 			{Label: "Not Now"},
 		}}
 }

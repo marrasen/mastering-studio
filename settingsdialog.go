@@ -80,41 +80,41 @@ func newSettingsDialog(d SettingsDraft) *settingsDialog {
 	s := &settingsDialog{Dialog: dlg, draft: d}
 	set := func() gunim.Intent { return SetOutput{Output: s.output()} }
 
-	s.driver = widget.NewDropdown(append([]string{systemSound()}, d.Drivers...)...)
+	s.driver = widget.NewDropdown(widget.Labels(append([]string{systemSound()}, d.Drivers...)...))
 	s.driver.Label = "Output"
-	s.driver.Selected = slices.Index(d.Drivers, d.Output.Driver) + 1
-	s.driver.OnChange = func(int) gunim.Intent { return set() }
+	s.driver.SetSelected(slices.Index(d.Drivers, d.Output.Driver)+1, nil)
+	s.driver.OnChange = func(_ int, _ *gunim.UI) gunim.Intent { return set() }
 	s.panel = widget.NewButton("Driver settings…")
-	s.panel.OnActivate(func(u *gunim.UI) { u.Send(s.panel, OpenControlPanel{}) })
+	s.panel.OnClick = widget.Sends(OpenControlPanel{})
 
 	rates := make([]string, len(outputRates))
 	for i, r := range outputRates {
 		rates[i] = hz(r)
 	}
-	s.rate = widget.NewDropdown(rates...)
+	s.rate = widget.NewDropdown(widget.Labels(rates...))
 	s.rate.Label = "Sample rate"
-	s.rate.Selected = max(0, slices.Index(outputRates, d.Output.rate()))
-	s.rate.OnChange = func(int) gunim.Intent { return set() }
+	s.rate.SetSelected(max(0, slices.Index(outputRates, d.Output.rate())), nil)
+	s.rate.OnChange = func(_ int, _ *gunim.UI) gunim.Intent { return set() }
 
 	bits := make([]string, len(bitsChoices))
 	for i, c := range bitsChoices {
 		bits[i] = c.name
 	}
-	s.bits = widget.NewDropdown(bits...)
+	s.bits = widget.NewDropdown(widget.Labels(bits...))
 	s.bits.Label = "Bit depth"
-	s.bits.Selected = max(0, slices.IndexFunc(bitsChoices, func(c bitsChoice) bool { return c.bits == d.Output.bits() }))
-	s.bits.OnChange = func(int) gunim.Intent { return set() }
+	s.bits.SetSelected(max(0, slices.IndexFunc(bitsChoices, func(c bitsChoice) bool { return c.bits == d.Output.bits() })), nil)
+	s.bits.OnChange = func(_ int, _ *gunim.UI) gunim.Intent { return set() }
 	s.dither = widget.NewCheckbox("Dither")
-	s.dither.On = d.Output.Dither
-	s.dither.OnChange = func(bool) gunim.Intent { return set() }
+	s.dither.SetChecked(d.Output.Dither, nil)
+	s.dither.OnChange = func(_ bool, _ *gunim.UI) gunim.Intent { return set() }
 
 	s.auto = widget.NewCheckbox("Auto: grow it each time the sound breaks up")
-	s.auto.On = !d.Output.Fixed
-	s.auto.OnChange = func(bool) gunim.Intent { return set() }
-	s.buffer = widget.NewDropdown(bufferNames(d.Output.rate())...)
+	s.auto.SetChecked(!d.Output.Fixed, nil)
+	s.auto.OnChange = func(_ bool, _ *gunim.UI) gunim.Intent { return set() }
+	s.buffer = widget.NewDropdown(widget.Labels(bufferNames(d.Output.rate())...))
 	s.buffer.Label = "Buffer size"
-	s.buffer.OnChange = func(int) gunim.Intent { return set() }
-	s.buffer.Selected = nearestBuffer(d.Output.Buffer)
+	s.buffer.OnChange = func(_ int, _ *gunim.UI) gunim.Intent { return set() }
+	s.buffer.SetSelected(nearestBuffer(d.Output.Buffer), nil)
 
 	s.now, s.path, s.problem = widget.NewLabel(""), widget.NewLabel(""), widget.NewLabel("")
 	s.problem.Color = widget.DialogProblem
@@ -135,52 +135,52 @@ func newSettingsDialog(d SettingsDraft) *settingsDialog {
 	for i, t := range studioThemes {
 		labels[i] = t.Label
 	}
-	s.look = widget.NewDropdown(labels...)
+	s.look = widget.NewDropdown(widget.Labels(labels...))
 	s.look.Label = "Theme"
-	s.look.Selected = max(0, slices.IndexFunc(studioThemes, func(t studioTheme) bool { return t.Name == d.Theme }))
-	s.look.OnChange = func(i int) gunim.Intent { return ChooseTheme{Name: studioThemes[i].Name} }
+	s.look.SetSelected(max(0, slices.IndexFunc(studioThemes, func(t studioTheme) bool { return t.Name == d.Theme })), nil)
+	s.look.OnChange = func(i int, _ *gunim.UI) gunim.Intent { return ChooseTheme{Name: studioThemes[i].Name} }
 	lookPage := widget.NewForm().Add("Theme", widget.Row(s.look))
 
 	modes := make([]string, len(updateModes))
 	for i, m := range updateModes {
 		modes[i] = m.name
 	}
-	s.updates = widget.NewDropdown(modes...)
+	s.updates = widget.NewDropdown(widget.Labels(modes...))
 	s.updates.Label = "Newer releases"
-	s.updates.OnChange = func(i int) gunim.Intent { return SetUpdates{Mode: string(updateModes[i].mode)} }
+	s.updates.OnChange = func(i int, _ *gunim.UI) gunim.Intent { return SetUpdates{Mode: string(updateModes[i].mode)} }
 	s.beta = widget.NewCheckbox("Beta: take pre-releases too")
-	s.beta.On = d.Beta
-	s.beta.OnChange = func(on bool) gunim.Intent { return SetBeta{On: on} }
+	s.beta.SetChecked(d.Beta, nil)
+	s.beta.OnChange = func(on bool, _ *gunim.UI) gunim.Intent { return SetBeta{On: on} }
 	s.installNote = widget.NewLabel("")
 	updates := widget.NewForm().Add("Newer releases", widget.Row(s.updates)).Add("", s.beta)
 	updatesPage := widget.Column(updates, s.installNote)
 
 	dlg.Body = widget.NewTabs([]string{"Sound", "Look", "Updates"}, soundPage, lookPage, updatesPage)
 	dlg.SetButtons("Done", "")
-	dlg.Accept = SettingsClosed{}
-	dlg.Dismiss = SettingsClosed{}
-	s.fill(d)
+	dlg.OnAccept = widget.Sends(SettingsClosed{})
+	dlg.OnDismiss = widget.Sends(SettingsClosed{})
+	s.fill(d, nil)
 	return s
 }
 
 // show takes the draft anew, as the sound plays on and settings change.
 func (s *settingsDialog) show(d SettingsDraft, u *gunim.UI) {
 	if d.Output.rate() != s.draft.Output.rate() {
-		s.buffer.Items = bufferNames(d.Output.rate())
+		s.buffer.SetItems(widget.Labels(bufferNames(d.Output.rate())...))
 	}
 	s.draft = d
-	s.fill(d)
+	s.fill(d, u)
 	u.Invalidate()
 }
 
 // fill sets what follows from the draft: which choices apply, the
 // buffer an auto buffer has grown to, and what the sound does now.
-func (s *settingsDialog) fill(d SettingsDraft) {
+func (s *settingsDialog) fill(d SettingsDraft, u *gunim.UI) {
 	s.panel.Disabled = d.Output.Driver == "" || d.Now.Driver == ""
 	s.dither.Disabled = d.Output.bits() == 32
 	s.buffer.Disabled = !d.Output.Fixed
 	if !d.Output.Fixed && d.Now.Frames > 0 {
-		s.buffer.Selected = nearestBuffer(int(d.Now.Frames))
+		s.buffer.SetSelected(nearestBuffer(int(d.Now.Frames)), u)
 	}
 	i := slices.IndexFunc(updateModes, func(m struct {
 		mode install.UpdateMode
@@ -188,7 +188,7 @@ func (s *settingsDialog) fill(d SettingsDraft) {
 	}) bool {
 		return string(m.mode) == d.Updates
 	})
-	s.updates.Selected = max(0, i)
+	s.updates.SetSelected(max(0, i), u)
 	s.updates.Disabled = !d.Installed
 	s.installNote.Text = ""
 	if !d.Installed {
@@ -199,12 +199,12 @@ func (s *settingsDialog) fill(d SettingsDraft) {
 
 // output returns the sound's settings as the dialog shows them.
 func (s *settingsDialog) output() Output {
-	o := Output{Rate: outputRates[max(0, min(s.rate.Selected, len(outputRates)-1))], Dither: s.dither.On,
-		Fixed: !s.auto.On, Buffer: bufferSizes[max(0, min(s.buffer.Selected, len(bufferSizes)-1))]}
-	if i := s.driver.Selected - 1; i >= 0 && i < len(s.draft.Drivers) {
+	o := Output{Rate: outputRates[max(0, min(s.rate.Selected(), len(outputRates)-1))], Dither: s.dither.Checked(),
+		Fixed: !s.auto.Checked(), Buffer: bufferSizes[max(0, min(s.buffer.Selected(), len(bufferSizes)-1))]}
+	if i := s.driver.Selected() - 1; i >= 0 && i < len(s.draft.Drivers) {
 		o.Driver = s.draft.Drivers[i]
 	}
-	if b := bitsChoices[max(0, min(s.bits.Selected, len(bitsChoices)-1))].bits; b != 32 {
+	if b := bitsChoices[max(0, min(s.bits.Selected(), len(bitsChoices)-1))].bits; b != 32 {
 		o.Bits = b
 	}
 	return o

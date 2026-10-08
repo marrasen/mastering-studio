@@ -67,7 +67,7 @@ type meters struct {
 	listenRects []geom.Rect
 	// in and out are the input's and output's levels, their faders the
 	// gains in and out, and inFrom the frame of the input read next.
-	in, out           audioui.Levels
+	in, out           *audioui.Levels
 	inFader, outFader *audioui.Fader
 	inFrom            int64
 	inBuf             []float32
@@ -96,9 +96,9 @@ func (m *meters) fader(out bool) *audioui.Fader {
 			return m.r.editor.edit.Out
 		}
 		return m.r.editor.edit.Gain
-	}, func(v float32, u *gunim.UI) {
+	}, func(v float32, u *gunim.UI) gunim.Intent {
 		if m.r.editor.track.ID == 0 {
-			return
+			return nil
 		}
 		e := m.r.editor.edit
 		if out {
@@ -107,6 +107,7 @@ func (m *meters) fader(out bool) *audioui.Fader {
 			e.Gain = v
 		}
 		m.r.editor.send(e, u)
+		return nil
 	})
 }
 
@@ -201,7 +202,7 @@ func (m *meters) Step(dt time.Duration) bool {
 	// playing.
 	m.spectrum.Bands(m.bands[:])
 	// Stopped, the levels fall on to silence.
-	return playing || !settled || loud || falling(&m.in) || falling(&m.out)
+	return playing || !settled || loud || falling(m.in) || falling(m.out)
 }
 
 // falling says levels still show above the meter's foot, to fall on.

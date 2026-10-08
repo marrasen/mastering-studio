@@ -65,7 +65,7 @@ func newMarkField(e *editor) *markField {
 	f := &markField{TextField: widget.NewTextField(), e: e}
 	f.Placeholder = "What is there"
 	f.Disabled = true
-	f.OnSubmit = func(string) gunim.Intent { return nil }
+	f.OnCommit = func(string, *gunim.UI) gunim.Intent { return nil }
 	f.Keys = func(k input.KeyPress, u *gunim.UI) bool {
 		switch k.Key {
 		case input.KeyEnter:
@@ -187,7 +187,7 @@ func (e *editor) startMark(at time.Duration, id int, note string, u *gunim.UI) {
 	e.writing, e.writeAt, e.writeID = true, at, id
 	e.lightMarks()
 	e.markField.Disabled = false
-	e.markField.SetText(note)
+	e.markField.SetText(note, u)
 	e.markField.Select(0, len([]rune(note)))
 	u.Focus(e.markField)
 	u.Invalidate()

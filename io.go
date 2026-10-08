@@ -26,7 +26,7 @@ func (m *meters) paintIO(p *paint.Painter, f gunim.Frame, box geom.Size, y float
 	top, bottom := bars.Min.Y, bars.Max.Y
 	// The scale, between the two.
 	audioui.PaintMeterScale(p, f.Theme, box.W/2, top, bottom)
-	for side, l := range []*audioui.Levels{&m.in, &m.out} {
+	for side, l := range []*audioui.Levels{m.in, m.out} {
 		x := m.barsX(box, side == 1)
 		audioui.PaintMeter(p, f.Theme, geom.Rc(x, top, audioui.MeterW, bottom-top), l)
 	}

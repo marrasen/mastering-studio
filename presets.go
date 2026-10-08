@@ -232,19 +232,19 @@ func (a *app) giveChain(id int, chain []Slot, states map[int][]byte) {
 func newPresetDialog(n PresetNaming) *widget.Dialog {
 	d := widget.NewDialog("Save preset")
 	name := widget.NewTextField()
-	name.SetText(n.Name)
+	name.SetText(n.Name, nil)
 	name.Placeholder = "Mastering, gentle"
 	form := widget.NewForm()
 	form.Add("Name", name)
 	d.Body = form
 	d.SetButtons("Save", "Cancel")
-	d.Dismiss = PresetClosed{}
+	d.OnDismiss = widget.Sends(PresetClosed{})
 	d.Check = func() string {
 		if strings.TrimSpace(name.Text()) == "" {
 			return "Name the preset."
 		}
 		return ""
 	}
-	d.OnAccept = func() gunim.Intent { return SavePreset{Track: n.Track, Name: name.Text()} }
+	d.OnAccept = func(*gunim.UI) gunim.Intent { return SavePreset{Track: n.Track, Name: name.Text()} }
 	return d
 }

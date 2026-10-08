@@ -96,21 +96,21 @@ func newExportDialog(d ExportDraft) *exportDialog {
 	e := &exportDialog{Dialog: dlg, body: b}
 	dlg.Body = b
 	dlg.SetButtons("Export", "Cancel")
-	dlg.Dismiss = ExportClosed{}
+	dlg.OnDismiss = widget.Sends(ExportClosed{})
 	dlg.Check = func() string {
 		switch {
 		case len(b.list.ticked()) == 0:
 			return "Tick a track to export."
-		case !b.wav.On && !b.mp3.On:
+		case !b.wav.Checked() && !b.mp3.Checked():
 			return "Choose WAV, MP3 or both."
 		}
 		return ""
 	}
-	dlg.OnAccept = func() gunim.Intent {
-		s := StartExport{IDs: b.list.ticked(), Bits: bitsChoices[b.bits.Selected()].bits, Dither: b.dither.On,
-			WAV: b.wav.On, MP3: b.mp3.On, Report: b.report.On}
+	dlg.OnAccept = func(*gunim.UI) gunim.Intent {
+		s := StartExport{IDs: b.list.ticked(), Bits: bitsChoices[b.bits.Selected()].bits, Dither: b.dither.Checked(),
+			WAV: b.wav.Checked(), MP3: b.mp3.Checked(), Report: b.report.Checked()}
 		if len(d.MP3Rates) > 0 {
-			s.MP3Rate = d.MP3Rates[max(0, min(b.rate.Selected, len(d.MP3Rates)-1))]
+			s.MP3Rate = d.MP3Rates[max(0, min(b.rate.Selected(), len(d.MP3Rates)-1))]
 		}
 		return s
 	}
