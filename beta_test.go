@@ -50,9 +50,8 @@ func TestACPUProfileIsRecordedAndTold(t *testing.T) {
 	}
 }
 
-func TestTheMenuTicksBetaUpdatesAndRecordsAProfile(t *testing.T) {
+func TestTheMenuOpensTheSettingsAndRecordsAProfile(t *testing.T) {
 	a := album()
-	a.Beta = true
 	w, r, run := stage(t, a)
 	b := boundsOf(t, w, run, r.header)
 	at := b.Min.Add(geom.Pt(80, 24))
@@ -64,8 +63,7 @@ func TestTheMenuTicksBetaUpdatesAndRecordsAProfile(t *testing.T) {
 	find := func(label string) int {
 		return slices.IndexFunc(items, func(it widget.MenuItem) bool { return it.Label == label })
 	}
-	i := find("Beta updates")
-	if i < 0 || !items[i].Checked || find("Record CPU profile (1 min)") < 0 {
+	if find("Settings…") < 0 || find("Record CPU profile (1 min)") < 0 {
 		t.Fatalf("the menu offers %v", items)
 	}
 }

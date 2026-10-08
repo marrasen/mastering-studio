@@ -293,11 +293,12 @@ func (e *editor) handleMarks(ev input.Event, u *gunim.UI) bool {
 
 // paintMarks draws the notes' pins, the hot one's card, and "+ Note".
 func (e *editor) paintMarks(p *paint.Painter, f gunim.Frame, box geom.Size) {
+	pal := colours(f.Theme)
 	b := e.noteButton()
-	p.RRect(b, 10, paint.Solid(faded(night, 0.75)))
-	p.RRectStroke(b, 10, paint.Solid(faded(ink, 0)), paint.Stroke{Width: 1, Color: faded(amber, 0.5)})
-	widget.PaintIcon(p, f.Theme, icon.MessageSquarePlus, geom.Rc(b.Min.X+8, b.Min.Y+3, 14, 14), amber)
-	shaped("Note", 10, true).Paint(p, geom.Pt(b.Min.X+26, b.Min.Y+4), ink)
+	p.RRect(b, 10, paint.Solid(faded(pal.night, 0.75)))
+	p.RRectStroke(b, 10, paint.Solid(faded(pal.ink, 0)), paint.Stroke{Width: 1, Color: faded(pal.amber, 0.5)})
+	widget.PaintIcon(p, f.Theme, icon.MessageSquarePlus, geom.Rc(b.Min.X+8, b.Min.Y+3, 14, 14), pal.amber)
+	shaped("Note", 10, true).Paint(p, geom.Pt(b.Min.X+26, b.Min.Y+4), pal.ink)
 	top, laneH := e.lanes()
 	for _, m := range e.track.Marks {
 		pin := e.markAt(m)
@@ -307,13 +308,13 @@ func (e *editor) paintMarks(p *paint.Painter, f gunim.Frame, box geom.Size) {
 		x := pin.Center().X
 		lit := e.pinGlow(m.ID).Value()
 		// Its line down the lanes, brighter while lit.
-		p.RRect(geom.Rc(x-0.5, pin.Max.Y, 1, top+2*laneH-pin.Max.Y), 0, paint.Solid(faded(amber, 0.25+0.35*lit)))
+		p.RRect(geom.Rc(x-0.5, pin.Max.Y, 1, top+2*laneH-pin.Max.Y), 0, paint.Solid(faded(pal.amber, 0.25+0.35*lit)))
 		// The pin, filling with amber and swelling as it lights, glowing.
 		end := p.Push(paint.Scale(1+0.18*lit, pin.Center()))
-		fill := mix(mix(night, amber, 0.25), faded(amber, 0.9), lit)
+		fill := mix(mix(pal.night, pal.amber, 0.25), faded(pal.amber, 0.9), lit)
 		p.ShadowRRect(pin, markSize/2, paint.Solid(fill), paint.Shadow{Blur: 6 + 8*lit,
-			Color: mix(faded(night, 0.6), faded(amber, 0.5), lit)})
-		widget.PaintIcon(p, f.Theme, icon.MessageSquareText, pin.Inset(geom.Uniform(3)), mix(amber, night, lit))
+			Color: mix(faded(pal.night, 0.6), faded(pal.amber, 0.5), lit)})
+		widget.PaintIcon(p, f.Theme, icon.MessageSquareText, pin.Inset(geom.Uniform(3)), mix(pal.amber, pal.night, lit))
 		end()
 	}
 	// The card of the note under the pointer, fading and sliding in under
@@ -326,10 +327,10 @@ func (e *editor) paintMarks(p *paint.Painter, f gunim.Frame, box geom.Size) {
 		defer end()
 		defer p.Push(paint.Translate(geom.Pt(0, -8*(1-in))))()
 		defer p.Push(paint.Scale(0.94+0.06*in, geom.Pt(card.Center().X, card.Min.Y)))()
-		p.ShadowRRect(card, 10, paint.Solid(raised), paint.Shadow{Blur: 14, Color: faded(night, 0.7)})
-		shapedFace(clock(m.At), 9, false).Paint(p, geom.Pt(card.Min.X+10, card.Min.Y+3), faded(amber, 0.9))
-		e.noteText(m).Paint(p, geom.Pt(card.Min.X+10, card.Min.Y+15), ink)
-		widget.PaintIcon(p, f.Theme, icon.Trash2, remove.Inset(geom.Uniform(5)), faded(coral, 0.9))
+		p.ShadowRRect(card, 10, paint.Solid(pal.raised), paint.Shadow{Blur: 14, Color: faded(pal.night, 0.7)})
+		shapedFace(clock(m.At), 9, false).Paint(p, geom.Pt(card.Min.X+10, card.Min.Y+3), faded(pal.amber, 0.9))
+		e.noteText(m).Paint(p, geom.Pt(card.Min.X+10, card.Min.Y+15), pal.ink)
+		widget.PaintIcon(p, f.Theme, icon.Trash2, remove.Inset(geom.Uniform(5)), faded(pal.coral, 0.9))
 	}
 }
 

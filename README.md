@@ -21,9 +21,9 @@ itself for you alone, with no administrator needed: into
 `~/.local/share` on Linux, with an entry among your applications. Projects
 then open in it with a double-click, and it can keep itself up to date
 from the releases here: by itself, or, if you untick that as you
-install, by asking first when a new release is out. Tick Beta updates
-in the project menu to take pre-releases too, to try a release before
-it is out. Installed apps on Windows removes it again, and
+install, by asking first when a new release is out. Settings (Ctrl+,)
+changes that later, and its Beta tick takes pre-releases too, to try a
+release before it is out. Installed apps on Windows removes it again, and
 so does `mastering-studio -uninstall`. "Or run it without installing"
 runs the downloaded file as it is.
 
@@ -61,6 +61,17 @@ plays at the target loudness too. A loop
 plays a stretch over and over. Autoplay next runs on into the next track
 with no gap, as the exported files will play. Listen in mono, or to the
 side channel alone.
+
+**Sound settings.** Settings (Ctrl+, or the project menu) sets how the
+studio plays. Choose the sample rate and bit depth you master to, such
+as 44.1 kHz and 16 bits with dither: a track at that rate then plays
+sample for sample, rounded as the exported file is. On Windows, play
+through your audio interface's ASIO driver, which plays at the rate
+you choose. Through Windows' own sound, or PulseAudio and PipeWire on
+Linux, the system may resample to the rate its device is set to; the
+settings tell you when it does. The buffer grows by itself each time
+the sound breaks up, or untick Auto to hold it at a size you choose.
+The settings also paint the studio Dark, Light, High contrast or Dim.
 
 **A/B and references.** Two listening sessions, A and B, sit above the
 track list. Each has its own track, place, play state and loop. Press S,
@@ -150,6 +161,7 @@ These flags help:
 | `-demo DIR` | Write six demo songs and a project of them to this folder, and open it. Files already there are kept as they are. |
 | `-size WxH` | Open the window at this size, as `1680x1040`. |
 | `-play` | Start playing the track picked. |
+| `-theme NAME` | Open in a theme for this run: `mastering` (Dark), `light`, `contrast` or `dim`. |
 | `-shot FILE` | Write the window to a PNG file after `-after`, then quit. |
 | `-write-icon FILE` | Write the icon to a PNG file, then quit. |
 | `-install` | Install this copy with no window, as a script would, then quit. |
@@ -157,7 +169,7 @@ These flags help:
 
 A release is built by pushing a tag such as `v0.1.0`; a tag with a
 pre-release in it, such as `v0.3.0-beta.1`, is published as a GitHub
-pre-release, which only copies with Beta updates ticked take. The
+pre-release, which only copies with Beta ticked in Settings take. The
 [Release workflow](.github/workflows/release.yml) builds the programs for
 Windows, with its icon, and for Linux, and publishes them with a
 `SHA256SUMS` of both and its signature, `SHA256SUMS.sig`. Installed

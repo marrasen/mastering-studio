@@ -55,18 +55,18 @@ func (e *editor) paintGram(p *paint.Painter, f gunim.Frame, box geom.Size) {
 	}
 	top, laneH := e.lanes()
 	e.tilesOf(g).Paint(p, f.Theme, geom.Rc(0, top, box.W, 2*laneH), e.xOf)
-	e.paintOutside(p, box)
+	e.paintOutside(p, colours(f.Theme), box)
 }
 
 // paintOutside shades the file outside the cut away.
-func (e *editor) paintOutside(p *paint.Painter, box geom.Size) {
+func (e *editor) paintOutside(p *paint.Painter, pal palette, box geom.Size) {
 	start, end := e.span()
 	sx, ex := e.xOf(start), e.xOf(end)
 	if sx > 0 {
-		p.RRect(geom.Rc(0, rulerH+1, sx, box.H-rulerH), 0, paint.Solid(faded(night, 0.45)))
+		p.RRect(geom.Rc(0, rulerH+1, sx, box.H-rulerH), 0, paint.Solid(faded(pal.night, 0.45)))
 	}
 	if ex < box.W {
-		p.RRect(geom.Rc(ex, rulerH+1, box.W-ex, box.H-rulerH), 0, paint.Solid(faded(night, 0.55)))
+		p.RRect(geom.Rc(ex, rulerH+1, box.W-ex, box.H-rulerH), 0, paint.Solid(faded(pal.night, 0.55)))
 	}
 }
 

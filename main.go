@@ -42,7 +42,6 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/speaker"
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/install"
@@ -63,6 +62,7 @@ func main() {
 	plugins := flag.String("plugins", "", "more folders of VST3 plugins, beside the system's, as a list like PATH")
 	iconOut := flag.String("write-icon", "", "write the icon, 256 pixels square, to this PNG file, and quit")
 	demo := flag.String("demo", "", "write six demo songs and a project of them to this folder, and open it")
+	look := flag.String("theme", "", "the theme to open in: mastering, light, contrast or dim")
 	flag.Parse()
 	paths := flag.Args()
 	// A project opened from the file manager comes as its path alone.
@@ -89,7 +89,7 @@ func main() {
 			log.Fatalf("mastering: -size %q: want a width and a height, as 1680x1040", *size)
 		}
 	}
-	o := options{file: *state, paths: paths, play: *play, shot: *shot, after: *after, size: geom.Sz(w, h)}
+	o := options{file: *state, paths: paths, play: *play, shot: *shot, after: *after, size: geom.Sz(w, h), theme: *look}
 	if d := configDir(); d != "" {
 		o.settings = filepath.Join(d, "settings.json")
 	}
@@ -134,6 +134,9 @@ type options struct {
 	shot  string
 	after time.Duration
 	size  geom.Size
+	// theme is the name of the theme to open in, or empty for the
+	// default.
+	theme string
 	// plugins are more folders of plugins.
 	plugins []string
 	// settings is the file of what is kept across albums, and place
@@ -152,12 +155,8 @@ func run(o options) error {
 	defer stop()
 	mix := audio.NewMixer()
 	d := newDeck(mix)
-	// Mastering wants no quick answer from the sound: a buffer that rides
-	// out a busy moment, the meters following it as heard.
-	if spk, err := speaker.Open(mix, speaker.Options{Name: appName, Latency: 150 * time.Millisecond}); err != nil {
+	if err := d.openOutput(readSettings(o.settings).Output); err != nil {
 		log.Printf("mastering: no sound: %v", err)
-	} else {
-		d.spk = spk
 	}
 	err := gunim.Main(ctx, func(a *gunim.App) error {
 		w, err := a.NewWindow(gunim.WindowOptions{Title: appName, Size: o.size, Place: o.place, Icons: icons(),

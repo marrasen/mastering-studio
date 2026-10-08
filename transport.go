@@ -205,32 +205,33 @@ const timeX = 258
 
 // Paint implements [gunim.Node]: the buttons, and the time and the
 // track playing between them and the level.
-func (t *transport) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
-	p.RRect(geom.Rect{Max: box.Point()}, 16, paint.Solid(panel))
+func (t *transport) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	pal := colours(f.Theme)
+	p.RRect(geom.Rect{Max: box.Point()}, 16, paint.Solid(pal.panel))
 	at, length, id := t.r.d.position()
 	tr, ok := t.r.track()
 	if ok && id == tr.ID {
 		run := shapedFace(clock(at), 22, true)
-		run.Paint(p, geom.Pt(timeX, box.H/2-20), ink)
-		shapedFace("/ "+clock(length), 12, false).Paint(p, geom.Pt(timeX+run.Advance+8, box.H/2-10), faded(ink, 0.45))
+		run.Paint(p, geom.Pt(timeX, box.H/2-20), pal.ink)
+		shapedFace("/ "+clock(length), 12, false).Paint(p, geom.Pt(timeX+run.Advance+8, box.H/2-10), pal.quiet(0.45))
 	} else if ok {
-		shapedFace(clock(0), 22, true).Paint(p, geom.Pt(timeX, box.H/2-20), faded(ink, 0.6))
+		shapedFace(clock(0), 22, true).Paint(p, geom.Pt(timeX, box.H/2-20), pal.quiet(0.6))
 	}
 	if ok {
 		// The title, where there is room for it.
 		if room := t.pillsX - timeX - 8; room > 60 {
-			paintFit(p, tr.Title, 12, false, geom.Pt(timeX, box.H/2+10), room, faded(ink, 0.55))
+			paintFit(p, tr.Title, 12, false, geom.Pt(timeX, box.H/2+10), room, pal.quiet(0.55))
 		}
 	}
 	if d, matched := t.r.state.matchDB(&tr); ok && matched {
 		words := fmt.Sprintf("%+.1f dB to match", d)
 		run := shaped(words, 10, false)
-		run.Paint(p, geom.Pt(t.matchMid-run.Advance/2, box.H/2+19), faded(teal, 0.8))
+		run.Paint(p, geom.Pt(t.matchMid-run.Advance/2, box.H/2+19), faded(pal.teal, 0.8))
 	}
 	for k := range kids.All {
 		k.Paint(p)
 	}
-	t.paintRing(p, geom.Pt(128, box.H/2))
+	t.paintRing(p, pal, geom.Pt(128, box.H/2))
 }
 
 // Step implements [gunim.Animator]: the time moves while a track
@@ -256,7 +257,7 @@ func (t *transport) Step(dt time.Duration) bool {
 // paintRing draws the arc that turns round the play button, centred on
 // c, while play waits on the sound: it runs round, stretching and
 // drawing in as it goes, its tail fading, as it fades and grows in.
-func (t *transport) paintRing(p *paint.Painter, c geom.Point) {
+func (t *transport) paintRing(p *paint.Painter, pal palette, c geom.Point) {
 	in := min(max(t.ring.Value(), 0), 1.2)
 	if in < 0.01 {
 		return
@@ -274,7 +275,7 @@ func (t *transport) paintRing(p *paint.Painter, c geom.Point) {
 	for i := 1; i <= pieces; i++ {
 		u := float64(i) / pieces
 		pt := at(head - sweep*(1-u))
-		audioui.Segment(p, prev, pt, 3, faded(teal, float32(u)*min(in, 1)))
+		audioui.Segment(p, prev, pt, 3, faded(pal.teal, float32(u)*min(in, 1)))
 		prev = pt
 	}
 }

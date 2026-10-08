@@ -314,6 +314,7 @@ func (l *trackList) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children)
 
 // Paint implements [gunim.Node].
 func (l *trackList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	pal := colours(f.Theme)
 	if len(l.order) == 0 {
 		lines := []string{"Drop your mixes here", "WAV, FLAC, MP3 or Ogg, or a folder of them", "or press Add tracks"}
 		y := float32(120)
@@ -326,7 +327,7 @@ func (l *trackList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 				size, alpha = 17, 0.85
 			}
 			run := shaped(s, size, i == 0)
-			run.Paint(p, geom.Pt((box.W-run.Advance)/2, y), faded(ink, alpha))
+			run.Paint(p, geom.Pt((box.W-run.Advance)/2, y), faded(pal.ink, alpha))
 			y += size + 12
 		}
 		return
@@ -349,6 +350,7 @@ func (l *trackList) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 
 // paintRow draws track id's row.
 func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLook, box geom.Size) {
+	pal := colours(f.Theme)
 	s := l.r.state
 	t, ok := Track{}, false
 	number := 0
@@ -370,25 +372,26 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 	defer p.Push(paint.Scale(0.92+0.08*in, mid))()
 	// Lit in the colour of the session that has it, the one heard over
 	// the other.
-	picked, tint := lk.pickedA.Value(), teal
+	picked, tint := lk.pickedA.Value(), pal.teal
 	if b := lk.pickedB.Value(); b > picked {
-		picked, tint = b, sky
+		picked, tint = b, pal.sky
 	}
 	if id == l.moving {
-		p.ShadowRRect(row, 14, paint.Solid(raised), paint.Shadow{Blur: 18, Offset: geom.Pt(0, 6), Color: faded(night, 0.7)})
+		p.ShadowRRect(row, 14, paint.Solid(pal.raised), paint.Shadow{Blur: 18, Offset: geom.Pt(0, 6), Color: faded(pal.night, 0.7)})
 	}
-	p.RRect(row, 14, paint.Solid(faded(mix(raised, tint, 0.14*picked), (0.55+0.45*picked)*in)))
+	p.RRect(row, 14, paint.Solid(faded(mix(pal.raised, tint, 0.14*picked), (0.55+0.45*picked)*in)))
+	pal.outline(p, row, 14, in)
 	if lit := lk.lit.Value(); lit > 0.01 {
-		p.RRect(row, 14, paint.Solid(faded(ink, 0.05*lit*in)))
+		p.RRect(row, 14, paint.Solid(faded(pal.ink, 0.05*lit*in)))
 	}
 	if picked > 0.01 {
 		p.RRectStroke(row, 14, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1.5, Color: faded(tint, 0.8*picked*in)})
 	}
 	// The number, in a ring that spins while the track is read.
 	ring := geom.Rc(row.Min.X+12, mid.Y-15, 30, 30)
-	numColor := mix(faded(ink, 0.7), tint, picked)
+	numColor := mix(pal.quiet(0.7), tint, picked)
 	if !t.Scanned || t.Measuring {
-		l.paintSpin(p, ring, faded(teal, 0.8*in))
+		l.paintSpin(p, ring, faded(pal.teal, 0.8*in))
 	} else {
 		p.RRectStroke(ring, 15, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1.5, Color: faded(numColor, 0.5*in)})
 	}
@@ -417,23 +420,23 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		badges += 26 + shapedFace(count, 10, true).Advance
 	}
 	title := min(shaped(t.Title, 14, true).Advance, room-badges)
-	paintFit(p, t.Title, 14, true, geom.Pt(textX, row.Min.Y+10), title, faded(ink, 0.92*in))
+	paintFit(p, t.Title, 14, true, geom.Pt(textX, row.Min.Y+10), title, faded(pal.ink, 0.92*in))
 	at := textX + title + 6
 	if t.Note != "" {
-		widget.PaintIcon(p, f.Theme, icon.MessageSquareText, geom.Rc(at, row.Min.Y+11, 14, 14), faded(amber, 0.9*in))
+		widget.PaintIcon(p, f.Theme, icon.MessageSquareText, geom.Rc(at, row.Min.Y+11, 14, 14), faded(pal.amber, 0.9*in))
 		at += 20
 	}
 	if count != "" {
 		run := shapedFace(count, 10, true)
 		pill := geom.Rc(at, row.Min.Y+10, 20+run.Advance, 16)
-		p.RRect(pill, 8, paint.Solid(faded(amber, 0.16*in)))
-		widget.PaintIcon(p, f.Theme, icon.Clock, geom.Rc(at+4, row.Min.Y+12, 12, 12), faded(amber, 0.9*in))
-		run.Paint(p, geom.Pt(at+17, row.Min.Y+12), faded(amber, in))
+		p.RRect(pill, 8, paint.Solid(faded(pal.amber, 0.16*in)))
+		widget.PaintIcon(p, f.Theme, icon.Clock, geom.Rc(at+4, row.Min.Y+12, 12, 12), faded(pal.amber, 0.9*in))
+		run.Paint(p, geom.Pt(at+17, row.Min.Y+12), faded(pal.amber, in))
 	}
 	// How long it exports, the silence before it and all.
 	if t.Scanned {
 		shapedFace(clock(lengthOf(t, s.gapOf(&t))), 10, false).Paint(p, geom.Pt(textX, row.Min.Y+30),
-			faded(ink, 0.55*in))
+			faded(pal.quiet(0.55), in))
 	}
 	// The waveform, small, under the title.
 	if lk.thumb != nil {
@@ -443,46 +446,46 @@ func (l *trackList) paintRow(p *paint.Painter, f gunim.Frame, id int, lk *rowLoo
 		for i, v := range lk.thumb {
 			h := max(1, 16*min(float32(math.Sqrt(float64(v)))*1.4, 1))
 			p.RRect(geom.Rc(textX+float32(i)*cw, base-h/2, max(cw-1, 1), h), 0.5,
-				paint.Solid(faded(mix(ink, tint, picked), 0.35*in)))
+				paint.Solid(faded(mix(pal.ink, tint, picked), 0.35*in)))
 		}
 	}
 	// The readings, right: loudness against the target, and true peak.
 	right := row.Max.X - 12
 	switch {
 	case t.Progress > 0:
-		l.paintProgress(p, geom.Rc(right-76, mid.Y-4, 76, 8), lk.progress.Value(), in)
+		l.paintProgress(p, pal, geom.Rc(right-76, mid.Y-4, 76, 8), lk.progress.Value(), in)
 	case t.Measured && t.Measure.Loud:
 		off := t.Measure.LUFS - s.Target
-		c := loudnessColor(off)
+		c := loudnessColor(f.Theme, off)
 		lufs := shapedFace(fmt.Sprintf("%.1f", lk.lufs.Value()), 15, true)
 		alpha := in
 		if t.Stale {
 			// Changed since: the reading is old, faint, with a dot by
 			// it, until Measure loudness measures it again.
 			alpha *= 0.4
-			p.RRect(geom.Rc(right-lufs.Advance-11, row.Min.Y+15, 6, 6), 3, paint.Solid(faded(amber, in)))
+			p.RRect(geom.Rc(right-lufs.Advance-11, row.Min.Y+15, 6, 6), 3, paint.Solid(faded(pal.amber, in)))
 		}
 		lufs.Paint(p, geom.Pt(right-lufs.Advance, row.Min.Y+9), faded(c, alpha))
 		tp := lk.peak.Value()
 		sub := fmt.Sprintf("%+.1f · TP %.1f", off, tp)
-		tpColor := faded(ink, 0.5*in)
+		tpColor := faded(pal.quiet(0.5), in)
 		if tp > -1 {
-			tpColor = faded(coral, in)
+			tpColor = faded(pal.coral, in)
 		}
 		subRun := shapedFace(sub, 10, false)
 		subRun.Paint(p, geom.Pt(right-subRun.Advance, row.Min.Y+32), tpColor)
 		lraX := right
 		if t.Exported != "" {
-			widget.PaintIcon(p, f.Theme, icon.Check, geom.Rc(right-14, row.Min.Y+46, 14, 14), faded(teal, in))
+			widget.PaintIcon(p, f.Theme, icon.Check, geom.Rc(right-14, row.Min.Y+46, 14, 14), faded(pal.teal, in))
 			lraX -= 20
 		}
 		if t.Measure.Ranged {
 			lra := shapedFace(fmt.Sprintf("LRA %.1f", t.Measure.LRA), 10, false)
-			lra.Paint(p, geom.Pt(lraX-lra.Advance, row.Min.Y+47), faded(sky, 0.75*in))
+			lra.Paint(p, geom.Pt(lraX-lra.Advance, row.Min.Y+47), faded(pal.sky, 0.75*in))
 		}
 	case t.Measured:
 		run := shaped("silent", 12, false)
-		run.Paint(p, geom.Pt(right-run.Advance, row.Min.Y+12), faded(ink, 0.4*in))
+		run.Paint(p, geom.Pt(right-run.Advance, row.Min.Y+12), faded(pal.quiet(0.4), in))
 	}
 }
 
@@ -499,9 +502,9 @@ func (l *trackList) paintSpin(p *paint.Painter, ring geom.Rect, c color.NRGBA) {
 }
 
 // paintProgress draws an export's bar, filled to v.
-func (l *trackList) paintProgress(p *paint.Painter, bar geom.Rect, v, alpha float32) {
-	p.RRect(bar, 4, paint.Solid(faded(ink, 0.1*alpha)))
+func (l *trackList) paintProgress(p *paint.Painter, pal palette, bar geom.Rect, v, alpha float32) {
+	p.RRect(bar, 4, paint.Solid(faded(pal.ink, 0.1*alpha)))
 	fill := bar
 	fill.Max.X = bar.Min.X + bar.Size().W*min(max(v, 0), 1)
-	p.ShadowRRect(fill, 4, paint.Solid(faded(teal, alpha)), paint.Shadow{Blur: 8, Color: faded(teal, 0.5*alpha)})
+	p.ShadowRRect(fill, 4, paint.Solid(faded(pal.teal, alpha)), paint.Shadow{Blur: 8, Color: faded(pal.teal, 0.5*alpha)})
 }

@@ -14,21 +14,82 @@ import (
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/text"
+	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 )
 
-// The studio's colours: near-black panels, a cool teal for what plays,
-// amber for a reading near its mark and coral for one off it.
+// The studio's colours, as theme tokens, their defaults the dark
+// theme's: near-black panels, a cool teal for what plays, amber for a
+// reading near its mark and coral for one off it.
 var (
-	ink    = rgb(0xec, 0xee, 0xf4)
-	night  = rgb(0x0c, 0x0e, 0x13)
-	panel  = rgb(0x15, 0x18, 0x20)
-	raised = rgb(0x1d, 0x21, 0x2b)
-	teal   = rgb(0x4f, 0xd6, 0xc0)
-	sky    = rgb(0x5c, 0xb8, 0xff)
-	amber  = rgb(0xff, 0xc8, 0x57)
-	coral  = rgb(0xff, 0x6b, 0x5f)
+	studioInk    = theme.Foreground("studio.ink", rgb(0xec, 0xee, 0xf4))
+	studioNight  = theme.Color("studio.night", rgb(0x0c, 0x0e, 0x13))
+	studioPanel  = theme.Color("studio.panel", rgb(0x15, 0x18, 0x20))
+	studioRaised = theme.Color("studio.raised", rgb(0x1d, 0x21, 0x2b))
+	studioTeal   = theme.Color("studio.teal", rgb(0x4f, 0xd6, 0xc0))
+	studioSky    = theme.Color("studio.sky", rgb(0x5c, 0xb8, 0xff))
+	studioAmber  = theme.Color("studio.amber", rgb(0xff, 0xc8, 0x57))
+	studioCoral  = theme.Color("studio.coral", rgb(0xff, 0x6b, 0x5f))
+	// studioEdge is the rule round pills, chips, cards and rows, clear
+	// in a theme that tells them apart by their fills alone.
+	studioEdge = theme.Color("studio.edge", color.NRGBA{})
+	// studioLift is how far quieter text is raised toward full ink, from
+	// 0 to 1, for a theme that wants all its text at a higher contrast.
+	studioLift = theme.Number("studio.lift", 0)
 )
+
+// palette is the studio's colours: ink for text and faint lines; night
+// behind everything; panel and raised for the surfaces on it; teal for
+// what plays; sky for references, gaps and fades; amber for a reading
+// near its mark and for notes; coral for one off it. edge rules round
+// pills, chips, cards and rows, and lift raises quieter text toward
+// full ink.
+type palette struct {
+	ink, night, panel, raised color.NRGBA
+	teal, sky, amber, coral   color.NRGBA
+	edge                      color.NRGBA
+	lift                      float32
+}
+
+// colours is the studio's colours in l right now, part way through a
+// theme switch while one runs. A Paint reads it every time it paints.
+func colours(l *theme.Live) palette {
+	return palette{
+		ink: studioInk.Get(l), night: studioNight.Get(l), panel: studioPanel.Get(l), raised: studioRaised.Get(l),
+		teal: studioTeal.Get(l), sky: studioSky.Get(l), amber: studioAmber.Get(l), coral: studioCoral.Get(l),
+		edge: studioEdge.Get(l), lift: studioLift.Get(l),
+	}
+}
+
+// quiet is ink at alpha a, for quieter text and icons, raised by the
+// theme's lift.
+func (pal palette) quiet(a float32) color.NRGBA { return faded(pal.ink, a+(1-a)*pal.lift) }
+
+// outline draws the theme's edge round r, its corners radius round, at
+// alpha a.
+func (pal palette) outline(p *paint.Painter, r geom.Rect, radius, a float32) {
+	if pal.edge.A == 0 || a <= 0 {
+		return
+	}
+	p.RRectStroke(r.Inset(geom.Uniform(0.5)), radius, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1, Color: faded(pal.edge, a)})
+}
+
+// entries gives pal's colours to the studio's tokens and to the audio
+// pieces' tokens of the same meaning, so the meters, the waveform and
+// the spectrum match the rest of the window.
+func (pal palette) entries() []theme.Entry {
+	return []theme.Entry{
+		theme.Set(studioInk, pal.ink),
+		theme.Set(studioNight, pal.night), theme.Set(audioui.Ground, pal.night),
+		theme.Set(studioPanel, pal.panel),
+		theme.Set(studioRaised, pal.raised), theme.Set(audioui.Raised, pal.raised),
+		theme.Set(studioTeal, pal.teal), theme.Set(audioui.Sound, pal.teal),
+		theme.Set(studioSky, pal.sky), theme.Set(audioui.Spread, pal.sky),
+		theme.Set(studioAmber, pal.amber), theme.Set(audioui.Near, pal.amber),
+		theme.Set(studioCoral, pal.coral), theme.Set(audioui.Over, pal.coral),
+		theme.Set(studioEdge, pal.edge), theme.Set(studioLift, pal.lift),
+	}
+}
 
 func rgb(r, g, b uint8) color.NRGBA { return color.NRGBA{R: r, G: g, B: b, A: 0xff} }
 
@@ -80,12 +141,13 @@ func short(d time.Duration) string {
 	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
-// loudnessColor colours a reading by how far it is from the target:
-// teal within half a unit, amber within one and a half, coral past.
-func loudnessColor(off float32) color.NRGBA { return audioui.LoudnessColor(nil, off) }
+// loudnessColor colours a reading by how far it is from the target, in
+// l's colours: teal within half a unit, amber within one and a half,
+// coral past.
+func loudnessColor(l *theme.Live, off float32) color.NRGBA { return audioui.LoudnessColor(l, off) }
 
 // iconButton is a round button with an icon, lit as the pointer comes
-// over it, squashed as it is pressed; primary fills it with its colour.
+// over it, squashed as it is pressed; primary fills it with teal.
 type iconButton struct {
 	anim.Group
 	// from is the icon the button turns from, as turn runs to 1.
@@ -94,14 +156,13 @@ type iconButton struct {
 	ic          *icon.Icon
 	press       func(*gunim.UI)
 	primary     bool
-	color       color.NRGBA
 	hover, down *anim.Float
 	held        bool
 	size        geom.Size
 }
 
 func newIconButton(ic *icon.Icon, press func(*gunim.UI)) *iconButton {
-	b := &iconButton{ic: ic, press: press, color: teal, hover: anim.NewFloat(0), down: anim.NewFloat(0),
+	b := &iconButton{ic: ic, press: press, hover: anim.NewFloat(0), down: anim.NewFloat(0),
 		turn: anim.NewFloat(1)}
 	b.Add(b.hover, b.down, b.turn)
 	return b
@@ -161,17 +222,18 @@ func (b *iconButton) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children
 
 // Paint implements [gunim.Node].
 func (b *iconButton) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	pal := colours(f.Theme)
 	mid := geom.Pt(box.W/2, box.H/2)
 	defer p.Push(paint.Scale(1-0.1*b.down.Value()+0.04*b.hover.Value(), mid))()
 	whole := geom.Rect{Max: box.Point()}
 	r := min(box.W, box.H) / 2
-	c := faded(ink, 0.8+0.2*b.hover.Value())
+	c := pal.quiet(0.8 + 0.2*b.hover.Value())
 	switch {
 	case b.primary:
-		p.ShadowRRect(whole, r, paint.Solid(b.color), paint.Shadow{Blur: 14 + 8*b.hover.Value(), Color: faded(b.color, 0.4)})
-		c = night
+		p.ShadowRRect(whole, r, paint.Solid(pal.teal), paint.Shadow{Blur: 14 + 8*b.hover.Value(), Color: faded(pal.teal, 0.4)})
+		c = pal.night
 	case b.hover.Value() > 0.01:
-		p.RRect(whole, r, paint.Solid(faded(ink, 0.08*b.hover.Value())))
+		p.RRect(whole, r, paint.Solid(faded(pal.ink, 0.08*b.hover.Value())))
 	}
 	side := min(box.W, box.H) * 0.46
 	turn := b.turn.Value()
@@ -277,15 +339,17 @@ func (c *valueChip) Layout(cs gunim.Constraints, _ gunim.Frame, _ gunim.Children
 }
 
 // Paint implements [gunim.Node].
-func (c *valueChip) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Children) {
+func (c *valueChip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	pal := colours(f.Theme)
 	whole := geom.Rect{Max: box.Point()}
-	fill := faded(ink, 0.05+0.05*c.hover.Value())
+	fill := faded(pal.ink, 0.05+0.05*c.hover.Value())
 	if c.held {
-		fill = faded(teal, 0.18)
+		fill = faded(pal.teal, 0.18)
 	}
 	p.RRect(whole, 10, paint.Solid(fill))
-	shaped(c.label, 9, true).Paint(p, geom.Pt(10, 6), faded(teal, 0.85))
-	paintFit(p, c.text(c.value), 14, true, geom.Pt(10, 19), box.W-14, ink)
+	pal.outline(p, whole, 10, 1)
+	shaped(c.label, 9, true).Paint(p, geom.Pt(10, 6), faded(pal.teal, 0.85))
+	paintFit(p, c.text(c.value), 14, true, geom.Pt(10, 19), box.W-14, pal.ink)
 }
 
 // pill is a button of words, lit while on.
@@ -355,21 +419,23 @@ func (b *pill) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom
 
 // Paint implements [gunim.Node].
 func (b *pill) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	pal := colours(f.Theme)
 	mid := geom.Pt(box.W/2, box.H/2)
 	defer p.Push(paint.Scale(1-0.05*b.down.Value(), mid))()
 	whole := geom.Rect{Max: box.Point()}
 	lit := b.lit.Value()
-	words := mix(faded(ink, 0.8), teal, lit)
+	words := mix(pal.quiet(0.8), pal.teal, lit)
 	switch {
 	case b.warn:
-		p.RRect(whole, box.H/2, paint.Solid(faded(amber, 0.16+0.08*b.hover.Value())))
-		p.RRectStroke(whole, box.H/2, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1, Color: faded(amber, 0.6)})
-		words = amber
+		p.RRect(whole, box.H/2, paint.Solid(faded(pal.amber, 0.16+0.08*b.hover.Value())))
+		p.RRectStroke(whole, box.H/2, paint.Solid(color.NRGBA{}), paint.Stroke{Width: 1, Color: faded(pal.amber, 0.6)})
+		words = pal.amber
 	case b.primary:
-		p.ShadowRRect(whole, box.H/2, paint.Solid(teal), paint.Shadow{Blur: 12 + 8*b.hover.Value(), Color: faded(teal, 0.35)})
-		words = night
+		p.ShadowRRect(whole, box.H/2, paint.Solid(pal.teal), paint.Shadow{Blur: 12 + 8*b.hover.Value(), Color: faded(pal.teal, 0.35)})
+		words = pal.night
 	default:
-		p.RRect(whole, box.H/2, paint.Solid(faded(mix(ink, teal, lit), 0.06+0.06*b.hover.Value()+0.08*lit)))
+		p.RRect(whole, box.H/2, paint.Solid(faded(mix(pal.ink, pal.teal, lit), 0.06+0.06*b.hover.Value()+0.08*lit)))
+		pal.outline(p, whole, box.H/2, 1)
 	}
 	run := shaped(b.words, 12, true)
 	if !b.menu {

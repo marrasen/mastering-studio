@@ -12,16 +12,19 @@ import (
 )
 
 // A deck plays one track at a time, as rendered for export, at its
-// file's rate, resampled only on its way to the speakers. Switching
+// file's rate, resampled on its way to the speakers only where they
+// play at another. Switching
 // tracks keeps the time, so the ear compares the same moment of each.
 // Its methods are safe from any goroutine.
 type deck struct {
 	mix *audio.Mixer
 	an  *audio.Analyzer
-	spk *speaker.Speaker
 
-	mu    sync.Mutex
-	voice *audio.Voice
+	mu sync.Mutex
+	// spk is the speakers, or nil where they failed to open, for spkErr.
+	spk    *speaker.Speaker
+	spkErr error
+	voice  *audio.Voice
 	// sw is the track playing, as edited, and rack its chain; next is
 	// the track queued after it.
 	sw   *switcher
@@ -66,7 +69,7 @@ func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at 
 	st := newStage(sw, r, e.Out)
 	st.tap, st.bypass = d.tap, &d.bypass
 	st.setIn(e.Gain)
-	out := audio.Resample(st, format.SampleRate)
+	out := audio.Resample(st, format.SampleRate, d.mix.Rate())
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.stopLocked(fade)
@@ -512,7 +515,7 @@ func (d *deck) queue(id int, path string, gap time.Duration, e Edit, r *rack) er
 	st := newStage(sw, r, e.Out)
 	st.tap, st.bypass = d.tap, &d.bypass
 	st.setIn(e.Gain)
-	out := audio.Resample(st, format.SampleRate)
+	out := audio.Resample(st, format.SampleRate, d.mix.Rate())
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.voice == nil {

@@ -51,6 +51,7 @@ var helpGroups = []struct {
 		{"Ctrl + S", "Save; Ctrl + Shift + S saves as"},
 		{"Ctrl + Z", "Undo the last change"},
 		{"Ctrl + Shift + Z", "Redo it"},
+		{"Ctrl + ,", "Open the settings"},
 	}},
 	{"Help", [][2]string{
 		{"F1, ?", "This help"},
@@ -76,21 +77,22 @@ func (h *helpBody) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) 
 }
 
 // Paint implements [gunim.Node].
-func (h *helpBody) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, _ gunim.Children) {
+func (h *helpBody) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	pal := colours(f.Theme)
 	y := float32(0)
 	for _, g := range helpGroups {
-		shaped(g.title, 10, true).Paint(p, geom.Pt(0, y+6), faded(teal, 0.9))
+		shaped(g.title, 10, true).Paint(p, geom.Pt(0, y+6), faded(pal.teal, 0.9))
 		y += helpRow
 		for _, k := range g.keys {
 			run := shaped(k[0], 12, true)
-			p.RRect(geom.Rc(0, y+1, run.Advance+16, helpRow-4), 6, paint.Solid(faded(ink, 0.08)))
-			run.Paint(p, geom.Pt(8, y+4), ink)
-			paintFit(p, k[1], 12, false, geom.Pt(helpKeyW, y+4), box.W-helpKeyW, faded(ink, 0.75))
+			p.RRect(geom.Rc(0, y+1, run.Advance+16, helpRow-4), 6, paint.Solid(faded(pal.ink, 0.08)))
+			run.Paint(p, geom.Pt(8, y+4), pal.ink)
+			paintFit(p, k[1], 12, false, geom.Pt(helpKeyW, y+4), box.W-helpKeyW, pal.quiet(0.75))
 			y += helpRow
 		}
 		y += helpRow / 2
 	}
-	shaped(appName+" "+version, 11, false).Paint(p, geom.Pt(0, y+4), faded(ink, 0.45))
+	shaped(appName+" "+version, 11, false).Paint(p, geom.Pt(0, y+4), pal.quiet(0.45))
 }
 
 // newHelp makes the help's dialog.

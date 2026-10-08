@@ -225,13 +225,14 @@ func (h *trackHead) Handle(e input.Event, u *gunim.UI) bool {
 }
 
 // Paint implements [gunim.Node]: the title, and after it the note.
-func (h *trackHead) Paint(p *paint.Painter, _ gunim.Frame, box geom.Size, kids gunim.Children) {
+func (h *trackHead) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	pal := colours(f.Theme)
 	t := h.track
 	if t.ID != 0 && !h.renaming {
 		if hv := h.hover.Value(); hv > 0.01 {
-			p.RRect(geom.Rc(-6, box.H/2-15, h.titleW+12, 30), 8, paint.Solid(faded(ink, 0.06*hv)))
+			p.RRect(geom.Rc(-6, box.H/2-15, h.titleW+12, 30), 8, paint.Solid(faded(pal.ink, 0.06*hv)))
 		}
-		paintFit(p, t.Title, 16, true, geom.Pt(0, box.H/2-10), h.titleW, ink)
+		paintFit(p, t.Title, 16, true, geom.Pt(0, box.H/2-10), h.titleW, pal.ink)
 	}
 	kids.At(0).Paint(p)
 	kids.At(1).Paint(p)

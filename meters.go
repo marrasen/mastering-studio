@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
-	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
@@ -43,6 +42,8 @@ type meters struct {
 	r    *root
 	from int64
 	buf  []float32
+	// rate is the rate the sound is heard at, the mixer's.
+	rate int
 	loud *audioui.Loudness
 	// scope is the stereo image.
 	scope *audioui.Scope
@@ -78,7 +79,8 @@ type meters struct {
 }
 
 func newMeters(r *root) *meters {
-	m := &meters{r: r, loud: audioui.NewLoudness(audio.SampleRate), scope: audioui.NewScope(),
+	rate := r.d.mix.Rate()
+	m := &meters{r: r, rate: rate, loud: audioui.NewLoudness(rate), scope: audioui.NewScope(),
 		in: audioui.NewLevels(), out: audioui.NewLevels(), spectrum: audioui.NewSpectrum(specPoints),
 		inMeter: audioui.NewSpectrometer(4096)}
 	m.spectrum.ShowIn, m.spectrum.Switches = true, true
@@ -113,7 +115,7 @@ func (m *meters) fader(out bool) *audioui.Fader {
 // is picked.
 func (m *meters) show(was, s Album) {
 	if s.Starts != was.Starts || s.Current != was.Current {
-		m.loud.Reset(audio.SampleRate)
+		m.loud.Reset(m.rate)
 		m.in, m.out = audioui.NewLevels(), audioui.NewLevels()
 	}
 	// The spectrum as kept, where the application says it changed: a
@@ -148,6 +150,12 @@ func (m *meters) listening() float64 {
 // been heard since the last.
 func (m *meters) Step(dt time.Duration) bool {
 	var now int64
+	if rate := m.r.d.mix.Rate(); rate != m.rate {
+		// The speakers opened again at another rate: the sound heard
+		// comes at it from now.
+		m.rate = rate
+		m.loud.Reset(rate)
+	}
 	m.buf, now = m.r.d.heard(m.buf[:0], m.from)
 	m.from = now
 	if len(m.buf) > 0 {
@@ -157,7 +165,7 @@ func (m *meters) Step(dt time.Duration) bool {
 			m.buf[i] *= back
 		}
 		m.loud.Write(m.buf)
-		m.out.Take(m.buf, audio.SampleRate, dt)
+		m.out.Take(m.buf, m.rate, dt)
 		m.scope.Write(m.buf)
 	} else {
 		m.out.Quiet(dt)
@@ -225,8 +233,9 @@ func (m *meters) Children() []gunim.Node { return []gunim.Node{m.inFader, m.outF
 // Paint implements [gunim.Node]: loudness at the top, the stereo image
 // in the middle, the spectrum at the foot.
 func (m *meters) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
-	p.RRect(geom.Rect{Max: box.Point()}, 0, paint.Solid(panel))
-	p.RRect(geom.Rc(0, 0, 1, box.H), 0, paint.Solid(faded(ink, 0.06)))
+	pal := colours(f.Theme)
+	p.RRect(geom.Rect{Max: box.Point()}, 0, paint.Solid(pal.panel))
+	p.RRect(geom.Rc(0, 0, 1, box.H), 0, paint.Solid(faded(pal.ink, 0.06)))
 	y := float32(16)
 	y = m.paintIO(p, f, box, y)
 	for k := range kids.All {
@@ -263,9 +272,10 @@ func (m *meters) takeInput(dt time.Duration) {
 }
 
 func (m *meters) paintLoudness(p *paint.Painter, f gunim.Frame, box geom.Size, y float32) float32 {
+	pal := colours(f.Theme)
 	target := m.r.state.Target
-	shaped("LOUDNESS", 10, true).Paint(p, geom.Pt(16, y), faded(teal, 0.85))
-	shaped(fmt.Sprintf("target %.1f LUFS", target), 10, false).Paint(p, geom.Pt(100, y), faded(ink, 0.4))
+	shaped("LOUDNESS", 10, true).Paint(p, geom.Pt(16, y), faded(pal.teal, 0.85))
+	shaped(fmt.Sprintf("target %.1f LUFS", target), 10, false).Paint(p, geom.Pt(100, y), pal.quiet(0.4))
 	return m.loud.Paint(p, f.Theme, geom.Rc(16, y+20, box.W-32, 0), target)
 }
 
@@ -273,7 +283,8 @@ func (m *meters) paintLoudness(p *paint.Painter, f gunim.Frame, box geom.Size, y
 // frames heard as points, brighter the newer; and the correlation bar
 // under it.
 func (m *meters) paintScope(p *paint.Painter, f gunim.Frame, box geom.Size, y float32) float32 {
-	shaped("STEREO", 10, true).Paint(p, geom.Pt(16, y), faded(teal, 0.85))
+	pal := colours(f.Theme)
+	shaped("STEREO", 10, true).Paint(p, geom.Pt(16, y), faded(pal.teal, 0.85))
 	// How the sound is listened to, at the right: amber while it is
 	// other than stereo, so it is not forgotten.
 	m.listenRects = m.listenRects[:0]
@@ -284,13 +295,14 @@ func (m *meters) paintScope(p *paint.Painter, f gunim.Frame, box geom.Size, y fl
 		x = r.Min.X - 4
 		m.listenRects = append([]geom.Rect{r}, m.listenRects...)
 		on := Listen(i) == m.r.state.Listen
-		c := faded(ink, 0.45)
+		c := pal.quiet(0.45)
 		if on {
-			lit := teal
+			lit := pal.teal
 			if Listen(i) != ListenStereo {
-				lit = amber
+				lit = pal.amber
 			}
 			p.RRect(r, 10, paint.Solid(faded(lit, 0.18)))
+			pal.outline(p, r, 10, 1)
 			c = lit
 		}
 		run.Paint(p, geom.Pt(r.Min.X+8, r.Min.Y+4), c)
@@ -305,6 +317,7 @@ func (m *meters) paintScope(p *paint.Painter, f gunim.Frame, box geom.Size, y fl
 
 // paintSpectrum draws the spectrum heard into area.
 func (m *meters) paintSpectrum(p *paint.Painter, f gunim.Frame, area geom.Rect) {
+	pal := colours(f.Theme)
 	if area.Size().H < 40 {
 		return
 	}
@@ -312,7 +325,7 @@ func (m *meters) paintSpectrum(p *paint.Painter, f gunim.Frame, area geom.Rect) 
 	// switches.
 	head := area.Min.Sub(geom.Pt(0, 2))
 	spec, gram := shaped("SPECTRUM", 10, true), shaped("SPECTROGRAM", 10, true)
-	on, off := faded(teal, 0.85), faded(ink, 0.35)
+	on, off := faded(pal.teal, 0.85), pal.quiet(0.35)
 	if m.showGram {
 		on, off = off, on
 	}
@@ -321,7 +334,7 @@ func (m *meters) paintSpectrum(p *paint.Painter, f gunim.Frame, area geom.Rect) 
 	m.specHead = geom.Rc(head.X-4, head.Y-4, spec.Advance+gram.Advance+20, 20)
 	area.Min.Y += 18
 	if m.showGram {
-		p.RRect(area, 10, paint.Solid(night))
+		p.RRect(area, 10, paint.Solid(pal.night))
 		m.gram.Paint(p, area, 1)
 		audioui.PaintPitches(p, f.Theme, area, true)
 		return
