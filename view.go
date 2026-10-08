@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -164,6 +165,13 @@ func (r *root) show(s Album, u *gunim.UI) {
 			OnClick: widget.Sends(ShowProfile{})}, u)
 	}
 	// What went wrong, as saving.
+	// A driver chosen that failed to start: asked until answered.
+	switch {
+	case s.Fallbacks != was.Fallbacks && s.Fallback != "":
+		r.toasts.Show(fallbackToast(s.Fallback, s.FallbackWhy), u)
+	case s.Fallback == "" && was.Fallback != "":
+		r.toasts.Close("driver", u)
+	}
 	if s.Note != was.Note && s.Note != "" {
 		r.toasts.Show(widget.Toast{Title: s.Note, Kind: widget.ToastError, Key: "note"}, u)
 	}
@@ -221,9 +229,9 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	edBottom := bottom - stripH - gutter - transH - gutter - chainH - toolsH
 	place(2, geom.Rc(x0, edTop, x1-x0, max(edBottom-edTop, 80)))
 	place(3, geom.Rc(x0, edBottom, x1-x0, toolsH))
-	// The toasts, in the editor's lower corner, over the transport.
-	ts := kids.At(12).Layout(gunim.Constraints{Max: geom.Sz(360, size.H)})
-	kids.At(12).Place(geom.Pt(x1-ts.W-gutter, bottom-stripH-gutter-transH-ts.H-gutter))
+	// The toasts, in the window's lower right corner.
+	ts := kids.At(12).Layout(gunim.Constraints{Max: geom.Sz(min(440, size.W-2*gutter), size.H)})
+	kids.At(12).Place(geom.Pt(size.W-ts.W-gutter, size.H-ts.H-gutter))
 	return size
 }
 
@@ -618,6 +626,26 @@ func (h *header) openMenu(u *gunim.UI) {
 		return nil
 	}
 	m.Open(geom.Pt(16, headerH-6), u)
+}
+
+// fallbackToast asks about the ASIO driver that failed to start, for
+// why, while the system's sound plays in its place: to play through the
+// system's sound, or to open the driver's settings and try it again.
+func fallbackToast(driver, why string) widget.Toast {
+	return widget.Toast{Title: driver + " didn't start", Body: why + ". " + systemSound() + " plays in its place.",
+		Kind: widget.ToastError, Key: "driver", Buttons: []widget.ToastButton{
+			{Label: useSystemSound(), OnClick: func(bool, *gunim.UI) gunim.Intent { return UseSystemSound{} }},
+			{Label: "Driver Settings…", OnClick: func(bool, *gunim.UI) gunim.Intent { return OpenControlPanel{} }},
+		}}
+}
+
+// useSystemSound labels the button that plays through the system's own
+// sound, short enough to sit beside another on a toast.
+func useSystemSound() string {
+	if runtime.GOOS == "windows" {
+		return "Use Windows Sound"
+	}
+	return "Use System Sound"
 }
 
 // updateToast tells of a release, as gunim's installer words it: one

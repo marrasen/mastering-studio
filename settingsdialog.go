@@ -50,6 +50,9 @@ type (
 	// CheckForUpdates looks for a newer release now, and opens the
 	// window to update to one.
 	CheckForUpdates struct{}
+	// UseSystemSound plays through the system's own sound, in place of
+	// an ASIO driver.
+	UseSystemSound struct{}
 )
 
 // settingsTopic is what the settings' dialog watches.
@@ -180,6 +183,11 @@ func (s *settingsDialog) show(d SettingsDraft, u *gunim.UI) {
 		s.buffer.SetItems(widget.Labels(bufferNames(d.Output.rate())...))
 	}
 	s.draft = d
+	if i := slices.Index(d.Drivers, d.Output.Driver) + 1; i != s.driver.Selected() {
+		// The output changed outside the dialog, as from the toast of a
+		// driver that failed.
+		s.driver.SetSelected(i, u)
+	}
 	s.fill(d, u)
 	u.Invalidate()
 }
@@ -379,14 +387,19 @@ func (a *app) openSettings(open bool) {
 	}
 }
 
-// tellFallback tells, as a note, of a driver chosen that failed to
-// start, while the system's sound plays in its place.
+// tellFallback has the window ask about a driver chosen that failed to
+// start, while the system's sound plays in its place, and stop asking
+// once the driver plays or another output is chosen.
 func (a *app) tellFallback() {
-	if a.output.Driver == "" {
+	st := a.d.outputState()
+	if a.output.Driver == "" || st.Driver != "" || st.Silent {
+		a.Fallback, a.FallbackWhy = "", ""
 		return
 	}
-	if st := a.d.outputState(); st.Driver == "" && !st.Silent {
-		a.Note = fmt.Sprintf("%s didn't start, so %s plays. Settings says why.", a.output.Driver, systemSound())
+	why := strings.TrimPrefix(st.Problem, "asio: ")
+	if a.Fallback != a.output.Driver || a.FallbackWhy != why {
+		a.Fallback, a.FallbackWhy = a.output.Driver, why
+		a.Fallbacks++
 	}
 }
 
@@ -482,6 +495,10 @@ func (a *app) handleSettings(in gunim.Intent) {
 		}
 	case CheckForUpdates:
 		a.checkForUpdates()
+	case UseSystemSound:
+		o := a.output
+		o.Driver = ""
+		a.handleSettings(SetOutput{Output: o})
 	case SetUpdates:
 		if err := install.SetUpdates(installer(), install.UpdateMode(in.Mode)); err != nil {
 			a.Note = err.Error()

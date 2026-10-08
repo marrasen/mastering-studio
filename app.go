@@ -97,6 +97,11 @@ type (
 		Profiling bool
 		Told      string
 		Tolds     int
+		// Fallback is the ASIO driver chosen that failed to start, and
+		// FallbackWhy why, while the system's sound plays in its place;
+		// Fallbacks counts the failures, so the window asks of each once.
+		Fallback, FallbackWhy string
+		Fallbacks             int
 		// Loudness is the album's, every track measured together, as
 		// bs1770gain measures an album, once every track is measured.
 		Loudness Measure
@@ -971,8 +976,10 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		case <-a.profiled:
 			a.profileDone()
 		case <-a.d.outputChanged():
-			// The speakers opened again, at a rate of their own.
+			// The speakers opened again, at a rate of their own, or
+			// through the system's sound, where a driver failed.
 			a.playAgain()
+			a.tellFallback()
 		case c := <-a.checks:
 			a.tookCheck(c)
 		case <-a.quitNow:
@@ -1383,7 +1390,8 @@ func (a *app) handle(in gunim.Intent) {
 	case SetCurves:
 		a.Curves = in.Curves
 		a.dirty = true
-	case OpenSettings, SettingsClosed, SetOutput, OpenControlPanel, ChooseTheme, SetUpdates, CheckForUpdates:
+	case OpenSettings, SettingsClosed, SetOutput, OpenControlPanel, ChooseTheme, SetUpdates, CheckForUpdates,
+		UseSystemSound:
 		a.handleSettings(in)
 	case SetBeta:
 		a.Beta = in.On
