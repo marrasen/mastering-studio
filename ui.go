@@ -80,6 +80,8 @@ func (pal palette) outline(p *paint.Painter, r geom.Rect, radius, a float32) {
 func (pal palette) entries() []theme.Entry {
 	return []theme.Entry{
 		theme.Set(studioInk, pal.ink),
+		// Toasts wide enough for a driver's two buttons side by side.
+		theme.Set(widget.ToastWidth, 400),
 		theme.Set(studioNight, pal.night), theme.Set(audioui.Ground, pal.night),
 		theme.Set(studioPanel, pal.panel),
 		theme.Set(studioRaised, pal.raised), theme.Set(audioui.Raised, pal.raised),

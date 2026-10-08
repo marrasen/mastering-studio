@@ -134,3 +134,47 @@ func TestALookForUpdatesSaysHowItWent(t *testing.T) {
 		t.Errorf("while checking: disabled %v, %q", s.check.Disabled, s.installNote.Text)
 	}
 }
+
+func TestAFailedDriverAsksUntilAnswered(t *testing.T) {
+	to := fallbackToast("Realtek ASIO", "starting Realtek ASIO: the driver refused to start")
+	if to.Title != "Realtek ASIO didn't start" || !strings.Contains(to.Body, systemSound()+" plays in its place") ||
+		len(to.Buttons) != 2 || to.Buttons[0].OnClick(false, nil) != (UseSystemSound{}) ||
+		to.Buttons[1].OnClick(false, nil) != (OpenControlPanel{}) {
+		t.Fatalf("the toast says %q, %q, with %d buttons", to.Title, to.Body, len(to.Buttons))
+	}
+	a := album()
+	a.Fallback, a.FallbackWhy, a.Fallbacks = "Realtek ASIO", "the driver refused to start", 1
+	w, r, run := stage(t, a)
+	run(10)
+	if r.toasts.Len() != 1 {
+		t.Fatalf("with the driver failed, %d toasts show", r.toasts.Len())
+	}
+	// The driver plays, or another output is chosen: the toast goes.
+	a.Fallback, a.FallbackWhy = "", ""
+	if err := w.Client().Publish(albumTopic, a); err != nil {
+		t.Fatal(err)
+	}
+	run(120)
+	if r.toasts.Len() != 0 {
+		t.Fatalf("with the driver playing, %d toasts show", r.toasts.Len())
+	}
+}
+
+func TestUsingTheSystemsSoundLetsTheDriverGo(t *testing.T) {
+	was := openSpeaker
+	openSpeaker = func(*audio.Mixer, speaker.Options) (*speaker.Speaker, error) { return nil, errors.New("shut") }
+	defer func() { openSpeaker = was }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	a.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+	a.output = Output{Driver: "Realtek ASIO", Rate: 44100}
+	a.Fallback, a.Fallbacks = "Realtek ASIO", 1
+	a.handle(UseSystemSound{})
+	if a.output.Driver != "" || a.output.Rate != 44100 || readSettings(a.settingsFile).Output.Driver != "" {
+		t.Fatalf("the sound plays %+v", a.output)
+	}
+	if a.Fallback != "" {
+		t.Errorf("the toast of %q still asks", a.Fallback)
+	}
+}
