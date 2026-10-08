@@ -104,3 +104,33 @@ func TestADriverThatFailedSaysWhatPlaysInItsPlace(t *testing.T) {
 		t.Errorf("with the system's sound chosen, the problem says %q", got)
 	}
 }
+
+func TestALookForUpdatesSaysHowItWent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	a.checking = true
+	a.tookCheck(checked{err: errors.New("no network")})
+	if a.checking || a.checked != "Couldn't check: no network" {
+		t.Fatalf("after a failed look: checking %v, %q", a.checking, a.checked)
+	}
+	a.tookCheck(checked{})
+	if !strings.HasSuffix(a.checked, "is up to date.") {
+		t.Fatalf("with nothing newer: %q", a.checked)
+	}
+	d := a.settingsDraft()
+	if d.Checked != a.checked {
+		t.Fatalf("the dialog is told %q", d.Checked)
+	}
+	// The button waits for the studio to be installed, and for a look
+	// under way.
+	if s := newSettingsDialog(SettingsDraft{}); !s.check.Disabled {
+		t.Error("a studio not installed offers to check")
+	}
+	if s := newSettingsDialog(SettingsDraft{Installed: true}); s.check.Disabled {
+		t.Error("an installed studio offers no check")
+	}
+	if s := newSettingsDialog(SettingsDraft{Installed: true, Checking: true}); !s.check.Disabled || s.installNote.Text != "Checking for updates…" {
+		t.Errorf("while checking: disabled %v, %q", s.check.Disabled, s.installNote.Text)
+	}
+}

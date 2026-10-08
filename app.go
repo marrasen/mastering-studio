@@ -471,6 +471,13 @@ type app struct {
 	// or nil.
 	output Output
 	theme  string
+	// checking says a look for a newer release is under way, checks
+	// carries what it found, and checked says how the last went.
+	// quitNow asks the studio to close, for the release it updated to.
+	checking bool
+	checked  string
+	checks   chan checked
+	quitNow  chan struct{}
 	// gunim is the program's gunim app, for windows of its own.
 	gunim        *gunim.App
 	settingsOpen bool
@@ -545,6 +552,7 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 	a := &app{ctx: ctx, stop: stop, d: d, file: file,
 		scans: make(chan scanned, 16), measures: make(chan measured, 16),
 		measurer: map[int]context.CancelFunc{}, settle: map[int]time.Time{},
+		checks: make(chan checked, 1), quitNow: make(chan struct{}, 1),
 		chosen: make(chan []string, 1), chosenRefs: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
 		racks: map[int]*rack{}, version: map[int]int{}, measuringVersion: map[int]int{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1),
 		replacing: make(chan ReplaceFile, 1), matches: make(chan matched, 4),
@@ -965,6 +973,16 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		case <-a.d.outputChanged():
 			// The speakers opened again, at a rate of their own.
 			a.playAgain()
+		case c := <-a.checks:
+			a.tookCheck(c)
+		case <-a.quitNow:
+			// The release updated to starts, and waits for this one.
+			if a.Unsaved {
+				a.askToClose()
+				break
+			}
+			quit()
+			continue
 		case <-a.ticks():
 			// The sound as it plays now, for the settings' dialog alone.
 			_ = c.Publish(settingsTopic, a.settingsDraft())
@@ -1365,7 +1383,7 @@ func (a *app) handle(in gunim.Intent) {
 	case SetCurves:
 		a.Curves = in.Curves
 		a.dirty = true
-	case OpenSettings, SettingsClosed, SetOutput, OpenControlPanel, ChooseTheme, SetUpdates:
+	case OpenSettings, SettingsClosed, SetOutput, OpenControlPanel, ChooseTheme, SetUpdates, CheckForUpdates:
 		a.handleSettings(in)
 	case SetBeta:
 		a.Beta = in.On
