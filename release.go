@@ -29,7 +29,7 @@ func newReleaseDialog(r Release) *widget.Dialog {
 	d := widget.NewDialog("Release")
 	field := func(text, hint string) *widget.TextField {
 		f := widget.NewTextField()
-		f.SetText(text)
+		f.SetText(text, nil)
 		f.Placeholder = hint
 		return f
 	}
@@ -41,8 +41,8 @@ func newReleaseDialog(r Release) *widget.Dialog {
 	form.Add("Artist", artist).Add("Title", title).Add("Year", year).Add("Genre", genre)
 	d.Body = form
 	d.SetButtons("Save", "Cancel")
-	d.Dismiss = ReleaseClosed{}
-	d.OnAccept = func() gunim.Intent {
+	d.OnDismiss = widget.Sends(ReleaseClosed{})
+	d.OnAccept = func(*gunim.UI) gunim.Intent {
 		trim := strings.TrimSpace
 		return SetRelease{Release: Release{Artist: trim(artist.Text()), Title: trim(title.Text()),
 			Year: trim(year.Text()), Genre: trim(genre.Text())}}

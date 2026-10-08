@@ -268,19 +268,21 @@ func (l *trackList) openMenu(p geom.Point, u *gunim.UI) bool {
 	if t := l.r.state.find(id); t != nil {
 		file = t.File
 	}
-	l.menu.Items = []string{filepath.Base(file), "Rename", "Replace file…", "Show file in folder", "Export this track",
-		"Remove from the album"}
-	l.menu.Icons = []*icon.Icon{nil, icon.Pencil, icon.FileAudio, icon.FolderOpen, icon.Download, icon.Trash2}
-	l.menu.Hints = []string{lastDirs(filepath.Dir(file)), "", "", "", "", ""}
-	l.menu.Captions = []int{0}
-	l.menu.Breaks = []int{1, 4, 5}
-	l.menu.Disabled = nil
+	items := []widget.MenuItem{
+		{Label: filepath.Base(file), Hint: lastDirs(filepath.Dir(file)), Caption: true},
+		{Label: "Rename", Icon: icon.Pencil, Break: true},
+		{Label: "Replace file…", Icon: icon.FileAudio},
+		{Label: "Show file in folder", Icon: icon.FolderOpen},
+		{Label: "Export this track", Icon: icon.Download, Break: true},
+		{Label: "Remove from the album", Icon: icon.Trash2, Break: true},
+	}
 	if l.refs {
 		// A reference is not exported.
-		l.menu.Items[5] = "Remove reference"
-		l.menu.Disabled = []bool{4: true, 5: false}
+		items[5].Label = "Remove reference"
+		items[4].Disabled = true
 	}
-	l.menu.Picked = func(k int, u *gunim.UI) {
+	l.menu.SetItems(items)
+	l.menu.OnPick = func(k int, u *gunim.UI) gunim.Intent {
 		switch k - 1 {
 		case 0:
 			// The title is renamed where the editor shows it.
@@ -289,14 +291,15 @@ func (l *trackList) openMenu(p geom.Point, u *gunim.UI) bool {
 			}
 			l.r.head.renameTrack(id, u)
 		case 1:
-			u.Send(l, ChooseReplacement{ID: id})
+			return ChooseReplacement{ID: id}
 		case 2:
-			u.Send(l, ShowFile{ID: id})
+			return ShowFile{ID: id}
 		case 3:
-			u.Send(l, OpenExport{IDs: []int{id}})
+			return OpenExport{IDs: []int{id}}
 		case 4:
-			u.Send(l, RemoveTrack{ID: id})
+			return RemoveTrack{ID: id}
 		}
+		return nil
 	}
 	l.menu.Open(p, u)
 	return true

@@ -16,6 +16,7 @@ import (
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/widget"
 )
 
 // album returns an album of one track, ten seconds of a file read, with
@@ -1181,7 +1182,7 @@ func TestStoppedTheLevelsFallOnWithoutThePointer(t *testing.T) {
 			t.Fatal("stopped, the levels never come to rest")
 		}
 	}
-	if frames < 60 || falling(&m.out) {
+	if frames < 60 || falling(m.out) {
 		t.Fatalf("the levels stopped falling after %d frames, at a peak of %.1f dB", frames, m.out.Peak[0])
 	}
 }
@@ -1342,7 +1343,9 @@ func TestTheChainsMenuCopiesAndKeepsPresets(t *testing.T) {
 			c.openMore(u)
 			return
 		}
-		c.menu.Picked(item, u)
+		if in := c.menu.OnPick(item, u); in != nil {
+			u.Send(c, in)
+		}
 	})
 	patch := func(item int) {
 		if err := w.Client().Patch("album", item); err != nil {
@@ -1352,13 +1355,19 @@ func TestTheChainsMenuCopiesAndKeepsPresets(t *testing.T) {
 	}
 	patch(-1)
 	want := []string{"Copy to…", "Save preset “Loud”", "Save preset as…", "Load preset…", "Delete preset…"}
-	if !reflect.DeepEqual(c.menu.Items, want) || slices.Contains(c.menu.Disabled, true) {
-		t.Fatalf("the chain's menu offers %v, off %v", c.menu.Items, c.menu.Disabled)
+	items := c.menu.Items()
+	labels := make([]string, len(items))
+	for i, it := range items {
+		labels[i] = it.Label
+	}
+	if !reflect.DeepEqual(labels, want) || slices.ContainsFunc(items, func(it widget.MenuItem) bool { return it.Disabled }) {
+		t.Fatalf("the chain's menu offers %v", items)
 	}
 	// Load: the presets, the track's ticked; one picked loads.
 	patch(3)
-	if !reflect.DeepEqual(c.menu.Items, a.Presets) || !reflect.DeepEqual(c.menu.Checked, []bool{false, true}) {
-		t.Fatalf("the presets to load are %v, ticked %v", c.menu.Items, c.menu.Checked)
+	items = c.menu.Items()
+	if len(items) != 2 || items[0].Label != "Gentle" || items[1].Label != "Loud" || items[0].Checked || !items[1].Checked {
+		t.Fatalf("the presets to load are %v", items)
 	}
 	patch(0)
 	if _, rest := edits(w); len(rest) != 1 || rest[0] != (LoadPreset{Track: 1, Name: "Gentle"}) {

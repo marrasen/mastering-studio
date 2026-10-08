@@ -10,6 +10,7 @@ import (
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
+	"github.com/marrasen/gunim/widget"
 )
 
 func TestBetaUpdatesAreKeptInTheSettings(t *testing.T) {
@@ -59,9 +60,12 @@ func TestTheMenuTicksBetaUpdatesAndRecordsAProfile(t *testing.T) {
 	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
 	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
 	run(10)
-	m := r.headerMenu
-	i := slices.Index(m.Items, "Beta updates")
-	if i < 0 || !m.Checked[i] || slices.Index(m.Items, "Record CPU profile (1 min)") < 0 {
-		t.Fatalf("the menu offers %v, ticked %v", m.Items, m.Checked)
+	items := r.headerMenu.Items()
+	find := func(label string) int {
+		return slices.IndexFunc(items, func(it widget.MenuItem) bool { return it.Label == label })
+	}
+	i := find("Beta updates")
+	if i < 0 || !items[i].Checked || find("Record CPU profile (1 min)") < 0 {
+		t.Fatalf("the menu offers %v", items)
 	}
 }
