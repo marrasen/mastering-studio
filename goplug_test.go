@@ -421,3 +421,62 @@ func TestThePaneAnimatesItsPluginsInOutAndAcross(t *testing.T) {
 		t.Fatal("the EQ's sheet did not go")
 	}
 }
+
+// A plugin of the tests' own that reports the peak of the last block
+// it processed, as a ReadOnly parameter.
+func init() {
+	plug.Register(plug.Descriptor{ID: "test.reporter", Name: "Reporter", Vendor: "Tests",
+		Params: []plug.Param{{ID: 1, Name: "Peak", Max: 1, Default: 0.5, Flags: plug.ReadOnly}},
+		New:    func(plug.Host) plug.Plugin { return &reporter{} }})
+}
+
+type reporter struct{ proc reporterProc }
+
+type reporterProc struct{ peak plug.Meter }
+
+func (r *reporter) Processor() plug.Processor { return &r.proc }
+func (r *reporter) State() []byte             { return nil }
+func (r *reporter) SetState([]byte) error     { return nil }
+func (r *reporter) Close()                    {}
+
+func (*reporterProc) Prepare(plug.Setup) {}
+func (p *reporterProc) Process(b *plug.Block) {
+	var peak float32
+	for _, ch := range b.In {
+		for _, v := range ch[:b.Frames] {
+			peak = max(peak, v, -v)
+		}
+	}
+	p.peak.Set(float64(peak))
+}
+func (*reporterProc) Latency() int            { return 0 }
+func (*reporterProc) Tail() int               { return 0 }
+func (*reporterProc) Reset()                  {}
+func (p *reporterProc) Report(uint32) float64 { return p.peak.Get() }
+
+func TestAPluginsViewsReadWhatItReports(t *testing.T) {
+	d, ok := plug.Lookup("test.reporter")
+	if !ok {
+		t.Fatal("the reporter is not registered")
+	}
+	v := &goView{d: d, slot: 77, values: map[uint32]float64{}}
+	h := goHost{v}
+	// Playing nowhere, the parameter reads its default.
+	if got := h.Param(1); got != 0.5 {
+		t.Fatalf("playing nowhere, the peak reads %v, want the default 0.5", got)
+	}
+	lp, err := newPlugin(Slot{ID: 77, Path: goPath, Class: "test.reporter", Name: "Reporter"}, nil, 48000, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		lp.forget()
+		lp.p.Close()
+	}()
+	frames := make([]float32, 2*256)
+	frames[100] = -0.75
+	lp.p.Process(frames)
+	if got := h.Param(1); got != 0.75 {
+		t.Fatalf("the views read a peak of %v, want 0.75, as it reports", got)
+	}
+}

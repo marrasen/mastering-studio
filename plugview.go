@@ -140,7 +140,29 @@ func (v *goView) close() { v.p.Close() }
 // of each change.
 type goHost struct{ v *goView }
 
-func (h goHost) Param(id uint32) float64 { return h.v.values[id] }
+// Param implements [plug.Host]: of a ReadOnly parameter, what the slot's
+// plugin playing reports.
+func (h goHost) Param(id uint32) float64 {
+	if p, ok := h.v.d.Param(id); ok && p.Flags&plug.ReadOnly != 0 {
+		return h.v.reported(p)
+	}
+	return h.v.values[id]
+}
+
+// reported returns what the slot's plugin playing reports of p, or p's
+// default where none plays.
+func (v *goView) reported(p plug.Param) float64 {
+	if got, ok := livePlugins.Load(v.slot); ok {
+		if lp, ok := got.(*livePlugin); ok {
+			if e, ok := lp.p.(*goEngine); ok {
+				if r, ok := e.proc.(plug.Reporter); ok {
+					return r.Report(p.ID)
+				}
+			}
+		}
+	}
+	return p.Default
+}
 
 // Begin implements [plug.Host]: a gesture of its own, to undo.
 func (h goHost) Begin(id uint32, _ *gunim.UI) {

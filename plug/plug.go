@@ -89,7 +89,9 @@ const (
 	// Hidden keeps the parameter off the host's generic views.
 	Hidden
 	// ReadOnly marks a value the plugin reports, as a meter's, which
-	// the host shows but never sets.
+	// the host shows but never sets: its processor reports it, as a
+	// [Reporter], and a view reads it with [Host.Param] as often as it
+	// draws.
 	ReadOnly
 )
 
@@ -174,7 +176,8 @@ type Plugin interface {
 // that change something take the [gunim.UI] of the call they are made
 // in, to tell the app with.
 type Host interface {
-	// Param returns a parameter's value now.
+	// Param returns a parameter's value now: of a ReadOnly one, what
+	// the plugin playing reports, or its default where none plays.
 	Param(id uint32) float64
 	// Begin, Set and End are one gesture on a parameter, as a knob
 	// dragged: Set moves it, and the host passes each move to the

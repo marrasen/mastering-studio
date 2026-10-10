@@ -1,5 +1,10 @@
 package plug
 
+import (
+	"math"
+	"sync/atomic"
+)
+
 // Setup is how the host will run a processor.
 type Setup struct {
 	// Rate is frames a second.
@@ -32,6 +37,25 @@ type Processor interface {
 	// another place.
 	Reset()
 }
+
+// Reporter is a processor that reports values as it plays, its
+// ReadOnly parameters, as a limiter reports how far it turns the sound
+// down. Report runs on the window's goroutine as the processor runs on
+// its own, so it reads what Process last stored, as a [Meter] keeps it.
+type Reporter interface {
+	Report(id uint32) float64
+}
+
+// A Meter is a value a processor stores as it plays and its views read
+// as they draw, without either waiting for the other: a ReadOnly
+// parameter's, for [Reporter]. Its zero value is 0.
+type Meter struct{ bits atomic.Uint64 }
+
+// Set stores v, as Process does.
+func (m *Meter) Set(v float64) { m.bits.Store(math.Float64bits(v)) }
+
+// Get returns the value last stored.
+func (m *Meter) Get() float64 { return math.Float64frombits(m.bits.Load()) }
 
 // Block is a block of sound to process.
 type Block struct {
