@@ -14,6 +14,7 @@ import (
 
 	// The Go plugins built in.
 	_ "github.com/marrasen/mastering-studio/plug/eq"
+	_ "github.com/marrasen/mastering-studio/plug/limiter"
 	_ "github.com/marrasen/mastering-studio/plug/trim"
 )
 
