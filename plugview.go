@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"maps"
-	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
@@ -242,125 +241,109 @@ func (r *root) showGo(t Track, s, was Album, u *gunim.UI) {
 		r.pane.shut(u)
 	}
 	for _, v := range gone {
+		r.pane.forget(v, u)
 		v.close()
 	}
 }
 
-// goPane is a Go plugin's views over the waveform: its name and a close
-// button along the top, and the view under them. Escape closes it.
+// goPane is a Go plugin's views over the waveform, on a sheet of the
+// plugin's own: its name and a close button along the top, and the
+// view under them. A sheet fades and rises in as the pane opens, and
+// fades and falls away as it closes, and as another plugin's takes its
+// place the two cross. Escape closes it.
 type goPane struct {
-	anim.Group
+	r *root
+	// v is the views shown, and sheets the sheets made, by views: one
+	// leaving still holds its views, and comes back if they open again
+	// as it leaves.
 	v      *goView
-	title  *widget.Label
-	closer *widget.IconButton
-	shown  *anim.Float
+	sheets map[*goView]*goSheet
 	size   geom.Size
 }
 
-func newGoPane() *goPane {
-	p := &goPane{title: widget.NewLabel(""), shown: anim.NewFloat(0)}
-	p.title.NoWrap, p.title.MaxLines = true, 1
-	p.closer = widget.NewIconButton(icon.X, "Close")
-	p.closer.OnClick = func(u *gunim.UI) gunim.Intent {
-		p.shut(u)
-		return nil
-	}
-	p.Add(p.shown)
-	return p
-}
+func newGoPane(r *root) *goPane { return &goPane{r: r, sheets: map[*goView]*goSheet{}} }
 
 // open shows v's views, of a slot of chain.
 func (p *goPane) open(v *goView, chain []Slot, u *gunim.UI) {
-	if p.v != nil && p.v != v {
-		u.Remove(p.v.paneView())
+	if p.v == v {
+		return
 	}
-	if p.v == nil {
-		u.Insert(p, p.title)
-		u.Insert(p, p.closer)
+	if p.v != nil {
+		p.leave(u)
 	}
-	u.Insert(p, v.paneView())
-	p.v = v
-	p.title.Text = v.d.Name
+	sh := p.sheets[v]
+	if sh == nil {
+		sh = newGoSheet(p, v)
+		p.sheets[v] = sh
+	}
+	sh.title.Text = v.d.Name
 	for _, s := range chain {
 		if s.ID == v.slot {
-			p.title.Text = s.title()
+			sh.title.Text = s.title()
 		}
 	}
-	p.shown.Animate(1, anim.Snappy)
+	// A sheet still leaving turns back.
+	u.Insert(p, sh)
+	p.v = v
+	p.r.chain.showOpen(v.slot, true)
 	u.Invalidate()
 }
 
 // shut closes the pane.
 func (p *goPane) shut(u *gunim.UI) {
-	if p.v == nil {
-		return
+	if p.v != nil {
+		p.leave(u)
+		u.Invalidate()
 	}
-	for _, n := range []gunim.Node{p.title, p.closer, p.v.paneView()} {
-		u.Remove(n)
-	}
+}
+
+// leave has the sheet shown leave.
+func (p *goPane) leave(u *gunim.UI) {
+	p.r.chain.showOpen(p.v.slot, false)
+	u.Remove(p.sheets[p.v])
 	p.v = nil
-	p.shown.Jump(0)
-	u.Invalidate()
+}
+
+// forget lets the sheet of v go, as its views go.
+func (p *goPane) forget(v *goView, u *gunim.UI) {
+	if p.v == v {
+		p.leave(u)
+	}
+	delete(p.sheets, v)
 }
 
 // isOpen says the pane shows a plugin's views.
 func (p *goPane) isOpen() bool { return p.v != nil }
 
-// Children implements [gunim.Composite].
-func (p *goPane) Children() []gunim.Node {
-	if p.v == nil {
-		return nil
-	}
-	return []gunim.Node{p.title, p.closer, p.v.paneView()}
-}
+// Children implements [gunim.Composite]: the sheets come and go as the
+// pane opens and closes.
+func (p *goPane) Children() []gunim.Node { return nil }
 
 const goPaneBar = 40
 
-// Layout implements [gunim.Node].
+// Layout implements [gunim.Node]: each sheet, the one shown and those
+// leaving, fills the pane.
 func (p *goPane) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	if p.v == nil {
-		p.size = geom.Size{}
-		return p.size
-	}
 	p.size = c.Max
-	body := p.v.paneView()
+	if kids.Len() == 0 {
+		return geom.Size{}
+	}
 	for k := range kids.All {
-		switch k.Node() {
-		case p.closer:
-			k.Layout(gunim.Tight(geom.Sz(32, 32)))
-			k.Place(geom.Pt(p.size.W-40, 4))
-		case p.title:
-			k.Layout(gunim.Constraints{Max: geom.Sz(p.size.W-72, 24)})
-			k.Place(geom.Pt(16, 10))
-		case body:
-			k.Layout(gunim.Tight(geom.Sz(max(p.size.W-32, 0), max(p.size.H-goPaneBar-12, 0))))
-			k.Place(geom.Pt(16, goPaneBar))
-		default:
-			// A plugin's view, left for another's.
-			k.Layout(gunim.Tight(geom.Size{}))
-		}
+		k.Layout(gunim.Tight(p.size))
+		k.Place(geom.Point{})
 	}
 	return p.size
 }
 
 // Paint implements [gunim.Node].
-func (p *goPane) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
-	if p.v == nil {
-		return
-	}
-	pal := colours(f.Theme)
-	r := geom.Rect{Max: box.Point()}
-	end := pt.Layer(paint.LayerOpts{Bounds: r, Opacity: min(max(p.shown.Value(), 0), 1)})
-	defer end()
-	pt.RRect(r, 10, paint.Solid(pal.raised))
-	pal.outline(pt, r, 10, 1)
+func (p *goPane) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
 	for k := range kids.All {
 		k.Paint(pt)
 	}
 }
 
-// Handle implements [gunim.Handler]: the pane takes the pointer, so
-// nothing under it does, and Escape closes it.
+// Handle implements [gunim.Handler]: the pane takes the pointer while
+// open, so nothing under it does, and Escape closes it.
 func (p *goPane) Handle(e input.Event, u *gunim.UI) bool {
 	if p.v == nil {
 		return false
@@ -378,8 +361,87 @@ func (p *goPane) Handle(e input.Event, u *gunim.UI) bool {
 	return true
 }
 
-// Step implements [gunim.Animator].
-func (p *goPane) Step(dt time.Duration) bool { return p.Group.Step(dt) }
+// goSheet is the sheet of a plugin's views, in the pane.
+type goSheet struct {
+	anim.Group
+	p      *goPane
+	v      *goView
+	title  *widget.Label
+	closer *widget.IconButton
+	// in is how far the sheet has come in, from 0 to 1, and leaving
+	// says it goes.
+	in      *anim.Float
+	leaving bool
+}
+
+func newGoSheet(p *goPane, v *goView) *goSheet {
+	sh := &goSheet{p: p, v: v, title: widget.NewLabel(""), in: anim.NewFloat(0)}
+	sh.title.NoWrap, sh.title.MaxLines = true, 1
+	sh.closer = widget.NewIconButton(icon.X, "Close")
+	sh.closer.OnClick = func(u *gunim.UI) gunim.Intent {
+		p.shut(u)
+		return nil
+	}
+	sh.Add(sh.in)
+	return sh
+}
+
+// Children implements [gunim.Composite].
+func (sh *goSheet) Children() []gunim.Node {
+	return []gunim.Node{sh.title, sh.closer, sh.v.paneView()}
+}
+
+// Transition implements [gunim.Transitioner]: in with a little spring,
+// and away a little quicker.
+func (sh *goSheet) Transition(pr gunim.Presence, _ gunim.Frame) bool {
+	switch pr {
+	case gunim.Entering:
+		sh.leaving = false
+		sh.in.Animate(1, anim.Spring{Response: 0.32, Damping: 0.86})
+	case gunim.Exiting:
+		sh.leaving = true
+		sh.in.Animate(0, anim.Spring{Response: 0.22, Damping: 1})
+	case gunim.Present:
+	}
+	return !sh.in.Active()
+}
+
+// Layout implements [gunim.Node].
+func (sh *goSheet) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+	size := c.Max
+	kids.At(1).Layout(gunim.Tight(geom.Sz(32, 32)))
+	kids.At(1).Place(geom.Pt(size.W-40, 4))
+	kids.At(0).Layout(gunim.Constraints{Max: geom.Sz(max(size.W-72, 0), 24)})
+	kids.At(0).Place(geom.Pt(16, 10))
+	kids.At(2).Layout(gunim.Tight(geom.Sz(max(size.W-32, 0), max(size.H-goPaneBar-12, 0))))
+	kids.At(2).Place(geom.Pt(16, goPaneBar))
+	return size
+}
+
+// Paint implements [gunim.Node]: faded and lowered as far as the sheet
+// is out.
+func (sh *goSheet) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	in := min(max(sh.in.Value(), 0), 1)
+	if in < 0.005 {
+		return
+	}
+	pal := colours(f.Theme)
+	r := geom.Rect{Max: box.Point()}
+	defer pt.Push(paint.Translate(geom.Pt(0, (1-in)*18)))()
+	end := pt.Layer(paint.LayerOpts{Bounds: r, Opacity: in})
+	defer end()
+	pt.RRect(r, 10, paint.Solid(pal.raised))
+	pal.outline(pt, r, 10, 1)
+	for k := range kids.All {
+		k.Paint(pt)
+	}
+}
+
+// Handle implements [gunim.Handler]: a sheet leaving takes nothing.
+func (sh *goSheet) Handle(_ input.Event, _ *gunim.UI) bool { return false }
+
+// Focusable implements [gunim.Focusable].
+func (sh *goSheet) Focusable() bool { return false }
 
 // paramsView is the studio's view of a plugin without one of its own
 // for the pane: a slider for each parameter shown.

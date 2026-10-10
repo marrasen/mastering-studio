@@ -121,7 +121,8 @@ func newRoot(d *deck) *root {
 	r.head = newTrackHead(r)
 	r.chainMenu = widget.NewContextMenu(r.chain, nil)
 	r.chain.menu = r.chainMenu
-	r.goViews, r.pane = map[int]*goView{}, newGoPane()
+	r.goViews = map[int]*goView{}
+	r.pane = newGoPane(r)
 	return r
 }
 

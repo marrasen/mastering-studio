@@ -380,3 +380,49 @@ func TestAGoPluginRunsWithoutLockingOrMakingAnything(t *testing.T) {
 		t.Fatalf("two sets came as %v", e.changes)
 	}
 }
+
+func TestThePaneAnimatesItsPluginsInOutAndAcross(t *testing.T) {
+	a := goAlbum(0)
+	eq := Slot{ID: 10, Path: goPath, Class: "marrasen.eq", Name: "EQ", Values: map[uint32]float64{1: 0}}
+	a.Tracks[0].Chain = append(a.Tracks[0].Chain, eq)
+	w, r, run := stage(t, a)
+	show := func(id, n int) {
+		t.Helper()
+		a.ShowGo, a.ShowGos = id, n
+		if err := w.Client().Publish(albumTopic, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	show(9, 1)
+	// A frame to start, and one to move.
+	run(2)
+	trimSheet := r.pane.sheets[r.goViews[9]]
+	if trimSheet == nil || trimSheet.in.Value() <= 0 || trimSheet.in.Value() >= 1 {
+		t.Fatal("the trim's sheet did not start coming in")
+	}
+	run(60)
+	if trimSheet.in.Value() != 1 || r.chain.cards[9].open.Target() != 1 {
+		t.Fatalf("the trim's sheet is in %v, its card open %v", trimSheet.in.Value(), r.chain.cards[9].open.Target())
+	}
+	// The EQ in the trim's place: the two cross.
+	show(10, 2)
+	run(2)
+	eqSheet := r.pane.sheets[r.goViews[10]]
+	if !trimSheet.leaving || trimSheet.in.Value() <= 0 || trimSheet.in.Value() >= 1 || eqSheet.in.Value() <= 0 || eqSheet.in.Value() >= 1 {
+		t.Fatalf("crossing, the trim's sheet is in %v (leaving %v), the EQ's %v", trimSheet.in.Value(), trimSheet.leaving, eqSheet.in.Value())
+	}
+	run(60)
+	if trimSheet.in.Value() != 0 || eqSheet.in.Value() != 1 || r.chain.cards[9].open.Target() != 0 || r.chain.cards[10].open.Target() != 1 {
+		t.Fatal("after crossing, the trim's sheet is not gone, or the EQ's not in")
+	}
+	// Closing: the EQ's sheet goes, a moment after.
+	w.Input(input.KeyPress{Key: input.KeyEscape})
+	run(2)
+	if r.pane.isOpen() || !eqSheet.leaving || eqSheet.in.Value() <= 0 {
+		t.Fatal("Escape closed the pane at once, or not at all")
+	}
+	run(60)
+	if eqSheet.in.Value() != 0 || r.chain.cards[10].open.Target() != 0 {
+		t.Fatal("the EQ's sheet did not go")
+	}
+}

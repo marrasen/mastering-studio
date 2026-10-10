@@ -265,6 +265,14 @@ func (c *chainRow) chips() []int {
 	return out
 }
 
+// showOpen shows slot id's card as open, or not, as the pane opens
+// and closes its plugin's views.
+func (c *chainRow) showOpen(id int, on bool) {
+	if k := c.cards[id]; k != nil {
+		k.open.Animate(onOff(on), anim.Gentle)
+	}
+}
+
 // syncChips puts the chips of the cards shown among the row's
 // children, and takes those of cards gone out.
 func (c *chainRow) syncChips(u *gunim.UI) {
