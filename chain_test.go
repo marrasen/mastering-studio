@@ -693,7 +693,7 @@ func TestTheGainAfterTheChainIsMeasured(t *testing.T) {
 }
 
 func TestTheTapHoldsWhatTheChainIsFed(t *testing.T) {
-	tap := newIOTap()
+	tap := newIOTap(tapKeep)
 	st := newStage(&clicks{at: 1000, n: 44100}, newRackOf(nil), 0)
 	st.tap = tap
 	buf := make([]float32, 2*700)
@@ -990,7 +990,7 @@ func TestAPluginsGainIsMeasuredAndPlayedInItsPlaceBypassed(t *testing.T) {
 		for i := range frames {
 			frames[i] = 0.5
 		}
-		r.process(r.enter(), frames)
+		r.process(r.enter(), frames, 0)
 		r.leave()
 		return frames[len(frames)-2]
 	}

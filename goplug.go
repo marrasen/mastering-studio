@@ -267,6 +267,9 @@ func (soundHost) BeginEdit(string, *gunim.UI)    {}
 func (soundHost) Changed(*gunim.UI)              {}
 func (soundHost) EndEdit(*gunim.UI)              {}
 
+// Sound implements [plug.Host]: the sound's own copy draws nothing.
+func (soundHost) Sound() (in, out plug.Sound) { return nil, nil }
+
 // goEngineOf returns slot id's Go plugin, loaded on track t, or nil.
 func (a *app) goEngineOf(t *Track, id int) *goEngine {
 	r := a.racks[t.ID]

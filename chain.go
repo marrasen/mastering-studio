@@ -155,10 +155,43 @@ type livePlugin struct {
 	gain float32
 	// edits is the count of the editor's edits last seen.
 	edits uint64
+	// taps, made as a view first asks, keep the sound fed into the
+	// plugin and the sound that comes out, for its views.
+	taps atomic.Pointer[plugTaps]
 }
 
-// newPlugin loads slot s's plugin at rate, of state, offline or not.
+// plugTaps are the taps of a plugin's sound.
+type plugTaps struct{ in, out *ioTap }
+
+// listen returns the plugin's taps, made the first time it is asked.
+func (lp *livePlugin) listen() *plugTaps {
+	if t := lp.taps.Load(); t != nil {
+		return t
+	}
+	lp.taps.CompareAndSwap(nil, &plugTaps{in: newIOTap(plugTapKeep), out: newIOTap(plugTapKeep)})
+	return lp.taps.Load()
+}
+
+// livePlugins are the plugins loaded to play, by slot, as a plugin's
+// views find the sound it plays; a copy loaded to measure or export is
+// not among them.
+var livePlugins sync.Map
+
+// forget takes lp out of livePlugins, as it closes.
+func (lp *livePlugin) forget() { livePlugins.CompareAndDelete(lp.slot, lp) }
+
+// newPlugin loads slot s's plugin at rate, of state, offline or not:
+// one loaded to play is among livePlugins.
 func newPlugin(s Slot, state []byte, rate int, offline bool) (*livePlugin, error) {
+	lp, err := loadPlugin(s, state, rate, offline)
+	if err == nil && !offline {
+		livePlugins.Store(s.ID, lp)
+	}
+	return lp, err
+}
+
+// loadPlugin loads slot s's plugin.
+func loadPlugin(s Slot, state []byte, rate int, offline bool) (*livePlugin, error) {
 	if s.goPlugin() {
 		return newGoPlugin(s, state, rate, offline)
 	}
@@ -382,6 +415,7 @@ func (r *rack) remove(id int) {
 	})
 	if gone != nil {
 		r.settle()
+		gone.forget()
 		gone.p.Close()
 	}
 }
@@ -411,8 +445,9 @@ func (r *rack) setBypass(id int, on bool) {
 // latency is how late the chain's sound comes, as last handed over.
 func (r *rack) latency() int { return r.run.Load().latency }
 
-// process runs frames through run's plugins.
-func (r *rack) process(run *rackRun, frames []float32) {
+// process runs frames through run's plugins: frames fed into the chain
+// from frame at on, which a plugin's taps keep.
+func (r *rack) process(run *rackRun, frames []float32, at int64) {
 	if r.holding.Load() {
 		clear(frames)
 		return
@@ -425,6 +460,10 @@ func (r *rack) process(run *rackRun, frames []float32) {
 		r.meters[0].Write(frames)
 	}
 	for i, rp := range run.plugins {
+		taps := rp.lp.taps.Load()
+		if taps != nil {
+			taps.in.write(at, frames)
+		}
 		if !rp.passed {
 			rp.lp.p.Process(frames)
 		}
@@ -432,6 +471,9 @@ func (r *rack) process(run *rackRun, frames []float32) {
 			for k := range frames {
 				frames[k] *= rp.gain
 			}
+		}
+		if taps != nil {
+			taps.out.write(at, frames)
 		}
 		if r.meters != nil {
 			r.meters[i+1].Write(frames)
@@ -543,6 +585,7 @@ func (r *rack) close() {
 	r.change(func() { ps, r.plugins = r.plugins, nil })
 	r.settle()
 	for _, lp := range ps {
+		lp.forget()
 		lp.p.Close()
 	}
 }
@@ -693,7 +736,7 @@ func (s *chainStage) Read(dst []float32) (int, error) {
 		dry := s.dryBuf[:2*k]
 		copy(dry, s.buf[:2*k])
 		s.delayed(dry)
-		s.r.process(run, s.buf[:2*k])
+		s.r.process(run, s.buf[:2*k], s.fed-int64(k))
 		s.skip -= k
 	}
 	if s.skip > 0 {
@@ -713,7 +756,7 @@ func (s *chainStage) Read(dst []float32) (int, error) {
 	dry := s.dryBuf[:2*n]
 	copy(dry, dst[:2*n])
 	s.delayed(dry)
-	s.r.process(run, dst[:2*n])
+	s.r.process(run, dst[:2*n], s.fed-int64(n))
 	// The gain after the chain, gliding to where it is set.
 	to := math.Float32frombits(s.outTo.Load())
 	if from := s.out; from != to || to != 1 {
@@ -776,15 +819,20 @@ func (s *chainStage) tapIn(frames []float32) {
 type ioTap struct {
 	// samples holds frames, in bits, and frames which frame of the
 	// sound each is, -1 while it is written.
-	samples [2 * tapKeep]atomic.Uint32
-	frames  [tapKeep]atomic.Int64
+	samples []atomic.Uint32
+	frames  []atomic.Int64
 }
 
-// tapKeep is how many frames a tap keeps.
-const tapKeep = 3 * 48000
+// tapKeep is how many frames the input's tap keeps, and plugTapKeep a
+// plugin's, for its views.
+const (
+	tapKeep     = 3 * 48000
+	plugTapKeep = 1 << 16
+)
 
-func newIOTap() *ioTap {
-	t := &ioTap{}
+// newIOTap returns a tap that keeps the last keep frames.
+func newIOTap(keep int) *ioTap {
+	t := &ioTap{samples: make([]atomic.Uint32, 2*keep), frames: make([]atomic.Int64, keep)}
 	for i := range t.frames {
 		t.frames[i].Store(-1)
 	}
@@ -794,7 +842,7 @@ func newIOTap() *ioTap {
 func (t *ioTap) write(at int64, frames []float32) {
 	for i := 0; i+1 < len(frames); i += 2 {
 		f := at + int64(i/2)
-		k := int(f % tapKeep)
+		k := int(f % int64(len(t.frames)))
 		t.frames[k].Store(-1)
 		t.samples[2*k].Store(math.Float32bits(frames[i]))
 		t.samples[2*k+1].Store(math.Float32bits(frames[i+1]))
@@ -805,7 +853,7 @@ func (t *ioTap) write(at int64, frames []float32) {
 // read appends to dst the frames fed from frame from up to to.
 func (t *ioTap) read(dst []float32, from, to int64) []float32 {
 	for f := max(from, 0); f < to; f++ {
-		k := int(f % tapKeep)
+		k := int(f % int64(len(t.frames)))
 		if t.frames[k].Load() != f {
 			continue
 		}

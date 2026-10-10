@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"runtime"
 	"slices"
 	"testing"
 	"time"
@@ -359,16 +358,12 @@ func TestAGoPluginRunsWithoutLockingOrMakingAnything(t *testing.T) {
 	}
 	// On one thread, as testing.AllocsPerRun counts, so other
 	// goroutines allocate as little as may be meanwhile.
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var made uint64
-	for i := range 50 {
-		e.setParam(trim.GainID, float64(i%10))
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		e.Process(frames)
-		runtime.ReadMemStats(&after)
-		made += after.Mallocs - before.Mallocs
-	}
+	made := allocsUnder(t, "(*goEngine).Process", func() {
+		for i := range 50 {
+			e.setParam(trim.GainID, float64(i%10))
+			e.Process(frames)
+		}
+	})
 	if made != 0 {
 		t.Fatalf("processing made %d things over 50 blocks", made)
 	}

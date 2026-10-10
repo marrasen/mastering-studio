@@ -1,7 +1,6 @@
 package main
 
 import (
-	"runtime"
 	"sync/atomic"
 	"testing"
 
@@ -126,36 +125,37 @@ func TestTheChainMakesNothingAsItPlays(t *testing.T) {
 		r.add(lp)
 	}
 	st := newStage(&endless{}, r, -1)
-	st.tap, st.bypass = newIOTap(), &atomic.Bool{}
+	st.tap, st.bypass = newIOTap(tapKeep), &atomic.Bool{}
+	// The plugins' taps keep their sound too, as for their views.
+	for _, lp := range r.list() {
+		lp.listen()
+	}
 	dst := make([]float32, 2*stageChunk)
 	// The first read aligns, as every change after.
 	if _, err := st.Read(dst); err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	if raceOn {
 		t.Skip("the race detector allocates of its own")
 	}
-	var made uint64
-	for i := range 200 {
-		// The application changes the chain between reads, as it
-		// will: what it makes is its own, and not counted.
-		switch i % 4 {
-		case 0:
-			r.setBypass(1+i%3, i%8 == 0)
-		case 1:
-			st.bypass.Store(i%3 == 0)
-		case 2:
-			r.setMatch(i%6 == 2)
+	// Only what reading makes counts: what the application makes
+	// between reads, and other goroutines meanwhile, does not.
+	made := allocsUnder(t, "(*chainStage).Read", func() {
+		for i := range 200 {
+			switch i % 4 {
+			case 0:
+				r.setBypass(1+i%3, i%8 == 0)
+			case 1:
+				st.bypass.Store(i%3 == 0)
+			case 2:
+				r.setMatch(i%6 == 2)
+			}
+			if _, err := st.Read(dst); err != nil {
+				t.Error(err)
+				return
+			}
 		}
-		var before, after runtime.MemStats
-		runtime.ReadMemStats(&before)
-		if _, err := st.Read(dst); err != nil {
-			t.Fatal(err)
-		}
-		runtime.ReadMemStats(&after)
-		made += after.Mallocs - before.Mallocs
-	}
+	})
 	if made != 0 {
 		t.Fatalf("the chain made %d things over 200 reads", made)
 	}

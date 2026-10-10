@@ -189,6 +189,23 @@ type Host interface {
 	BeginEdit(name string, u *gunim.UI)
 	Changed(u *gunim.UI)
 	EndEdit(u *gunim.UI)
+	// Sound returns the plugin's sound as it is heard, for views that
+	// draw it, as a meter or a spectrum: what is fed into the plugin,
+	// and what comes out. Either is nil where the host keeps none.
+	Sound() (in, out Sound)
+}
+
+// Sound is a plugin's sound, as the host keeps it while it plays.
+type Sound interface {
+	// Heard fills dst, stereo frames interleaved, with the last frames
+	// heard, the last of them last, and returns how many it filled, the
+	// count of frames heard by then, and their rate. The count moves on
+	// as the sound plays and stands still while it does not, so a view
+	// that reads as many frames as it moved on reads each frame once.
+	// Heard fills none, and returns nothing, where none have been
+	// heard. It runs on the window's goroutine, and takes no lock the
+	// sound takes.
+	Heard(dst []float32) (frames int, at int64, rate int)
 }
 
 var (

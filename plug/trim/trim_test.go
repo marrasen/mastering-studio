@@ -4,6 +4,7 @@ import (
 	"math"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/mastering-studio/plug"
@@ -13,6 +14,8 @@ import (
 type host struct {
 	values map[uint32]float64
 	log    []string
+	// out is the sound the views hear come out, or nil.
+	out plug.Sound
 }
 
 func (h *host) Param(id uint32) float64 { return h.values[id] }
@@ -25,6 +28,7 @@ func (h *host) End(uint32, *gunim.UI)              { h.log = append(h.log, "end"
 func (h *host) BeginEdit(name string, _ *gunim.UI) { h.log = append(h.log, "edit "+name) }
 func (h *host) Changed(*gunim.UI)                  { h.log = append(h.log, "changed") }
 func (h *host) EndEdit(*gunim.UI)                  { h.log = append(h.log, "end edit") }
+func (h *host) Sound() (in, out plug.Sound)        { return nil, h.out }
 
 func newPlugin(t *testing.T) (plug.Plugin, *host) {
 	t.Helper()
@@ -105,25 +109,25 @@ func TestTheViewsWorkThroughTheHost(t *testing.T) {
 		t.Error("the trim has a full view of its own")
 	}
 	c, ok := v.View(plug.Chip, h).(*chip)
-	if !ok || c.Text != "-3.0 dB" {
-		t.Fatalf("the chip shows %q, want -3.0 dB", c.Text)
+	if !ok || c.label.Text != "-3.0 dB" {
+		t.Fatalf("the chip shows %q, want -3.0 dB", c.label.Text)
 	}
 	c.Follow(GainID, 1.5, nil)
-	if c.Text != "+1.5 dB" {
-		t.Errorf("the chip follows to %q, want +1.5 dB", c.Text)
+	if c.label.Text != "+1.5 dB" {
+		t.Errorf("the chip follows to %q, want +1.5 dB", c.label.Text)
 	}
 
 	pn, ok := v.View(plug.Panel, h).(*panel)
-	if !ok || pn.Slider.Value() != -3 {
+	if !ok || pn.row.Slider.Value() != -3 {
 		t.Fatal("the panel's slider does not start at the host's gain")
 	}
 	// A drag of two steps and a let-go is one gesture.
 	var u *gunim.UI
-	pn.Slider.OnChange(-2, u)
-	pn.Slider.OnChange(-1, u)
-	pn.Slider.OnCommit(-1, u)
+	pn.row.Slider.OnChange(-2, u)
+	pn.row.Slider.OnChange(-1, u)
+	pn.row.Slider.OnCommit(-1, u)
 	// A key's step commits alone, as a gesture of its own.
-	pn.Slider.OnCommit(-0.9, u)
+	pn.row.Slider.OnCommit(-0.9, u)
 	want := []string{"begin", "set", "set", "set", "end", "begin", "set", "end"}
 	if !slices.Equal(h.log, want) {
 		t.Errorf("the host heard %v, want %v", h.log, want)
@@ -132,7 +136,55 @@ func TestTheViewsWorkThroughTheHost(t *testing.T) {
 		t.Errorf("the host's gain is %v, want -0.9", h.values[GainID])
 	}
 	pn.Follow(GainID, 6, nil)
-	if pn.Slider.Value() != 6 {
-		t.Errorf("the slider follows to %v, want 6", pn.Slider.Value())
+	if pn.row.Slider.Value() != 6 {
+		t.Errorf("the slider follows to %v, want 6", pn.row.Slider.Value())
+	}
+}
+
+// steady is a sound at one level, heard to frame at.
+type steady struct {
+	level float32
+	at    int64
+}
+
+func (s *steady) Heard(dst []float32) (frames int, at int64, rate int) {
+	for i := range dst {
+		dst[i] = s.level
+	}
+	return len(dst) / 2, s.at, 48000
+}
+
+func TestTheChipMetersTheSoundAndRestsWhenItStops(t *testing.T) {
+	p, h := newPlugin(t)
+	s := &steady{level: 0.5}
+	h.out = s
+	v, ok := p.(plug.Viewer)
+	if !ok {
+		t.Fatal("the trim has no views")
+	}
+	c, ok := v.View(plug.Chip, h).(*chip)
+	if !ok {
+		t.Fatal("the chip is of another type")
+	}
+	frame := time.Second / 60
+	for range 60 {
+		s.at += 800
+		if !c.Step(frame) {
+			t.Fatal("the chip rests while the sound plays")
+		}
+	}
+	if rms := c.out.levels.RMS[0]; math.Abs(float64(rms)+6.02) > 0.5 {
+		t.Fatalf("a steady half of full scale meters %v dB, want -6", rms)
+	}
+	// The sound stops: the levels fall, and the chip comes to rest.
+	rested := false
+	for range 60 * 20 {
+		if !c.Step(frame) {
+			rested = true
+			break
+		}
+	}
+	if !rested {
+		t.Fatal("the chip never rests once the sound stops")
 	}
 }

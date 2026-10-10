@@ -20,6 +20,8 @@ import (
 type host struct {
 	values map[uint32]float64
 	log    []string
+	// in and out are the sound the views hear, or nil.
+	in, out plug.Sound
 }
 
 func (h *host) Param(id uint32) float64 { return h.values[id] }
@@ -32,6 +34,7 @@ func (h *host) End(uint32, *gunim.UI)              { h.log = append(h.log, "end"
 func (h *host) BeginEdit(name string, _ *gunim.UI) { h.log = append(h.log, "edit "+name) }
 func (h *host) Changed(*gunim.UI)                  { h.log = append(h.log, "changed") }
 func (h *host) EndEdit(*gunim.UI)                  { h.log = append(h.log, "end edit") }
+func (h *host) Sound() (in, out plug.Sound)        { return h.in, h.out }
 
 func newEQ(t *testing.T) (*plugin, *host) {
 	t.Helper()
@@ -385,5 +388,55 @@ func TestTheChipDrawsTheCurveAndFlattensBypassed(t *testing.T) {
 	c.Follow(BypassID, 1, nil)
 	if !c.bypass {
 		t.Error("the chip did not follow the bypass")
+	}
+}
+
+// tone is a 1 kHz tone at a level, played to frame at, at 48 kHz.
+type tone struct {
+	level float64
+	at    int64
+}
+
+func (s *tone) Heard(dst []float32) (frames int, at int64, rate int) {
+	n := len(dst) / 2
+	for i := range n {
+		v := float32(s.level * math.Sin(2*math.Pi*1000*float64(s.at-int64(n)+int64(i))/48000))
+		dst[2*i], dst[2*i+1] = v, v
+	}
+	return n, s.at, 48000
+}
+
+func TestTheGraphShowsTheSpectrumBeforeAndAfter(t *testing.T) {
+	p, h := newEQ(t)
+	in, out := &tone{level: 0.25}, &tone{level: 0.5}
+	h.in, h.out = in, out
+	g := newGraph(p, h)
+	frame := time.Second / 60
+	for range 120 {
+		in.at += 800
+		out.at += 800
+		if !g.Step(frame) {
+			t.Fatal("the graph rests while the sound plays")
+		}
+	}
+	k := 0
+	for i, f := range g.spec.freqs {
+		if math.Abs(float64(f)-1000) < math.Abs(float64(g.spec.freqs[k])-1000) {
+			k = i
+		}
+	}
+	if d := g.spec.heardSm[k] - g.spec.beforeSm[k]; math.Abs(float64(d)-6.02) > 0.5 {
+		t.Fatalf("at 1 kHz the sound after is %.2f dB over the sound before, want 6", d)
+	}
+	// The sound stops: the spectrum falls, and the graph comes to rest.
+	rested := false
+	for range 60 * 30 {
+		if !g.Step(frame) {
+			rested = true
+			break
+		}
+	}
+	if !rested || g.spec.heardSm[k] > specBottom {
+		t.Fatalf("the spectrum stays at %v once the sound stops", g.spec.heardSm[k])
 	}
 }

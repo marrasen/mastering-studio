@@ -53,7 +53,7 @@ type deck struct {
 
 func newDeck(mix *audio.Mixer) *deck {
 	an := audio.NewAnalyzer(mix, 32)
-	return &deck{mix: mix, an: an, volume: 0.8, matches: map[int]float32{}, turns: make(chan int, 8), tap: newIOTap(),
+	return &deck{mix: mix, an: an, volume: 0.8, matches: map[int]float32{}, turns: make(chan int, 8), tap: newIOTap(tapKeep),
 		monitor: &monitor{}}
 }
 
@@ -222,6 +222,20 @@ func (d *deck) position() (at, length time.Duration, id int) {
 	// Looping, the voice counts on through the jumps back: where in the
 	// track that is takes them away.
 	return sw.mapped(v.Position()), v.Len(), id
+}
+
+// heardFed returns the frame fed into the chain of the track playing
+// that is heard now, at the chain's rate, and whether one plays: where
+// the views of a plugin read the sound it plays.
+func (d *deck) heardFed() (at int64, rate int, ok bool) {
+	d.mu.Lock()
+	v, rate, r := d.voice, d.rate, d.rack
+	d.mu.Unlock()
+	if v == nil || r == nil || rate == 0 {
+		return 0, 0, false
+	}
+	// The chain is fed its latency ahead of what comes out.
+	return frames(v.Position(), rate) + int64(r.latency()), rate, true
 }
 
 // heardFrames is the frames the voice has given since it was last

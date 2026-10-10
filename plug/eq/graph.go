@@ -90,10 +90,108 @@ type graph struct {
 	bypassAmt, ring *anim.Float
 	// laid says the graph has been laid out once: before, springs jump.
 	laid bool
+	spec spectrum
+}
+
+// The spectrum behind the bands: specPoints frequencies across, the
+// last specFrames frames heard of each. specTilt lifts it this many
+// decibels an octave above 1 kHz, and lowers it below, so music, which
+// has less in its higher pitches, reads about level, as analyzers in
+// studios show it; specTop and specBottom are the levels it runs
+// between, after the tilt.
+const (
+	specPoints          = 240
+	specFrames          = 4096
+	specTilt            = 4.5
+	specTop, specBottom = 0, -96
+)
+
+// spectrum is the sound before the EQ and after it, as the graph draws
+// it behind the bands: measured as the sound is heard, its levels rising
+// at once and falling slower, as a meter's do.
+type spectrum struct {
+	in, out   plug.Sound
+	at        int64
+	meter     *audioui.Spectrometer
+	frames    []float32
+	freqs     []float32
+	heard     []float32
+	before    []float32
+	heardSm   []float32
+	beforeSm  []float32
+	smoothed  []float32
+	smoothedB []float32
+}
+
+func newSpectrum(h plug.Host) spectrum {
+	s := spectrum{meter: audioui.NewSpectrometer(specFrames), frames: make([]float32, 2*specFrames)}
+	s.in, s.out = h.Sound()
+	s.freqs = make([]float32, specPoints)
+	for i := range s.freqs {
+		s.freqs[i] = float32(eqLow * math.Pow(eqHigh/eqLow, float64(i)/(specPoints-1)))
+	}
+	for _, p := range []*[]float32{&s.heard, &s.before, &s.heardSm, &s.beforeSm, &s.smoothed, &s.smoothedB} {
+		*p = make([]float32, specPoints)
+		for i := range *p {
+			(*p)[i] = specBottom - 20
+		}
+	}
+	return s
+}
+
+// measure measures what was heard last, before the EQ and after, and
+// reports whether there was any: none while the sound stands still.
+func (s *spectrum) measure() bool {
+	if s.in == nil || s.out == nil {
+		return false
+	}
+	n, at, rate := s.out.Heard(s.frames)
+	if at == 0 || at == s.at || n < specFrames {
+		return false
+	}
+	s.at = at
+	if !s.meter.Measure(s.frames[:2*n], rate, s.freqs, s.heard) {
+		return false
+	}
+	if n, _, _ := s.in.Heard(s.frames); n == specFrames {
+		s.meter.Measure(s.frames, rate, s.freqs, s.before)
+	}
+	return true
+}
+
+// step moves the levels drawn a frame's way toward those measured,
+// toward silence while nothing plays, and reports whether they still
+// move.
+func (s *spectrum) step(dt time.Duration) bool {
+	playing := s.measure()
+	if !playing {
+		for i := range s.heard {
+			s.heard[i], s.before[i] = specBottom-20, specBottom-20
+		}
+	}
+	sec := float32(dt.Seconds())
+	settled := true
+	ease := func(v *float32, to float32) {
+		rate := float32(30)
+		if to < *v {
+			rate = 6
+		}
+		*v += (to - *v) * min(1, rate*sec)
+		if math.Abs(float64(to-*v)) > 0.3 {
+			settled = false
+		}
+	}
+	for i, f := range s.freqs {
+		tilt := float32(specTilt * math.Log2(float64(f)/1000))
+		ease(&s.heardSm[i], s.heard[i]+tilt)
+		ease(&s.beforeSm[i], s.before[i]+tilt)
+	}
+	return playing || !settled
 }
 
 func newGraph(p *plugin, h plug.Host) *graph {
-	g := &graph{p: p, host: h, dots: map[int]*dot{}, bypassAmt: anim.NewFloat(0), ring: anim.NewFloat(0)}
+	g := &graph{p: p, host: h, dots: map[int]*dot{}, bypassAmt: anim.NewFloat(0), ring: anim.NewFloat(0),
+		spec: newSpectrum(h)}
 	g.Add(g.bypassAmt, g.ring)
 	g.bands = p.Bands()
 	g.bypass = h.Param(BypassID) > 0.5
@@ -657,6 +755,9 @@ func (g *graph) prepare(at geom.Point, u *gunim.UI) bool {
 // gone are dropped once they have shrunk away.
 func (g *graph) Step(dt time.Duration) bool {
 	moving := g.Group.Step(dt)
+	if g.spec.step(dt) {
+		moving = true
+	}
 	for id, d := range g.dots {
 		if d.gone && d.in.Value() < 0.01 && !d.in.Active() {
 			g.Remove(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot)
@@ -694,6 +795,7 @@ func (g *graph) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	p.RRect(whole, radius, paint.Solid(audioui.Ground.Get(th)))
 	end := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: 1, Clip: true, Radius: radius})
 	g.paintGrid(p, th, box)
+	g.paintSpectrum(p, th, box)
 	bypass := g.bypassAmt.Value()
 	g.paintCurve(p, th, box, bypass)
 	g.paintDots(p, th, bypass)
@@ -705,6 +807,57 @@ func (g *graph) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	}
 	end()
 	widget.GroupRing(p, whole, radius, g.ring.Value(), th)
+}
+
+// specY is where on the graph a level of the spectrum is.
+func (g *graph) specY(db float32) float32 {
+	t := (db - specBottom) / (specTop - specBottom)
+	return g.size.H * (1 - max(0, min(t, 1)))
+}
+
+// paintSpectrum draws the sound after the EQ, filled, and before it as
+// a pale line over the fill: where the EQ lifts, the fill rises above
+// the line, and where it cuts, the line runs above the fill.
+func (g *graph) paintSpectrum(p *paint.Painter, th *theme.Live, box geom.Size) {
+	s := &g.spec
+	heard, before := smooth(s.heardSm, s.smoothed), smooth(s.beforeSm, s.smoothedB)
+	accent, ink := widget.Accent.Get(th), widget.Ink.Get(th)
+	step := math.Pow(eqHigh/eqLow, 0.5/(specPoints-1))
+	for i, f := range s.freqs {
+		// Whole pixels, each column starting where the last ended, so
+		// none overlap and the fill is even.
+		x0 := float32(math.Round(float64(g.xOf(float64(f) / step))))
+		x1 := float32(math.Round(float64(g.xOf(float64(f) * step))))
+		if y := g.specY(heard[i]); x1 > x0 && y < box.H {
+			p.RRect(geom.Rc(x0, y, x1-x0, box.H-y), 0, paint.Solid(audioui.Faded(accent, 0.18)))
+		}
+	}
+	var prevHeard, prevBefore geom.Point
+	for i, f := range s.freqs {
+		x := g.xOf(float64(f))
+		h, b := geom.Pt(x, g.specY(heard[i])), geom.Pt(x, g.specY(before[i]))
+		if i > 0 {
+			audioui.Segment(p, prevHeard, h, 1.5, audioui.Faded(accent, 0.6))
+			audioui.Segment(p, prevBefore, b, 1.2, audioui.Faded(ink, 0.4))
+		}
+		prevHeard, prevBefore = h, b
+	}
+}
+
+// smooth fills out with db evened across its neighbours, as a studio's
+// analyzer evens a spectrum across a fraction of an octave, and returns
+// it.
+func smooth(db, out []float32) []float32 {
+	for i := range db {
+		sum, n := float32(0), float32(0)
+		for j := max(i-2, 0); j <= min(i+2, len(db)-1); j++ {
+			w := float32(3 - max(i-j, j-i))
+			sum += db[j] * w
+			n += w
+		}
+		out[i] = sum / n
+	}
+	return out
 }
 
 // paintGrid draws the lines of the octaves' landmarks and of every 6

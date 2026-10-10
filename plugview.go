@@ -206,6 +206,46 @@ func (h goHost) EndEdit(*gunim.UI) {
 	h.v.editing, h.v.gesture = false, 0
 }
 
+// Sound implements [plug.Host]: the sound the slot's plugin plays, as
+// it is heard, wherever the track plays.
+func (h goHost) Sound() (in, out plug.Sound) {
+	return heardSound{slot: h.v.slot, d: h.v.r.d}, heardSound{slot: h.v.slot, d: h.v.r.d, out: true}
+}
+
+// heardSound is the sound fed into a slot's plugin, or, out, the sound
+// that comes out, read from its taps up to the frame heard. The plugin
+// is found anew at each read, so a chain loaded since, or anew, is
+// heard as well.
+type heardSound struct {
+	slot int
+	d    *deck
+	out  bool
+}
+
+// Heard implements [plug.Sound].
+func (s heardSound) Heard(dst []float32) (frames int, at int64, rate int) {
+	v, ok := livePlugins.Load(s.slot)
+	if !ok {
+		return 0, 0, 0
+	}
+	lp, ok := v.(*livePlugin)
+	if !ok {
+		return 0, 0, 0
+	}
+	upto, rate, ok := s.d.heardFed()
+	if !ok {
+		return 0, 0, 0
+	}
+	t := lp.listen()
+	tap := t.in
+	if s.out {
+		tap = t.out
+	}
+	n := int64(len(dst) / 2)
+	got := tap.read(dst[:0], upto-n, upto)
+	return len(got) / 2, upto, rate
+}
+
 // showGo makes and keeps the views of track t's Go plugins, and lets
 // those of plugins gone go.
 func (r *root) showGo(t Track, s, was Album, u *gunim.UI) {

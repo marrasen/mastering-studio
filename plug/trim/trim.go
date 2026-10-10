@@ -7,8 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/access"
+	"github.com/marrasen/gunim/audioui"
+	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
 )
@@ -135,28 +140,102 @@ func (p *processor) Tail() int { return 0 }
 // Reset implements [plug.Processor]: the gain stops gliding, there.
 func (p *processor) Reset() { p.gain = p.target }
 
-// chip shows the gain, in a plugin's chip in a chain.
-type chip struct{ *widget.Label }
+// meter is a pair of levels, left and right, of a sound as it is
+// heard, taken a frame of the window at a time.
+type meter struct {
+	l      plug.Listener
+	levels *audioui.Levels
+}
+
+func newMeter(s plug.Sound) *meter {
+	return &meter{l: plug.Listener{Sound: s}, levels: audioui.NewLevels()}
+}
+
+// step takes what was heard over dt, and says the levels still move.
+func (m *meter) step(dt time.Duration) bool {
+	if frames, rate := m.l.Listen(8192); len(frames) > 0 {
+		m.levels.Take(frames, rate, dt)
+		return true
+	}
+	m.levels.Quiet(dt)
+	return m.levels.Peak[0] > -89 || m.levels.Peak[1] > -89 || m.levels.RMS[0] > -89 || m.levels.RMS[1] > -89
+}
+
+// chip shows the gain, in a plugin's chip in a chain, and, beside it,
+// the level that comes out, left over right.
+type chip struct {
+	label *widget.Label
+	out   *meter
+	size  geom.Size
+}
 
 func newChip(h plug.Host) *chip {
 	l := widget.NewLabel(gainText(h.Param(GainID)))
 	l.NoWrap, l.MaxLines = true, 1
-	return &chip{l}
+	_, out := h.Sound()
+	return &chip{label: l, out: newMeter(out)}
 }
+
+// Children implements [gunim.Composite].
+func (c *chip) Children() []gunim.Node { return []gunim.Node{c.label} }
+
+// chipBars is how wide the chip's bars are.
+const chipBars = 40
+
+// Layout implements [gunim.Node]: the gain, and the bars at the right.
+func (c *chip) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+	c.size = cs.Max
+	kids.At(0).Layout(gunim.Constraints{Max: geom.Sz(max(c.size.W-chipBars-6, 0), c.size.H)})
+	kids.At(0).Place(geom.Point{})
+	return c.size
+}
+
+// Paint implements [gunim.Node]: each channel's RMS over its peak,
+// fainter, coral where it reaches full scale.
+func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	kids.At(0).Paint(p)
+	ink, ground, over := widget.Ink.Get(f.Theme), audioui.Ground.Get(f.Theme), audioui.Over.Get(f.Theme)
+	x, h := box.W-chipBars, float32(3)
+	top := (box.H - 2*h - 2) / 2
+	lv := c.out.levels
+	for ch := range 2 {
+		y := top + float32(ch)*(h+2)
+		p.RRect(geom.Rc(x, y, chipBars, h), h/2, paint.Solid(audioui.Faded(ground, 0.85)))
+		if pk := audioui.MeterAt(lv.Peak[ch]); lv.Peak[ch] > -59 {
+			p.RRect(geom.Rc(x, y, chipBars*pk, h), h/2, paint.Solid(audioui.Faded(ink, 0.3)))
+		}
+		if lv.RMS[ch] > -59 {
+			c := ink
+			if lv.Peak[ch] > -0.1 {
+				c = over
+			}
+			p.RRect(geom.Rc(x, y, chipBars*audioui.MeterAt(lv.RMS[ch]), h), h/2, paint.Solid(audioui.Faded(c, 0.85)))
+		}
+	}
+}
+
+// Step implements [gunim.Animator].
+func (c *chip) Step(dt time.Duration) bool { return c.out.step(dt) }
+
+// Access implements [gunim.Accessible]: the chip reads as the gain.
+func (c *chip) Access() access.Info { return c.label.Access() }
 
 // Follow implements [plug.Follower].
 func (c *chip) Follow(id uint32, v float64, u *gunim.UI) {
 	if id == GainID {
-		c.Text = gainText(v)
+		c.label.Text = gainText(v)
 		u.Invalidate()
 	}
 }
 
-// panel is a slider for the gain.
+// panel is the gain's slider, and meters of the sound fed in and the
+// sound that comes out.
 type panel struct {
-	*widget.SliderRow
+	row     *widget.SliderRow
+	in, out *meter
 	// held says a gesture on the slider has begun with the host.
 	held bool
+	size geom.Size
 }
 
 func newPanel(h plug.Host) *panel {
@@ -164,8 +243,9 @@ func newPanel(h plug.Host) *panel {
 	s := widget.NewSlider(float32(g.Min), float32(g.Max))
 	s.Snap, s.Rest, s.HasRest = 0.1, float32(g.Default), true
 	s.SetValue(float32(h.Param(GainID)), nil)
-	p := &panel{SliderRow: widget.NewSliderRow(g.Name, s)}
-	p.Format = func(v float32) string { return gainText(float64(v)) }
+	in, out := h.Sound()
+	p := &panel{row: widget.NewSliderRow(g.Name, s), in: newMeter(in), out: newMeter(out)}
+	p.row.Format = func(v float32) string { return gainText(float64(v)) }
 	s.OnChange = func(v float32, u *gunim.UI) gunim.Intent {
 		if !p.held {
 			h.Begin(GainID, u)
@@ -186,10 +266,50 @@ func newPanel(h plug.Host) *panel {
 	return p
 }
 
+// The panel's meters: their place, and the room their labels take.
+const (
+	meterTop  = 52
+	meterGap  = 24
+	metersW   = 2*audioui.MeterW + meterGap
+	panelSide = 32
+)
+
+// Children implements [gunim.Composite].
+func (p *panel) Children() []gunim.Node { return []gunim.Node{p.row} }
+
+// Layout implements [gunim.Node]: the meters at the left, the slider
+// beside them.
+func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+	p.size = c.Max
+	x := float32(metersW + panelSide)
+	sz := kids.At(0).Layout(gunim.Constraints{Max: geom.Sz(min(max(p.size.W-x, 0), 460), p.size.H)})
+	kids.At(0).Place(geom.Pt(x, meterTop-36+max(0, (36-sz.H)/2)))
+	return p.size
+}
+
+// Paint implements [gunim.Node]: the meters, In and Out, under their
+// names.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	bottom := max(box.H-12, meterTop+40)
+	for i, m := range []*meter{p.in, p.out} {
+		x := float32(i) * (audioui.MeterW + meterGap)
+		name := audioui.Shaped([]string{"IN", "OUT"}[i], 9, true, false)
+		name.Paint(pt, geom.Pt(x+(audioui.MeterW-name.Advance)/2, bottom+2), audioui.Faded(widget.Ink.Get(f.Theme), 0.6))
+		audioui.PaintMeter(pt, f.Theme, geom.Rect{Min: geom.Pt(x, meterTop), Max: geom.Pt(x+audioui.MeterW, bottom-12)}, m.levels)
+	}
+	kids.At(0).Paint(pt)
+}
+
+// Step implements [gunim.Animator].
+func (p *panel) Step(dt time.Duration) bool {
+	in, out := p.in.step(dt), p.out.step(dt)
+	return in || out
+}
+
 // Follow implements [plug.Follower]: the slider glides to a gain set
 // elsewhere, unless it is held.
 func (p *panel) Follow(id uint32, v float64, u *gunim.UI) {
-	if id == GainID && !p.Slider.Held() {
-		p.Slider.SetValue(float32(v), u)
+	if id == GainID && !p.row.Slider.Held() {
+		p.row.Slider.SetValue(float32(v), u)
 	}
 }

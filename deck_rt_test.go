@@ -1,12 +1,14 @@
 package main
 
 import (
+	"math"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/mastering-studio/plug/trim"
 )
 
 // playingDeck plays a 20-second track at 44.1 kHz through a chain of
@@ -148,4 +150,48 @@ func TestPlayingChangesAsTheApplicationWorksMeanwhile(t *testing.T) {
 	}
 	close(stop)
 	<-done
+}
+
+func TestAPluginsViewsHearItsSoundInAndOut(t *testing.T) {
+	d, mix, _ := playingDeck(t, 44100)
+	// The second trim, at -6 dB, played through.
+	v, ok := livePlugins.Load(2)
+	lp, isLive := v.(*livePlugin)
+	if !ok || !isLive {
+		t.Fatal("the trim playing is not among the plugins live")
+	}
+	e, ok := lp.p.(*goEngine)
+	if !ok {
+		t.Fatal("the trim is no Go plugin")
+	}
+	e.setParam(trim.GainID, -6)
+	in := heardSound{slot: 2, d: d}
+	out := heardSound{slot: 2, d: d, out: true}
+	dst := make([]float32, 2*2048)
+	// Asked the first time, it starts keeping the sound.
+	in.Heard(dst)
+	buf := make([]float32, 2*512)
+	for range 400 {
+		mix.Mix(buf)
+	}
+	rms := func(s heardSound) float64 {
+		t.Helper()
+		n, _, rate := s.Heard(dst)
+		if n != 2048 || rate != 44100 {
+			t.Fatalf("heard %d frames at %d Hz, want 2048 at 44100", n, rate)
+		}
+		var sum float64
+		for _, x := range dst[:2*n] {
+			sum += float64(x) * float64(x)
+		}
+		return math.Sqrt(sum / float64(2*n))
+	}
+	ri, ro := rms(in), rms(out)
+	if ri == 0 || math.Abs(ro/ri-math.Pow(10, -6.0/20)) > 0.01 {
+		t.Fatalf("the trim at -6 dB is heard at %.4f in and %.4f out", ri, ro)
+	}
+	// Nothing heard of a slot that plays nowhere.
+	if n, _, _ := (heardSound{slot: 99, d: d}).Heard(dst); n != 0 {
+		t.Fatalf("a slot playing nowhere is heard, %d frames", n)
+	}
 }
