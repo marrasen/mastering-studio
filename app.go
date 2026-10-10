@@ -215,6 +215,12 @@ type (
 	PlayFromStart struct{}
 	// SeekTo moves the track playing.
 	SeekTo struct{ At time.Duration }
+	// PlayAt plays a track from At, picking it where it is another: as
+	// one step, so nothing plays from where picking alone would start.
+	PlayAt struct {
+		ID int
+		At time.Duration
+	}
 	// SetGap sets the silence before every track.
 	SetGap struct{ Gap time.Duration }
 	// SetTarget sets the album's target loudness.
@@ -1185,6 +1191,20 @@ func (a *app) play(at, fade time.Duration) {
 	a.applyLevel()
 }
 
+// pick makes track to the one picked, playing it from at where play
+// says so, with a crossfade from the one before too short to hear as
+// one.
+func (a *app) pick(to *Track, at time.Duration, play bool) {
+	a.Current = to.ID
+	a.dirty = true
+	if play {
+		a.play(at, 25*time.Millisecond)
+	} else {
+		a.d.stop()
+	}
+	a.applyLevel()
+}
+
 func (a *app) handle(in gunim.Intent) {
 	// A change of the album's is a step to undo, and not yet saved.
 	if label, track, key, ok := a.change(in); ok {
@@ -1252,17 +1272,17 @@ func (a *app) handle(in gunim.Intent) {
 			return
 		}
 		at, _, _ := a.d.position()
-		at = a.carried(a.track(a.Current), to, at)
-		a.Current = in.ID
-		a.dirty = true
-		if a.Playing {
-			// Where Carry says in the other track, with a crossfade too
-			// short to hear as one.
-			a.play(at, 25*time.Millisecond)
-		} else {
-			a.d.stop()
+		// Where Carry says in the other track.
+		a.pick(to, a.carried(a.track(a.Current), to, at), a.Playing)
+	case PlayAt:
+		to := a.track(in.ID)
+		switch {
+		case to == nil:
+		case in.ID == a.Current:
+			a.handle(SeekTo{At: in.At})
+		default:
+			a.pick(to, in.At, true)
 		}
-		a.applyLevel()
 	case SetEdit:
 		t := a.track(in.ID)
 		if t == nil {

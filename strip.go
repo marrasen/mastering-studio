@@ -88,10 +88,7 @@ func (s *strip) Handle(e input.Event, u *gunim.UI) bool {
 		frac := float64((u0 - a.Value()) / max(b.Value()-a.Value(), 1e-6))
 		at := time.Duration(frac * float64(lengthOf(t, s.r.state.gapOf(&t))))
 		u.Cue(gunim.CueSelect, s)
-		if t.ID != s.r.state.Current {
-			u.Send(s, Pick{ID: t.ID})
-		}
-		u.Send(s, SeekTo{At: at})
+		u.Send(s, PlayAt{ID: t.ID, At: at})
 		return true
 	}
 	return false
