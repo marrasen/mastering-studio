@@ -53,7 +53,7 @@ type deck struct {
 
 func newDeck(mix *audio.Mixer) *deck {
 	an := audio.NewAnalyzer(mix, 32)
-	return &deck{mix: mix, an: an, volume: 0.8, matches: map[int]float32{}, turns: make(chan int, 8), tap: &ioTap{},
+	return &deck{mix: mix, an: an, volume: 0.8, matches: map[int]float32{}, turns: make(chan int, 8), tap: newIOTap(),
 		monitor: &monitor{}}
 }
 
@@ -61,15 +61,16 @@ func newDeck(mix *audio.Mixer) *deck {
 // gap and the edit e, through its chain, r, from at, paused or not; the
 // track before fades out over fade, and this one in.
 func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at time.Duration, paused bool, fade time.Duration) error {
-	src, format, closer, err := openTrack(path)
+	sw, err := openSwitcher(path, gap, e)
 	if err != nil {
 		return err
 	}
-	sw := &switcher{cur: newRender(src, format.SampleRate, gap, e), closer: closer}
+	// Decoded where it starts before it plays, so it starts whole.
+	sw.prime(frames(at, sw.rate))
 	st := newStage(sw, r, e.Out)
 	st.tap, st.bypass = d.tap, &d.bypass
 	st.setIn(e.Gain)
-	out := audio.Resample(st, format.SampleRate, d.mix.Rate())
+	out := audio.Resample(st, sw.rate, d.mix.Rate())
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.stopLocked(fade)
@@ -80,7 +81,7 @@ func (d *deck) play(id int, path string, gap time.Duration, e Edit, r *rack, at 
 		Insert: d.monitor})
 	// Seeking through the voice, so it says where it is from the start.
 	_ = d.voice.Seek(at)
-	d.sw, d.rack, d.id, d.stage, d.rate = sw, r, id, st, format.SampleRate
+	d.sw, d.rack, d.id, d.stage, d.rate = sw, r, id, st, sw.rate
 	go d.watch(d.voice)
 	return nil
 }
@@ -99,6 +100,8 @@ func (d *deck) watch(v *audio.Voice) {
 		d.mu.Lock()
 		if d.voice == v {
 			d.takeTurnLocked()
+			// The renders the sound let go, closed.
+			d.sw.collect()
 		}
 		d.mu.Unlock()
 	}
@@ -134,16 +137,12 @@ func (d *deck) takeTurnLocked() bool {
 func (d *deck) edit(id int, path string, gap time.Duration, e Edit) bool {
 	d.mu.Lock()
 	sw := d.sw
-	same := d.voice != nil && d.id == id
+	same := d.voice != nil && d.id == id && sw.path == path
 	d.mu.Unlock()
 	if !same {
 		return false
 	}
-	src, format, closer, err := openTrack(path)
-	if err != nil {
-		return false
-	}
-	sw.swap(newRender(src, format.SampleRate, gap, e), closer, format.SampleRate*15/1000)
+	sw.swap(gap, e, sw.rate*15/1000)
 	d.mu.Lock()
 	if d.stage != nil {
 		d.stage.setOut(e.Out)
@@ -243,12 +242,10 @@ func (d *deck) setLoop(id int, path string, gap time.Duration, e Edit, in, out t
 	if !playing || sw == nil {
 		return
 	}
-	src, format, closer, err := openTrack(path)
-	if err != nil {
+	if sw.path != path {
 		return
 	}
-	spare := newRender(src, format.SampleRate, gap, e)
-	sw.setLoop(loopFrames{on: on, in: frames(in, rate), out: frames(out, rate)}, spare, closer)
+	sw.setLoop(loopFrames{on: on, in: frames(in, rate), out: frames(out, rate)}, gap, e)
 }
 
 // done returns a channel closed as the track playing ends, or nil.
@@ -314,187 +311,6 @@ func (d *deck) spectrum(freqs, out []float32) {
 	d.an.Spectrum(freqs, nil, out)
 }
 
-// switcher plays a track's render, and takes a new one for an edit,
-// crossfading from the old.
-type switcher struct {
-	mu     sync.Mutex
-	cur    *render
-	closer func()
-	// old fades out over fade more frames, of fadeLen.
-	old           *render
-	oldCloser     func()
-	fade, fadeLen int
-	buf           []float32
-	// loop, where on, plays from in to out over and over: at out the
-	// sound jumps back to in, the sound past out fading out of spare,
-	// a render of its own. count is the frames given since the last
-	// seek, and jumps the jumps back among them, so a count maps to
-	// where in the track it is.
-	loop      loopFrames
-	spare     *render
-	spareDone func()
-	oldSpare  bool
-	count     int64
-	jumps     []loopJump
-}
-
-// loopFrames is a loop, in frames of the render.
-type loopFrames struct {
-	on      bool
-	in, out int64
-}
-
-// loopJump is a jump back, at count at, by back frames.
-type loopJump struct{ at, back int64 }
-
-// setLoop loops from in to out, while on, with spare, a render of its
-// own, for the sound past the out to fade out of; done closes it.
-func (s *switcher) setLoop(l loopFrames, spare *render, done func()) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.oldSpare {
-		s.old, s.oldCloser, s.oldSpare = nil, nil, false
-	}
-	if s.spareDone != nil {
-		s.spareDone()
-	}
-	s.loop, s.spare, s.spareDone = l, spare, done
-}
-
-// where returns where in the track count frames given is: the count
-// less the jumps back made by then.
-func (s *switcher) where(count int64) int64 {
-	at := count
-	for _, j := range s.jumps {
-		if j.at <= count {
-			at -= j.back
-		}
-	}
-	return at
-}
-
-// mapped is where in the track the frames given by at are.
-func (s *switcher) mapped(at time.Duration) time.Duration {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.jumps) == 0 {
-		return at
-	}
-	rate := s.cur.rate
-	return duration(s.where(frames(at, rate)), rate)
-}
-
-// restart forgets the jumps, as a seek starts the count again.
-func (s *switcher) restart() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.jumps = s.jumps[:0]
-}
-
-// swap plays r, closed by closer, from where the render before is,
-// crossfading over fade frames.
-func (s *switcher) swap(r *render, closer func(), fade int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.old != nil {
-		s.oldCloser()
-	}
-	_ = r.SeekFrame(s.cur.at)
-	s.old, s.oldCloser, s.cur, s.closer = s.cur, s.closer, r, closer
-	s.fade, s.fadeLen = fade, fade
-}
-
-// Len implements [audio.Seeker].
-func (s *switcher) Len() int64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cur.Len()
-}
-
-// SeekFrame implements [audio.Seeker].
-func (s *switcher) SeekFrame(f int64) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.dropOld()
-	// The count goes on from f: where that is takes the jumps back.
-	s.count = f
-	return s.cur.SeekFrame(s.where(f))
-}
-
-func (s *switcher) dropOld() {
-	if s.old != nil {
-		if !s.oldSpare {
-			s.oldCloser()
-		}
-		s.old, s.oldCloser, s.oldSpare = nil, nil, false
-	}
-}
-
-// Read implements [audio.Source].
-func (s *switcher) Read(dst []float32) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Looping, the sound goes as far as the loop's out.
-	l := s.loop
-	looping := l.on && s.spare != nil && l.out > l.in && s.cur.at < l.out
-	if looping {
-		dst = dst[:2*min(int64(len(dst)/2), l.out-s.cur.at)]
-	}
-	n, err := s.mix(dst)
-	s.count += int64(n)
-	if looping && s.cur.at >= l.out {
-		// At the out, back to the in, the sound past the out fading out
-		// over 10 ms as the sound from the in fades in.
-		s.dropOld()
-		_ = s.spare.SeekFrame(l.out)
-		_ = s.cur.SeekFrame(l.in)
-		s.old, s.oldSpare = s.spare, true
-		s.fade = max(1, s.cur.rate/100)
-		s.fadeLen = s.fade
-		s.jumps = append(s.jumps, loopJump{at: s.count, back: l.out - l.in})
-		err = nil
-	}
-	return n, err
-}
-
-// mix reads the render into dst, the render before fading out of it.
-func (s *switcher) mix(dst []float32) (int, error) {
-	n, err := s.cur.Read(dst)
-	if s.old == nil {
-		return n, err
-	}
-	if cap(s.buf) < 2*n {
-		s.buf = make([]float32, 2*n)
-	}
-	b := s.buf[:2*n]
-	clear(b)
-	_, _ = s.old.Read(b)
-	for i := range n {
-		t := float32(1)
-		if left := s.fade - i; left > 0 {
-			t = 1 - float32(left)/float32(s.fadeLen)
-		}
-		dst[2*i] = dst[2*i]*t + b[2*i]*(1-t)
-		dst[2*i+1] = dst[2*i+1]*t + b[2*i+1]*(1-t)
-	}
-	if s.fade -= n; s.fade <= 0 {
-		s.dropOld()
-	}
-	return n, err
-}
-
-// close closes the renders' files.
-func (s *switcher) close() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.dropOld()
-	if s.spareDone != nil {
-		s.spareDone()
-		s.spare, s.spareDone = nil, nil
-	}
-	s.closer()
-}
-
 // queued is a track waiting to play once the one playing ends.
 type queued struct {
 	id    int
@@ -507,15 +323,15 @@ type queued struct {
 // queue has track id, rendered and run through its chain r, play once
 // the track playing ends, without a gap, in place of any queued before.
 func (d *deck) queue(id int, path string, gap time.Duration, e Edit, r *rack) error {
-	src, format, closer, err := openTrack(path)
+	sw, err := openSwitcher(path, gap, e)
 	if err != nil {
 		return err
 	}
-	sw := &switcher{cur: newRender(src, format.SampleRate, gap, e), closer: closer}
+	sw.prime(0)
 	st := newStage(sw, r, e.Out)
 	st.tap, st.bypass = d.tap, &d.bypass
 	st.setIn(e.Gain)
-	out := audio.Resample(st, format.SampleRate, d.mix.Rate())
+	out := audio.Resample(st, sw.rate, d.mix.Rate())
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.voice == nil {
@@ -529,7 +345,7 @@ func (d *deck) queue(id int, path string, gap time.Duration, e Edit, r *rack) er
 	st.setLevel(d.matchLocked(id))
 	st.level = d.matchLocked(id)
 	d.voice.Then(out)
-	d.next = &queued{id: id, sw: sw, rack: r, stage: st, rate: format.SampleRate}
+	d.next = &queued{id: id, sw: sw, rack: r, stage: st, rate: sw.rate}
 	return nil
 }
 

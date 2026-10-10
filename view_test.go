@@ -399,7 +399,7 @@ func playing(t *testing.T, follow Follow) (r *root, run func(int), mix func(time
 	tr.File, tr.Wave, tr.Frames, tr.Format = path, sc.Wave, sc.Frames, sc.Format
 	a.Playing, a.Follow = true, follow
 	_, r, run = stage(t, a)
-	if err := r.d.play(tr.ID, path, a.Gap, tr.Edit, &rack{active: true}, 0, false, 0); err != nil {
+	if err := r.d.play(tr.ID, path, a.Gap, tr.Edit, newRackOf(nil), 0, false, 0); err != nil {
 		t.Fatal(err)
 	}
 	// The mixer runs in blocks of 10 ms, as many as the time asks, the

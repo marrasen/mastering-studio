@@ -97,6 +97,10 @@ type (
 		Profiling bool
 		Told      string
 		Tolds     int
+		// ShowGo asks the window to open the views of a Go plugin, of
+		// slot ShowGo, each time ShowGos counts up.
+		ShowGo  int
+		ShowGos int
 		// Fallback is the ASIO driver chosen that failed to start, and
 		// FallbackWhy why, while the system's sound plays in its place;
 		// Fallbacks counts the failures, so the window asks of each once.
@@ -307,6 +311,22 @@ type (
 	}
 	// ShowEditor opens a plugin's editor.
 	ShowEditor struct{ Track, Slot int }
+	// SetGoParam sets a parameter of a Go plugin's, from its views: one
+	// move of the gesture Gesture, which is one step to undo.
+	SetGoParam struct {
+		Track, Slot int
+		ID          uint32
+		Value       float64
+		Gesture     int
+	}
+	// SetGoState sets a Go plugin's own state, from its views: one change
+	// of an edit called Name, which the same edit again soon after joins
+	// as one step to undo.
+	SetGoState struct {
+		Track, Slot int
+		State       []byte
+		Name        string
+	}
 	// CopyChain gives the tracks To a copy of track From's chain, every
 	// plugin as it is set; To empty means every other track.
 	CopyChain struct {
@@ -1031,6 +1051,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		}
 		a.queueNext()
 		a.applyLoop()
+		a.showGoSettings()
 		_ = c.Publish(albumTopic, a.Album)
 		if a.settingsOpen {
 			_ = c.Publish(settingsTopic, a.settingsDraft())

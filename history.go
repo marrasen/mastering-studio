@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/mastering-studio/plug"
 )
 
 // Undo and redo: the album's changes, one history for it all, each
@@ -229,14 +230,12 @@ func (a *app) revert(s snapshot) {
 				// Set, and read back as the plugin writes it, so the
 				// watch on the plugins takes it for no change of the
 				// user's.
-				r.mu.Lock()
 				if lp.p.SetState(st) == nil {
 					if back, err := lp.p.State(); err == nil {
 						a.states[id] = back
 					}
 				}
 				lp.edits = lp.p.Edits()
-				r.mu.Unlock()
 			}
 		}
 	}
@@ -361,6 +360,21 @@ func (a *app) change(in gunim.Intent) (label string, track int, key string, ok b
 		return of(what+slot(in.Track, in.Slot)+" on", in.Track)
 	case LoadPreset:
 		return of("loading the preset "+in.Name+" on", in.Track)
+	case SetGoParam:
+		what := "a setting"
+		if t, i := a.slot(in.Track, in.Slot); i >= 0 {
+			d, found := plug.Lookup(t.Chain[i].Class)
+			if p, has := d.Param(in.ID); found && has {
+				what = p.Name
+			}
+		}
+		label, track, _, ok = of(what+" of "+slot(in.Track, in.Slot)+" on", in.Track)
+		return label, track, fmt.Sprintf("go %d %d", in.Slot, in.Gesture), ok
+	case SetGoState:
+		// The same edit again, as the wheel turned notch by notch, joins
+		// it.
+		label, track, _, ok = of(in.Name+" in "+slot(in.Track, in.Slot)+" on", in.Track)
+		return label, track, fmt.Sprintf("go %d %s", in.Slot, in.Name), ok
 	case RenamePlugin:
 		return of("naming "+slot(in.Track, in.Slot)+" on", in.Track)
 	case CopyChain:

@@ -72,7 +72,13 @@ type root struct {
 	head   *trackHead
 	// chainMenu is the chain's menus, around it.
 	chainMenu *widget.ContextMenu
-	size      geom.Size
+	// goViews are the views of the Go plugins of the track picked, by
+	// slot, and pane shows one's over the waveform; gestures counts the
+	// gestures made in them.
+	goViews  map[int]*goView
+	pane     *goPane
+	gestures int
+	size     geom.Size
 }
 
 func newRoot(d *deck) *root {
@@ -115,6 +121,7 @@ func newRoot(d *deck) *root {
 	r.head = newTrackHead(r)
 	r.chainMenu = widget.NewContextMenu(r.chain, nil)
 	r.chain.menu = r.chainMenu
+	r.goViews, r.pane = map[int]*goView{}, newGoPane()
 	return r
 }
 
@@ -138,6 +145,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 	r.editor.show(was, t)
 	r.tools.show(t)
 	r.chain.show(t, s)
+	r.showGo(t, s, was, u)
 	r.head.show(t, s, u)
 	r.trans.show(s)
 	r.strip.show(s)
@@ -181,7 +189,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 // Children implements [gunim.Composite].
 func (r *root) Children() []gunim.Node {
 	return []gunim.Node{r.headerMenu, r.drop, r.edDrop, r.tools, r.trans, r.strip, r.meters, r.chainMenu, r.head,
-		r.ab, r.refHead, r.refDrop, r.toasts}
+		r.ab, r.refHead, r.refDrop, r.pane, r.toasts}
 }
 
 // Focusable implements [gunim.Focusable]: the window's keys come here.
@@ -229,9 +237,11 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	edBottom := bottom - stripH - gutter - transH - gutter - chainH - toolsH
 	place(2, geom.Rc(x0, edTop, x1-x0, max(edBottom-edTop, 80)))
 	place(3, geom.Rc(x0, edBottom, x1-x0, toolsH))
+	// A Go plugin's views, over the waveform and its tools.
+	place(12, geom.Rc(x0, edTop, x1-x0, max(edBottom-edTop, 80)+toolsH))
 	// The toasts, in the window's lower right corner.
-	ts := kids.At(12).Layout(gunim.Constraints{Max: geom.Sz(min(440, size.W-2*gutter), size.H)})
-	kids.At(12).Place(geom.Pt(size.W-ts.W-gutter, size.H-ts.H-gutter))
+	ts := kids.At(13).Layout(gunim.Constraints{Max: geom.Sz(min(440, size.W-2*gutter), size.H)})
+	kids.At(13).Place(geom.Pt(size.W-ts.W-gutter, size.H-ts.H-gutter))
 	return size
 }
 
@@ -251,6 +261,11 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 	k, ok := e.(input.KeyPress)
 	if !ok {
 		return false
+	}
+	// Escape closes a Go plugin's views.
+	if k.Key == input.KeyEscape && k.Mods == 0 && r.pane.isOpen() {
+		r.pane.shut(u)
+		return true
 	}
 	// Ctrl, or Command, with S saves, with Z undoes, and with a comma
 	// opens the settings.

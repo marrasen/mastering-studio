@@ -53,6 +53,9 @@ type chainRow struct {
 	choices  []PluginChoice
 	// addX is where the add button is.
 	addX float32
+	// chipIn are the Go plugins' chips among the row's children, and
+	// their slots.
+	chipIn map[gunim.Node]int
 	// field names a slot, renaming, over its card.
 	field    *slotField
 	renaming int
@@ -93,7 +96,8 @@ const (
 )
 
 func newChainRow(r *root) *chainRow {
-	c := &chainRow{r: r, cards: map[int]*chainCard{}, hover: -1, press: -1, inLRA: anim.NewFloat(0)}
+	c := &chainRow{r: r, cards: map[int]*chainCard{}, hover: -1, press: -1, inLRA: anim.NewFloat(0),
+		chipIn: map[gunim.Node]int{}}
 	c.Add(c.inLRA)
 	c.add = newPill("+ Plugin", c.openPicker)
 	c.more = newPill("Chain", c.openMore)
@@ -197,7 +201,7 @@ func (c *chainRow) show(t Track, s Album) {
 		k.slot, k.gone = sl, false
 		k.appear.Animate(1, anim.Spring{Response: 0.35 + 0.04*float32(i)*onOff(switched), Damping: 0.8})
 		k.on.Animate(onOff(!sl.Bypass), anim.Snappy)
-		k.open.Animate(onOff(sl.Open), anim.Gentle)
+		k.open.Animate(onOff(sl.Open || c.r.pane.v != nil && c.r.pane.v.slot == sl.ID), anim.Gentle)
 		k.lra.Animate(sl.LRA*onOff(sl.Ranged), anim.Spring{Response: 0.5, Damping: 0.9})
 		c.order = append(c.order, sl.ID)
 	}
@@ -241,7 +245,51 @@ func cardDetail(s Slot) string {
 // along, and takes anything only while a slot is named.
 func (c *chainRow) Children() []gunim.Node {
 	c.field.Disabled = c.renaming == 0
-	return []gunim.Node{c.add, c.more, c.field}
+	kids := make([]gunim.Node, 0, 3+len(c.chipIn))
+	kids = append(kids, c.add, c.more, c.field)
+	for n := range c.chipIn {
+		kids = append(kids, n)
+	}
+	return kids
+}
+
+// chips are the slots of the cards with a Go plugin's chip in, in
+// order.
+func (c *chainRow) chips() []int {
+	var out []int
+	for _, id := range c.order {
+		if v := c.r.goViews[id]; v != nil && v.chip != nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// syncChips puts the chips of the cards shown among the row's
+// children, and takes those of cards gone out.
+func (c *chainRow) syncChips(u *gunim.UI) {
+	want := map[gunim.Node]int{}
+	for _, id := range c.chips() {
+		want[c.r.goViews[id].chip] = id
+	}
+	for n := range c.chipIn {
+		if _, ok := want[n]; !ok {
+			u.Remove(n)
+			delete(c.chipIn, n)
+		}
+	}
+	for n, id := range want {
+		if _, ok := c.chipIn[n]; !ok {
+			u.Insert(c, n)
+		}
+		c.chipIn[n] = id
+	}
+}
+
+// chipRect is where card k's chip is, under its name.
+func (c *chainRow) chipRect(k *chainCard) geom.Rect {
+	r := c.cardRect(k)
+	return geom.Rc(r.Min.X+34, r.Min.Y+23, max(r.Size().W-44, 0), cardH-27)
 }
 
 // Layout implements [gunim.Node]: the cards in a row after the label,
@@ -285,6 +333,15 @@ func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	}
 	kids.At(2).Layout(gunim.Tight(fr.Size()))
 	kids.At(2).Place(fr.Min)
+	// The chips, each in its card; one leaving, nowhere.
+	for i := 3; i < kids.Len(); i++ {
+		r := geom.Rect{}
+		if k := c.cards[c.chipIn[kids.At(i).Node()]]; k != nil {
+			r = c.chipRect(k)
+		}
+		kids.At(i).Layout(gunim.Tight(r.Size()))
+		kids.At(i).Place(r.Min)
+	}
 	return c.size
 }
 
@@ -596,6 +653,12 @@ func (c *chainRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 	for _, id := range c.drawOrder() {
 		c.paintCard(p, pal, c.cards[id])
 	}
+	// The chips, in the cards in their places.
+	for i := 3; i < kids.Len(); i++ {
+		if k := c.cards[c.chipIn[kids.At(i).Node()]]; k != nil && k.appear.Value() > 0.99 && !k.gone {
+			kids.At(i).Paint(p)
+		}
+	}
 	kids.At(0).Paint(p)
 	kids.At(1).Paint(p)
 	if c.renaming != 0 {
@@ -687,6 +750,10 @@ func (c *chainRow) paintCard(p *paint.Painter, pal palette, k *chainCard) {
 	detail := pal.quiet(0.45)
 	if failed {
 		detail = pal.coral
+	}
+	if v := c.r.goViews[k.slot.ID]; v != nil && v.chip != nil {
+		// The plugin's chip says it.
+		return
 	}
 	paintFit(p, cardDetail(k.slot), 9, false, geom.Pt(r.Min.X+34, r.Min.Y+26), room, detail)
 }

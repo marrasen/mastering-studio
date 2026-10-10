@@ -49,7 +49,7 @@ func (a *app) rackOf(t *Track) *rack {
 	if !a.Playing || a.Current != t.ID {
 		r.setActive(false)
 	}
-	r.match = a.Match
+	r.setMatch(a.Match)
 	a.racks[t.ID] = r
 	return r
 }
@@ -106,9 +106,7 @@ func (a *app) readRack(id int) bool {
 		return false
 	}
 	r.flush()
-	r.mu.Lock()
-	ps := slices.Clone(r.plugins)
-	r.mu.Unlock()
+	ps := r.list()
 	changed := false
 	for _, lp := range ps {
 		st, err := lp.p.State()
@@ -156,9 +154,7 @@ func (a *app) watchPlugins() bool {
 		if t == nil {
 			continue
 		}
-		r.mu.Lock()
-		ps := slices.Clone(r.plugins)
-		r.mu.Unlock()
+		ps := r.list()
 		read := false
 		for _, lp := range ps {
 			i := slices.IndexFunc(t.Chain, func(s Slot) bool { return s.ID == lp.slot })
@@ -231,16 +227,31 @@ func (a *app) handleChain(in gunim.Intent) {
 		c := in.Choice
 		a.used(c)
 		s := Slot{ID: a.slots, Path: c.Path, Class: c.Class, Name: c.Name, Vendor: c.Vendor}
+		if s.goPlugin() {
+			// Its settings at their defaults, its views open.
+			a.states[s.ID] = goSettings{}.pack()
+			t.Chain = append(t.Chain, s)
+			if r := a.racks[t.ID]; r != nil {
+				lp, err := newPlugin(s, a.states[s.ID], rateOf(t), false)
+				if err != nil {
+					a.Note = fmt.Sprintf("%s: %v", c.Name, err)
+					t.Chain = t.Chain[:len(t.Chain)-1]
+					return
+				}
+				r.add(lp)
+			}
+			a.dirty = true
+			a.remeasureChain(t.ID)
+			a.ShowGo, a.ShowGos = s.ID, a.ShowGos+1
+			return
+		}
 		if r := a.racks[t.ID]; r != nil {
 			lp, err := newPlugin(s, nil, rateOf(t), false)
 			if err != nil {
 				a.Note = fmt.Sprintf("%s: %v", c.Name, err)
 				return
 			}
-			r.mu.Lock()
-			r.plugins = append(r.plugins, lp)
-			r.gen++
-			r.mu.Unlock()
+			r.add(lp)
 			s.Latency = lp.p.Latency()
 			if st, err := lp.p.State(); err == nil {
 				a.states[s.ID] = st
@@ -259,20 +270,7 @@ func (a *app) handleChain(in gunim.Intent) {
 		t.Chain = slices.Delete(t.Chain, i, i+1)
 		delete(a.states, in.Slot)
 		if r := a.racks[t.ID]; r != nil {
-			r.mu.Lock()
-			var gone *livePlugin
-			r.plugins = slices.DeleteFunc(r.plugins, func(lp *livePlugin) bool {
-				if lp.slot == in.Slot {
-					gone = lp
-					return true
-				}
-				return false
-			})
-			r.gen++
-			r.mu.Unlock()
-			if gone != nil {
-				gone.p.Close()
-			}
+			r.remove(in.Slot)
 		}
 		a.dirty = true
 		a.remeasureChain(t.ID)
@@ -284,14 +282,7 @@ func (a *app) handleChain(in gunim.Intent) {
 		s := t.Chain[in.From]
 		t.Chain = slices.Insert(slices.Delete(t.Chain, in.From, in.From+1), in.To, s)
 		if r := a.racks[t.ID]; r != nil {
-			r.mu.Lock()
-			order := map[int]int{}
-			for k, s := range t.Chain {
-				order[s.ID] = k
-			}
-			slices.SortStableFunc(r.plugins, func(x, y *livePlugin) int { return order[x.slot] - order[y.slot] })
-			r.gen++
-			r.mu.Unlock()
+			r.order(t.Chain)
 		}
 		a.dirty = true
 		a.remeasureChain(t.ID)
@@ -314,18 +305,17 @@ func (a *app) handleChain(in gunim.Intent) {
 		}
 		t.Chain[i].Bypass = in.On
 		if r := a.racks[t.ID]; r != nil {
-			if lp := r.find(in.Slot); lp != nil {
-				r.mu.Lock()
-				lp.setBypass(in.On)
-				r.gen++
-				r.mu.Unlock()
-			}
+			r.setBypass(in.Slot, in.On)
 		}
 		a.dirty = true
 		a.remeasureChain(t.ID)
 	case ShowEditor:
 		t, i := a.slot(in.Track, in.Slot)
 		if i < 0 {
+			return
+		}
+		if t.Chain[i].goPlugin() {
+			a.ShowGo, a.ShowGos = in.Slot, a.ShowGos+1
 			return
 		}
 		lp := a.rackOf(t).find(in.Slot)
@@ -337,6 +327,10 @@ func (a *app) handleChain(in gunim.Intent) {
 			return
 		}
 		t.Chain[i].Open = true
+	case SetGoParam:
+		a.setGoParam(in.Track, in.Slot, in.ID, in.Value)
+	case SetGoState:
+		a.setGoState(in.Track, in.Slot, in.State)
 	case CopyChain:
 		from := a.track(in.From)
 		if from == nil {
