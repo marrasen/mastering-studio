@@ -159,6 +159,14 @@ type (
 		// Preset the preset it was loaded from or saved as.
 		Chain  []Slot
 		Preset string
+		// OnB says Chain is the track's chain B, not A. Other is the chain
+		// of the other side, kept as a preset keeps one, with OtherPreset
+		// its preset; OtherSet says the other side has been set: until it
+		// is, it is a copy of this one.
+		OnB         bool
+		Other       []keptSlot
+		OtherPreset string
+		OtherSet    bool
 		// Scanned says the file has been read through: its format,
 		// length, waveform and where its sound starts and ends.
 		Scanned    bool
@@ -321,6 +329,15 @@ type (
 	}
 	// ShowEditor opens a plugin's editor.
 	ShowEditor struct{ Track, Slot int }
+	// SwitchChain plays a track's chain B, or A: the one played is kept
+	// as the other side, and the other side's plugins load in its place.
+	SwitchChain struct {
+		Track int
+		B     bool
+	}
+	// CopyChainSide copies the chain played to the other side, A to B
+	// or B to A.
+	CopyChainSide struct{ Track int }
 	// SetGoParam sets a parameter of a Go plugin's, from its views: one
 	// move of the gesture Gesture, which is one step to undo.
 	SetGoParam struct {
@@ -396,6 +413,12 @@ type keptTrack struct {
 	Chain       []keptSlot `json:",omitempty"`
 	// Preset is the preset its chain was loaded from or saved as.
 	Preset string `json:",omitempty"`
+	// OnB says Chain is its chain B; Other is the other side's, with its
+	// preset, where OtherSet says it has been set.
+	OnB         bool       `json:",omitempty"`
+	Other       []keptSlot `json:",omitempty"`
+	OtherPreset string     `json:",omitempty"`
+	OtherSet    bool       `json:",omitempty"`
 	// At is File whole, as it was last saved, where File is from the
 	// album's folder: the album opens on the computer it was saved on
 	// even where the folders do not move together.
@@ -670,6 +693,7 @@ func (a *app) restore(k keptTrack, ref bool) int {
 	for _, m := range k.Marks {
 		a.markIDs = max(a.markIDs, m.ID)
 	}
+	t.OnB, t.Other, t.OtherPreset, t.OtherSet = k.OnB, k.Other, k.OtherPreset, k.OtherSet
 	for _, s := range k.Chain {
 		a.slots++
 		t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
@@ -690,7 +714,8 @@ func (a *app) restore(k keptTrack, ref bool) int {
 // folder.
 func (a *app) kept(t *Track) keptTrack {
 	k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Silence: t.Silence,
-		Marks: t.Marks, Loop: t.Loop, Edit: t.Edit, Stale: t.Stale, Preset: t.Preset}
+		Marks: t.Marks, Loop: t.Loop, Edit: t.Edit, Stale: t.Stale, Preset: t.Preset,
+		OnB: t.OnB, Other: t.Other, OtherPreset: t.OtherPreset, OtherSet: t.OtherSet}
 	if t.Measured {
 		k.Measure = keep(t.File, t.Measure)
 	}

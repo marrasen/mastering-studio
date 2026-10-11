@@ -31,8 +31,10 @@ type chainRow struct {
 	r    *root
 	menu *widget.ContextMenu
 	add  *pill
-	// more is the chain's menu: copy, and the presets.
+	// more is the chain's menu: copy, and the presets; ab switches
+	// between the track's chains A and B.
 	more  *pill
+	ab    *chainAB
 	cards map[int]*chainCard
 	order []int
 	// track is the track shown, slots its chain, and preset the preset
@@ -122,7 +124,8 @@ func newChainRow(r *root) *chainRow {
 	c.add = newPill("+ Plugin", c.openPicker)
 	c.more = newPill("Chain", c.openMore)
 	c.more.menu = true
-	c.Add(c.add, c.more)
+	c.ab = newChainAB(r)
+	c.Add(c.add, c.more, c.ab)
 	c.field = &slotField{TextField: widget.NewTextField(), c: c}
 	c.field.OnCommit = func(text string, u *gunim.UI) gunim.Intent {
 		in := c.named(text)
@@ -199,6 +202,7 @@ func (c *chainRow) show(t Track, s Album) {
 		c.renaming = 0
 	}
 	c.track, c.slots, c.preset = t.ID, t.Chain, t.Preset
+	c.ab.show(t)
 	keep := map[int]bool{}
 	for _, sl := range t.Chain {
 		keep[sl.ID] = true
@@ -261,12 +265,17 @@ func cardDetail(s Slot) string {
 	return d
 }
 
+// firstChip is where the Go plugins' chips start among the row's
+// children: after the add button, the menu, the field and the A/B
+// switch.
+const firstChip = 4
+
 // Children implements [gunim.Composite]: the field is there all
 // along, and takes anything only while a slot is named.
 func (c *chainRow) Children() []gunim.Node {
 	c.field.Disabled = c.renaming == 0
-	kids := make([]gunim.Node, 0, 3+len(c.chipIn))
-	kids = append(kids, c.add, c.more, c.field)
+	kids := make([]gunim.Node, 0, 4+len(c.chipIn))
+	kids = append(kids, c.add, c.more, c.field, c.ab)
 	for n := range c.chipIn {
 		kids = append(kids, n)
 	}
@@ -324,7 +333,7 @@ func (c *chainRow) chipRect(k *chainCard) geom.Rect {
 // beside the chain's menu, and the last before the add button, which
 // in one row are the same row.
 func (c *chainRow) rowRoom(w float32, rows int) (first, last float32) {
-	add, more := pillWidth("+ Plugin"), menuPillWidth(c.more.words)
+	add, more := pillWidth("+ Plugin"), menuPillWidth(c.more.words)+8+abSwitchW
 	if rows == 1 {
 		r := w - chainLabelW - add - more - 16
 		return r, r
@@ -427,8 +436,11 @@ func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	}
 	kids.At(2).Layout(gunim.Tight(fr.Size()))
 	kids.At(2).Place(fr.Min)
+	// The A/B switch, before the chain's menu.
+	kids.At(3).Layout(gunim.Tight(geom.Sz(abSwitchW, abSwitchH)))
+	kids.At(3).Place(geom.Pt(c.size.W-cw-8-abSwitchW, rowMid(0)-abSwitchH/2))
 	// The chips, each in its card; one leaving, nowhere.
-	for i := 3; i < kids.Len(); i++ {
+	for i := firstChip; i < kids.Len(); i++ {
 		r := geom.Rect{}
 		if k := c.cards[c.chipIn[kids.At(i).Node()]]; k != nil {
 			r = c.chipRect(k)
@@ -747,7 +759,8 @@ func (c *chainRow) moreAt() geom.Point {
 	return geom.Pt(c.size.W-menuPillWidth(c.more.words), c.size.H/2+16)
 }
 
-// openMore opens the chain's menu: copy it to other tracks, keep it as
+// openMore opens the chain's menu: copy it to other tracks, or to its
+// other side, A or B, keep it as
 // its preset or a new one, load a preset, or delete one.
 func (c *chainRow) openMore(u *gunim.UI) {
 	if c.menu == nil || c.track == 0 {
@@ -760,8 +773,13 @@ func (c *chainRow) openMore(u *gunim.UI) {
 		save = "Save preset “" + c.preset + "”"
 	}
 	empty := len(c.slots) == 0
+	copySide := "Copy to B"
+	if c.ab.onB {
+		copySide = "Copy to A"
+	}
 	c.menu.SetItems([]widget.MenuItem{
 		{Label: "Copy to…", Icon: icon.Copy},
+		{Label: copySide, Icon: icon.Copy},
 		{Label: save, Icon: icon.Save, Disabled: empty || !has, Break: true},
 		{Label: "Save preset as…", Icon: icon.Save, Disabled: empty},
 		{Label: "Load preset…", Icon: icon.FolderOpen, Disabled: len(presets) == 0, Break: true},
@@ -773,12 +791,14 @@ func (c *chainRow) openMore(u *gunim.UI) {
 		case 0:
 			c.openCopy(u)
 		case 1:
-			return SavePreset{Track: track}
+			return CopyChainSide{Track: track}
 		case 2:
-			return NamePreset{Track: track}
+			return SavePreset{Track: track}
 		case 3:
-			c.openPresets(u, false)
+			return NamePreset{Track: track}
 		case 4:
+			c.openPresets(u, false)
+		case 5:
 			c.openPresets(u, true)
 		}
 		return nil
@@ -841,13 +861,14 @@ func (c *chainRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 		c.paintCard(p, pal, c.cards[id])
 	}
 	// The chips, in the cards in their places.
-	for i := 3; i < kids.Len(); i++ {
+	for i := firstChip; i < kids.Len(); i++ {
 		if k := c.cards[c.chipIn[kids.At(i).Node()]]; k != nil && k.appear.Value() > 0.99 && !k.gone {
 			kids.At(i).Paint(p)
 		}
 	}
 	kids.At(0).Paint(p)
 	kids.At(1).Paint(p)
+	kids.At(3).Paint(p)
 	if c.renaming != 0 {
 		kids.At(2).Paint(p)
 	}

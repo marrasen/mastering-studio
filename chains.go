@@ -141,6 +141,30 @@ func (a *app) chainOf(t *Track) (chain []Slot, states map[int][]byte) {
 	return slices.Clone(t.Chain), states
 }
 
+// keepChain is track t's chain, as a preset keeps one: each plugin
+// with its state.
+func (a *app) keepChain(t *Track) []keptSlot {
+	chain, states := a.chainOf(t)
+	out := make([]keptSlot, 0, len(chain))
+	for _, s := range chain {
+		out = append(out, keptSlot{Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor, Label: s.Label,
+			Bypass: s.Bypass, State: bytes.Clone(states[s.ID])})
+	}
+	return out
+}
+
+// slotsOf is a kept chain as slots, numbered from 1, and their states,
+// for giveChain.
+func slotsOf(kept []keptSlot) (chain []Slot, states map[int][]byte) {
+	states = map[int][]byte{}
+	for k, s := range kept {
+		chain = append(chain, Slot{ID: k + 1, Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor,
+			Label: s.Label, Bypass: s.Bypass})
+		states[k+1] = s.State
+	}
+	return chain, states
+}
+
 // pluginSettle is how long a chain rests before it is measured again:
 // longer than an edit's, for a plugin set by hand changes for a while.
 const pluginSettle = 1500 * time.Millisecond
@@ -332,6 +356,26 @@ func (a *app) handleChain(in gunim.Intent) {
 		a.setGoParam(in.Track, in.Slot, in.ID, in.Value)
 	case SetGoState:
 		a.setGoState(in.Track, in.Slot, in.State)
+	case SwitchChain:
+		t := a.track(in.Track)
+		if t == nil || t.OnB == in.B {
+			return
+		}
+		played, preset := a.keepChain(t), t.Preset
+		// The other side never set: a copy of this one.
+		if !t.OtherSet {
+			t.Other, t.OtherPreset = played, preset
+		}
+		chain, states := slotsOf(t.Other)
+		a.giveChain(t.ID, chain, states)
+		t.Preset = t.OtherPreset
+		t.Other, t.OtherPreset, t.OtherSet, t.OnB = played, preset, true, in.B
+		a.dirty = true
+	case CopyChainSide:
+		if t := a.track(in.Track); t != nil {
+			t.Other, t.OtherPreset, t.OtherSet = a.keepChain(t), t.Preset, true
+			a.dirty = true
+		}
 	case CopyChain:
 		from := a.track(in.From)
 		if from == nil {

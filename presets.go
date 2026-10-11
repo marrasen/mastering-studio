@@ -158,12 +158,7 @@ func (a *app) handlePresets(in gunim.Intent) bool {
 		if i < 0 || a.track(in.Track) == nil {
 			return true
 		}
-		chain, states := []Slot{}, map[int][]byte{}
-		for k, s := range a.presets[i].Chain {
-			chain = append(chain, Slot{ID: k + 1, Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor,
-				Label: s.Label, Bypass: s.Bypass})
-			states[k+1] = s.State
-		}
+		chain, states := slotsOf(a.presets[i].Chain)
 		a.giveChain(in.Track, chain, states)
 		a.track(in.Track).Preset = in.Name
 		a.dirty = true

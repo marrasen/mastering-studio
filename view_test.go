@@ -345,7 +345,9 @@ func TestAClickOnACardsLightBypassesItsPluginAndOnItOpensItsEditor(t *testing.T)
 }
 
 func TestADraggedCardMovesItsPluginTheOthersMakingWay(t *testing.T) {
+	// Three, short enough to stand in one row.
 	a := chained()
+	a.Tracks[0].Chain[0].Name = "Ozone 11 Equalizer"
 	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 9, Name: "Trim", Vendor: "Marras"})
 	w, r, run := stage(t, a)
 	run(40)
@@ -394,11 +396,13 @@ func TestADraggedCardMovesItsPluginTheOthersMakingWay(t *testing.T) {
 func TestTheChainsCardsLeaveRoomForItsButtons(t *testing.T) {
 	// A plugin more: one row, its cards clear of the buttons.
 	a := chained()
+	a.Tracks[0].Chain[0].Name = "Ozone 11 Equalizer"
 	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 20, Name: "Trim", Vendor: "Somebody"})
 	_, r, run := stage(t, a)
 	run(40)
 	c := r.chain
-	menuAt := c.size.W - menuPillWidth(c.more.words)
+	// The A/B switch stands before the menu.
+	menuAt := c.size.W - menuPillWidth(c.more.words) - 8 - abSwitchW
 	last := c.cards[c.order[len(c.order)-1]]
 	if c.rows != 1 || c.cardRect(last).Max.X > menuAt || c.addX+pillWidth("+ Plugin") > menuAt+1 {
 		t.Fatalf("in %d rows, the cards end at %.0f and the add button at %.0f, past the menu at %.0f", c.rows,
@@ -419,7 +423,8 @@ func TestAChainTooLongForItsRowTakesTwo(t *testing.T) {
 	}
 	// The first row clear of the menu, the second of the add button,
 	// which ends inside the row; the second row's cards under the first's.
-	menuAt := c.size.W - menuPillWidth(c.more.words)
+	// The A/B switch stands before the menu.
+	menuAt := c.size.W - menuPillWidth(c.more.words) - 8 - abSwitchW
 	rows := c.splitRows(c.order)
 	for _, id := range rows[0] {
 		if r := c.cardRect(c.cards[id]); r.Max.X > menuAt || math.Abs(float64(r.Center().Y-rowMid(0))) > 0.5 {
@@ -1461,7 +1466,7 @@ func TestTheChainsMenuCopiesAndKeepsPresets(t *testing.T) {
 		run(1)
 	}
 	patch(-1)
-	want := []string{"Copy to…", "Save preset “Loud”", "Save preset as…", "Load preset…", "Delete preset…"}
+	want := []string{"Copy to…", "Copy to B", "Save preset “Loud”", "Save preset as…", "Load preset…", "Delete preset…"}
 	items := c.menu.Items()
 	labels := make([]string, len(items))
 	for i, it := range items {
@@ -1471,7 +1476,7 @@ func TestTheChainsMenuCopiesAndKeepsPresets(t *testing.T) {
 		t.Fatalf("the chain's menu offers %v", items)
 	}
 	// Load: the presets, the track's ticked; one picked loads.
-	patch(3)
+	patch(4)
 	items = c.menu.Items()
 	if len(items) != 2 || items[0].Label != "Gentle" || items[1].Label != "Loud" || items[0].Checked || !items[1].Checked {
 		t.Fatalf("the presets to load are %v", items)
@@ -1733,5 +1738,52 @@ func TestADoubleClickOnAPluginsTitleRenamesIt(t *testing.T) {
 	run(30)
 	if sh.title.Text != "More bass" || r.head.view.plugName != "More bass" {
 		t.Errorf("renamed, the sheet says %q and the switch %q", sh.title.Text, r.head.view.plugName)
+	}
+}
+
+func TestTheChainsABSwitchPlaysTheOtherSide(t *testing.T) {
+	w, r, run := stage(t, chained())
+	run(40)
+	c := r.chain
+	ab, menu := boundsOf(t, w, run, c.ab), boundsOf(t, w, run, c.more)
+	if ab.Max.X > menu.Min.X || ab.Max.X < menu.Min.X-12 || math.Abs(float64(ab.Center().Y-menu.Center().Y)) > 0.5 {
+		t.Errorf("the A/B switch is at %v, the menu at %v: not just before it", ab, menu)
+	}
+	edits(w)
+	at := geom.Pt(ab.Min.X+abSideW*1.5, ab.Center().Y)
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(30)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (SwitchChain{Track: 1, B: true}) || c.ab.at.Value() < 0.99 {
+		t.Fatalf("B clicked, the switch sent %v, its light at %v", rest, c.ab.at.Value())
+	}
+	// On B, the menu copies to A.
+	a := chained()
+	a.Tracks[0].OnB = true
+	if err := w.Client().Publish(albumTopic, a); err != nil {
+		t.Fatal(err)
+	}
+	run(2)
+	gunim.RegisterPatch(w, "album", func(r *root, item int, u *gunim.UI) {
+		if item < 0 {
+			r.chain.openMore(u)
+			return
+		}
+		u.Send(r, r.chain.menu.OnPick(item, u))
+	})
+	if err := w.Client().Patch("album", -1); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	if got := c.menu.Items()[1].Label; got != "Copy to A" {
+		t.Fatalf("on B, the menu offers %q", got)
+	}
+	if err := w.Client().Patch("album", 1); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (CopyChainSide{Track: 1}) {
+		t.Errorf("Copy to A sent %v", rest)
 	}
 }

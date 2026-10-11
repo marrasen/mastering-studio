@@ -360,6 +360,12 @@ func (a *app) change(in gunim.Intent) (label string, track int, key string, ok b
 		return of(what+slot(in.Track, in.Slot)+" on", in.Track)
 	case LoadPreset:
 		return of("loading the preset "+in.Name+" on", in.Track)
+	case SwitchChain:
+		return of("switching to chain "+side(in.B)+" on", in.Track)
+	case CopyChainSide:
+		if t := a.track(in.Track); t != nil {
+			return of("copying chain "+side(t.OnB)+" to "+side(!t.OnB)+" on", in.Track)
+		}
 	case LoadPatch:
 		return of("loading the patch "+in.Name+" into "+slot(in.Track, in.Slot)+" on", in.Track)
 	case SetGoParam:
@@ -406,4 +412,12 @@ func editPart(was, to Edit) string {
 		return "the gain out"
 	}
 	return "the edit"
+}
+
+// side names a track's chain B, or A.
+func side(b bool) string {
+	if b {
+		return "B"
+	}
+	return "A"
 }
