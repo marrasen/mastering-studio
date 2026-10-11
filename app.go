@@ -66,6 +66,9 @@ type (
 		Presets       []string
 		DeletedPreset string
 		Deletes       int
+		// Patches are the Go plugins' patches the user kept, by plugin,
+		// each plugin's in order.
+		Patches []PatchName
 		// Match plays every track at the target loudness, to compare
 		// them on their sound alone; Volume is the listening level.
 		Match  bool
@@ -460,6 +463,11 @@ type app struct {
 	presetsFile string
 	naming      bool
 	lastDeleted *Preset
+	// patches are the Go plugins' patches the user kept, in
+	// patchesFile; namingPatch says the dialog that names one is up.
+	patches     []keptPatch
+	patchesFile string
+	namingPatch bool
 	// scans and measures carry what the background tells; measuring
 	// holds how to stop each track's measuring, and settle when it is
 	// due once its edits have paused.
@@ -888,9 +896,11 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	if a.settingsFile != "" {
 		a.refsFile = filepath.Join(filepath.Dir(a.settingsFile), "references.json")
 		a.presetsFile = filepath.Join(filepath.Dir(a.settingsFile), "presets.json")
+		a.patchesFile = filepath.Join(filepath.Dir(a.settingsFile), "patches.json")
 		a.profileDir = filepath.Join(filepath.Dir(a.settingsFile), "profiles")
 	}
 	a.loadPresets()
+	a.loadPatches()
 	useLAME(findLAME(a.lame))
 	a.scanCache = scanCache{dir: scanCacheDir()}
 	if a.settingsFile != "" {
@@ -1482,7 +1492,7 @@ func (a *app) handle(in gunim.Intent) {
 			a.dirty = true
 		}
 	default:
-		if a.handleMarks(in) || a.handleLoop(in) || a.handleAB(in) || a.handlePresets(in) {
+		if a.handleMarks(in) || a.handleLoop(in) || a.handleAB(in) || a.handlePresets(in) || a.handlePatches(in) {
 			return
 		}
 		a.handleChain(in)

@@ -446,6 +446,9 @@ type goSheet struct {
 	v      *goView
 	title  *widget.Label
 	closer *widget.IconButton
+	// patches opens the menu of the plugin's patches, patchMenu.
+	patches   *pill
+	patchMenu *widget.ContextMenu
 	// in is how far the sheet has come in, from 0 to 1, and leaving
 	// says it goes.
 	in      *anim.Float
@@ -460,13 +463,77 @@ func newGoSheet(p *goPane, v *goView) *goSheet {
 		p.shut(u)
 		return nil
 	}
-	sh.Add(sh.in)
+	sh.patches = newPill("Patches", sh.openPatches)
+	sh.patches.menu = true
+	sh.patchMenu = widget.NewContextMenu(sh.patches, nil)
+	sh.Add(sh.in, sh.patches)
 	return sh
+}
+
+// openPatches opens the menu of the plugin's patches: those it comes
+// with, those kept, to load, and saving and deleting.
+func (sh *goSheet) openPatches(u *gunim.UI) {
+	v := sh.v
+	var items []widget.MenuItem
+	var picks []gunim.Intent
+	add := func(item widget.MenuItem, in gunim.Intent) {
+		items = append(items, item)
+		picks = append(picks, in)
+	}
+	if len(v.d.Patches) > 0 {
+		add(widget.MenuItem{Label: "Comes with " + v.d.Name, Caption: true}, nil)
+		for _, p := range v.d.Patches {
+			add(widget.MenuItem{Label: p.Name, Icon: icon.AudioLines}, LoadPatch{Track: v.track, Slot: v.slot, Name: p.Name, Own: true})
+		}
+	}
+	var kept []string
+	for _, p := range v.r.state.Patches {
+		if p.Class == v.d.ID {
+			kept = append(kept, p.Name)
+		}
+	}
+	if len(kept) > 0 {
+		add(widget.MenuItem{Label: "Saved", Caption: true, Break: true}, nil)
+		for _, name := range kept {
+			add(widget.MenuItem{Label: name, Icon: icon.AudioLines}, LoadPatch{Track: v.track, Slot: v.slot, Name: name})
+		}
+	}
+	add(widget.MenuItem{Label: "Save patch…", Icon: icon.Save, Break: true}, NamePatch{Track: v.track, Slot: v.slot})
+	add(widget.MenuItem{Label: "Delete patch…", Icon: icon.Trash2, Disabled: len(kept) == 0}, nil)
+	sh.patchMenu.SetItems(items)
+	sh.patchMenu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
+		if item < 0 || item >= len(picks) {
+			return nil
+		}
+		if item == len(picks)-1 {
+			sh.openDeletes(kept, u)
+			return nil
+		}
+		return picks[item]
+	}
+	sh.patchMenu.Open(geom.Pt(0, 34), u)
+}
+
+// openDeletes opens the menu of the patches kept, to delete one.
+func (sh *goSheet) openDeletes(kept []string, u *gunim.UI) {
+	items := make([]widget.MenuItem, len(kept))
+	for i, name := range kept {
+		items[i] = widget.MenuItem{Label: name, Icon: icon.Trash2}
+	}
+	sh.patchMenu.SetItems(items)
+	class := sh.v.d.ID
+	sh.patchMenu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
+		if item < 0 || item >= len(kept) {
+			return nil
+		}
+		return DeletePatch{Class: class, Name: kept[item]}
+	}
+	sh.patchMenu.Open(geom.Pt(0, 34), u)
 }
 
 // Children implements [gunim.Composite].
 func (sh *goSheet) Children() []gunim.Node {
-	return []gunim.Node{sh.title, sh.closer, sh.v.paneView()}
+	return []gunim.Node{sh.title, sh.closer, sh.v.paneView(), sh.patchMenu}
 }
 
 // Transition implements [gunim.Transitioner]: in with a little spring,
@@ -489,7 +556,10 @@ func (sh *goSheet) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childre
 	size := c.Max
 	kids.At(1).Layout(gunim.Tight(geom.Sz(32, 32)))
 	kids.At(1).Place(geom.Pt(size.W-40, 4))
-	kids.At(0).Layout(gunim.Constraints{Max: geom.Sz(max(size.W-72, 0), 24)})
+	pw := menuPillWidth("Patches")
+	kids.At(3).Layout(gunim.Tight(geom.Sz(pw, 32)))
+	kids.At(3).Place(geom.Pt(size.W-48-pw, 4))
+	kids.At(0).Layout(gunim.Constraints{Max: geom.Sz(max(size.W-pw-88, 0), 24)})
 	kids.At(0).Place(geom.Pt(16, 10))
 	kids.At(2).Layout(gunim.Tight(geom.Sz(max(size.W-32, 0), max(size.H-goPaneBar-12, 0))))
 	kids.At(2).Place(geom.Pt(16, goPaneBar))

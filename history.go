@@ -360,6 +360,8 @@ func (a *app) change(in gunim.Intent) (label string, track int, key string, ok b
 		return of(what+slot(in.Track, in.Slot)+" on", in.Track)
 	case LoadPreset:
 		return of("loading the preset "+in.Name+" on", in.Track)
+	case LoadPatch:
+		return of("loading the patch "+in.Name+" into "+slot(in.Track, in.Slot)+" on", in.Track)
 	case SetGoParam:
 		what := "a setting"
 		if t, i := a.slot(in.Track, in.Slot); i >= 0 {

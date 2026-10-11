@@ -31,7 +31,8 @@ var Descriptor = plug.Descriptor{
 		Min: 0, Max: 1, Default: 0, Steps: 1,
 		Flags: plug.Bypass | plug.Hidden,
 	}},
-	New: func(h plug.Host) plug.Plugin { return newPlugin(h) },
+	Patches: patches,
+	New:     func(h plug.Host) plug.Plugin { return newPlugin(h) },
 }
 
 func init() { plug.Register(Descriptor) }

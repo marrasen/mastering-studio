@@ -32,6 +32,7 @@ func registerViews(w *gunim.Window, d *deck) {
 	gunim.RegisterView(w, "help", newHelp, nil)
 	gunim.RegisterView(w, "unsaved", newUnsavedDialog, nil)
 	gunim.RegisterView(w, "preset", newPresetDialog, nil)
+	gunim.RegisterView(w, "patch", newPatchDialog, nil)
 	gunim.RegisterView(w, "export", newExportDialog,
 		func(e *exportDialog, d ExportDraft, u *gunim.UI) { e.show(d, u) })
 	gunim.RegisterView(w, "settings", newSettingsDialog,

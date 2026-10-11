@@ -41,6 +41,12 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 		"two params":  {ID: "test.two", Name: "X", New: newer, Params: []Param{{ID: 1, Max: 1}, {ID: 1, Max: 1}}},
 		"empty range": {ID: "test.range", Name: "X", New: newer, Params: []Param{{ID: 1}}},
 		"default out": {ID: "test.def", Name: "X", New: newer, Params: []Param{{ID: 1, Max: 1, Default: 2}}},
+		"log from 0":  {ID: "test.log", Name: "X", New: newer, Params: []Param{{ID: 1, Max: 1, Log: true}}},
+		"patch twice": {ID: "test.twice", Name: "X", New: newer, Patches: []Patch{{Name: "A"}, {Name: "A"}}},
+		"patch of no param": {ID: "test.noparam", Name: "X", New: newer, Params: []Param{{ID: 1, Max: 1}},
+			Patches: []Patch{{Name: "A", Params: map[uint32]float64{2: 0}}}},
+		"patch of a meter": {ID: "test.meter", Name: "X", New: newer, Params: []Param{{ID: 1, Max: 1, Flags: ReadOnly}},
+			Patches: []Patch{{Name: "A", Params: map[uint32]float64{1: 0}}}},
 	} {
 		func() {
 			defer func() {

@@ -113,6 +113,16 @@ var Descriptor = plug.Descriptor{
 		{ID: CompGRID, Name: "Compression", Unit: "dB", Min: -60, Max: 0, Flags: plug.ReadOnly, Format: db},
 		{ID: LimitGRID, Name: "Limiting", Unit: "dB", Min: -24, Max: 0, Flags: plug.ReadOnly, Format: db},
 	},
+	Patches: []plug.Patch{
+		{Name: "Default"},
+		{Name: "Gentle glue", Params: map[uint32]float64{CompThresholdID: -20, CompRatioID: 2, CompKneeID: 12,
+			CompAttackID: 30, CompReleaseID: 250, CompMakeupID: 1.5}},
+		{Name: "Vocal leveller", Params: map[uint32]float64{CompThresholdID: -26, CompRatioID: 4, CompKneeID: 6,
+			CompAttackID: 5, CompReleaseID: 80, CompMakeupID: 5}},
+		{Name: "Brickwall", Params: map[uint32]float64{CompOnID: 0, InputID: 4, LimitCeilingID: -1, LimitReleaseID: 60}},
+		{Name: "Noise gate", Params: map[uint32]float64{GateOnID: 1, GateThresholdID: -50, GateRangeID: 30,
+			GateAttackID: 0.5, GateReleaseID: 200, CompOnID: 0, LimitOnID: 0}},
+	},
 	New: func(h plug.Host) plug.Plugin { return &plugin{} },
 }
 

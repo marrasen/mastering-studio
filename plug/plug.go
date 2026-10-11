@@ -41,8 +41,9 @@ type Descriptor struct {
 	Kind string
 	// Params are the plugin's parameters, each with an ID of its own.
 	Params []Param
-	// Presets are the presets the plugin comes with.
-	Presets []Preset
+	// Patches are the patches the plugin comes with, as starting points.
+	// The host keeps those a user saves beside them.
+	Patches []Patch
 	// New makes one of the plugin, working for h.
 	New func(h Host) Plugin
 }
@@ -148,9 +149,9 @@ func (p Param) Text(v float64) string {
 	return fmt.Sprintf("%.2f %s", v, p.Unit)
 }
 
-// Preset is a plugin's settings, kept to load again: its parameters'
-// values and its state.
-type Preset struct {
+// Patch is a plugin's settings, kept by name to load again: its
+// parameters' values and its state.
+type Patch struct {
 	Name     string
 	Category string
 	Tags     []string
@@ -258,6 +259,21 @@ func check(d *Descriptor) error {
 		seen[p.ID] = true
 		if p.Max <= p.Min || p.Default < p.Min || p.Default > p.Max {
 			return fmt.Errorf("%s: parameter %q runs from %g to %g, from %g", d.ID, p.Name, p.Min, p.Max, p.Default)
+		}
+		if p.Log && p.Min <= 0 {
+			return fmt.Errorf("%s: parameter %q runs by ratios from %g, not above zero", d.ID, p.Name, p.Min)
+		}
+	}
+	names := map[string]bool{}
+	for _, pt := range d.Patches {
+		if pt.Name == "" || names[pt.Name] {
+			return fmt.Errorf("%s has a patch named %q twice, or unnamed", d.ID, pt.Name)
+		}
+		names[pt.Name] = true
+		for id := range pt.Params {
+			if p, ok := d.Param(id); !ok || p.Flags&ReadOnly != 0 {
+				return fmt.Errorf("%s: patch %q sets %d, which is no parameter it may set", d.ID, pt.Name, id)
+			}
 		}
 	}
 	return nil
