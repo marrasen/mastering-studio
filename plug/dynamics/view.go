@@ -10,6 +10,7 @@ import (
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
@@ -168,6 +169,13 @@ type panel struct {
 	gr, out  *vu
 	sections []*plugui.Section
 	ref      float64
+	// zero sets the level that reads 0 VU, a trim pot in the output
+	// meter's corner; side picks what the compressor listens to, and
+	// listen plays it.
+	zero   *plugui.TrimPot
+	side   *plugui.Selector
+	freq   *plugui.Knob
+	listen *widget.IconButton
 	// tuner tunes how the history shows behind the controls, and
 	// metersAt is where the meters' pane is.
 	tuner    *plugui.Tuner
@@ -193,24 +201,52 @@ func newPanel(h plug.Host) *panel {
 	}, false)
 	p.gr = newVU("GAIN REDUCTION", r.read)
 	p.out = newVU("OUTPUT", vuOf(out, func() float64 { return p.ref }))
+	p.zero = plugui.NewTrimPot(h, param(MeterID))
+	p.zero.Tooltip = "The level that reads 0 VU on the output meter, in dBFS"
+	p.side = plugui.NewSelector(sideNames, sideTips)
+	p.side.SetSelected(int(math.Round(h.Param(SideModeID))), nil)
+	p.side.OnPick = func(i int, u *gunim.UI) {
+		p.freq.Disabled = i == SideFull
+		h.Begin(SideModeID, u)
+		h.Set(SideModeID, float64(i), u)
+		h.End(SideModeID, u)
+	}
+	p.listen = widget.NewIconButton(icon.Headphones, "Listen to what the compressor listens to")
+	p.listen.Active = h.Param(SideListenID) > 0.5
+	p.listen.OnClick = func(u *gunim.UI) gunim.Intent {
+		on := 1.0
+		if p.listen.Active {
+			on = 0
+		}
+		h.Begin(SideListenID, u)
+		h.Set(SideListenID, on, u)
+		h.End(SideListenID, u)
+		return nil
+	}
+	side := plugui.NewSection(h, &Descriptor, "SIDECHAIN", 0, SideFreqID)
+	p.freq = side.Knobs[0]
+	p.freq.Tooltip = "The frequency the compressor listens under, about or over"
+	p.freq.Disabled = p.side.Selected() == SideFull
+	side.Add(p.side, 96).Add(p.listen, 32)
 	p.sections = []*plugui.Section{
 		plugui.NewSection(h, &Descriptor, "INPUT", 0, InputID),
 		plugui.NewSection(h, &Descriptor, "GATE", GateOnID, GateThresholdID, GateRangeID, GateAttackID, GateReleaseID),
 		plugui.NewSection(h, &Descriptor, "COMPRESSOR", CompOnID, CompThresholdID, CompRatioID, CompKneeID, CompAttackID, CompReleaseID, CompMakeupID),
+		side,
 		plugui.NewSection(h, &Descriptor, "LIMITER", LimitOnID, LimitCeilingID, LimitReleaseID),
-		plugui.NewSection(h, &Descriptor, "OUTPUT", 0, OutputID, MeterID),
+		plugui.NewSection(h, &Descriptor, "OUTPUT", 0, OutputID),
 	}
 	return p
 }
 
 // Children implements [gunim.Composite].
 func (p *panel) Children() []gunim.Node {
-	kids := make([]gunim.Node, 0, 5+len(p.sections))
+	kids := make([]gunim.Node, 0, 6+len(p.sections))
 	kids = append(kids, p.hist, p.gr, p.out)
 	for _, s := range p.sections {
 		kids = append(kids, s)
 	}
-	return append(kids, p.tuner.Button, p.tuner.Card)
+	return append(kids, p.zero, p.tuner.Button, p.tuner.Card)
 }
 
 // Layout implements [gunim.Node].
@@ -235,8 +271,13 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 		kids.At(1 + i).Layout(gunim.Tight(geom.Sz(mw, mh)))
 		kids.At(1 + i).Place(p.metersAt.Min.Add(geom.Pt(meterPad+float32(i)*(mw+plugui.SectionGap), meterPad)))
 	}
-	// The tuner's button at the top right, its card under it.
+	// The 0 VU trim pot, in the output meter's lower right corner.
 	n := 3 + len(p.sections)
+	outAt := p.metersAt.Min.Add(geom.Pt(meterPad+mw+plugui.SectionGap, meterPad))
+	kids.At(n).Layout(gunim.Tight(geom.Sz(plugui.TrimPotSize, plugui.TrimPotSize)))
+	kids.At(n).Place(outAt.Add(geom.Pt(mw-plugui.TrimPotSize-10, mh-plugui.TrimPotSize-10)))
+	// The tuner's button at the top right, its card under it.
+	n++
 	kids.At(n).Layout(gunim.Tight(geom.Sz(32, 32)))
 	kids.At(n).Place(geom.Pt(size.W-32-panelInset/2, panelInset/2))
 	cs := kids.At(n + 1).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
@@ -270,8 +311,15 @@ func (p *panel) Follow(id uint32, v float64, u *gunim.UI) {
 		s.Follow(id, v, u)
 	}
 	p.marks.follow(id, v)
-	if id == MeterID {
+	switch id {
+	case MeterID:
 		p.ref = v
+		p.zero.Follow(v, u)
+	case SideModeID:
+		p.side.SetSelected(int(math.Round(v)), u)
+		p.freq.Disabled = p.side.Selected() == SideFull
+	case SideListenID:
+		p.listen.Active = v > 0.5
 	}
 	u.Invalidate()
 }

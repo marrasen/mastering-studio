@@ -106,3 +106,17 @@ func TestChipTextIsSmallAndCutShort(t *testing.T) {
 		t.Errorf("a chip's words read as %q", c.Access().Name)
 	}
 }
+
+func TestATrimPotsSlotTurnsWithItsValue(t *testing.T) {
+	h := &host{values: map[uint32]float64{3: 10}}
+	tp := NewTrimPot(h, release)
+	if s := tp.Layout(gunim.Constraints{Max: geom.Sz(100, 100)}, gunim.Frame{}, gunim.Children{}); s != geom.Sz(TrimPotSize, TrimPotSize) {
+		t.Errorf("a trim pot stands %v", s)
+	}
+	for _, c := range []struct{ v, deg float64 }{{10, -135}, {1000, 135}, {100, 0}} {
+		tp.Follow(c.v, nil)
+		if got := tp.slotAngle() * 180 / math.Pi; math.Abs(got-c.deg) > 0.5 {
+			t.Errorf("at %v its slot turns %.1f°, want %v", c.v, got, c.deg)
+		}
+	}
+}

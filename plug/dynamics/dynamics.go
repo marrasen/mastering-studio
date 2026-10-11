@@ -37,6 +37,12 @@ const (
 	CompAttackID    uint32 = 24
 	CompReleaseID   uint32 = 25
 	CompMakeupID    uint32 = 26
+	// The compressor's sidechain: what it listens to, the whole sound or
+	// a band of it, by SideModeID, about SideFreqID; SideListenID plays
+	// what it listens to, to find the band by ear.
+	SideModeID   uint32 = 27
+	SideFreqID   uint32 = 28
+	SideListenID uint32 = 29
 
 	LimitOnID      uint32 = 30
 	LimitCeilingID uint32 = 31
@@ -69,6 +75,36 @@ func ms(v float64) string {
 	return fmt.Sprintf("%.0f ms", v)
 }
 
+func hz(v float64) string {
+	if v >= 1000 {
+		return fmt.Sprintf("%.3g kHz", v/1000)
+	}
+	return fmt.Sprintf("%.0f Hz", v)
+}
+
+// The sidechain's modes: the whole sound, or what is under, about or
+// over its frequency.
+const (
+	SideFull = iota
+	SideLow
+	SideBand
+	SideHigh
+	sideModes
+)
+
+var (
+	sideNames = []string{"Full", "Low", "Band", "High"}
+	sideTips  = []string{
+		"The compressor listens to the whole sound",
+		"The compressor listens only under the frequency: the kick and the bass pump it",
+		"The compressor listens only about the frequency, an octave wide: a harsh band, or the voice",
+		"The compressor listens only over the frequency: sibilance and cymbals",
+	}
+)
+
+// sideQ is how wide the sidechain's band is: an octave, about.
+const sideQ = 1.41
+
 func onOff(v float64) string {
 	if v > 0.5 {
 		return "On"
@@ -98,9 +134,14 @@ var Descriptor = plug.Descriptor{
 		{ID: CompRatioID, Name: "Ratio", Min: 1, Max: 20, Default: 3, Log: true, Flags: plug.Automatable,
 			Format: func(v float64) string { return fmt.Sprintf("%.1f:1", v) }},
 		{ID: CompKneeID, Name: "Knee", Unit: "dB", Min: 0, Max: 24, Default: 6, Flags: plug.Automatable, Format: db},
-		{ID: CompAttackID, Name: "Attack", Unit: "ms", Min: 0.1, Max: 200, Default: 10, Log: true, Flags: plug.Automatable, Format: ms},
+		{ID: CompAttackID, Name: "Attack", Unit: "ms", Min: 0.1, Max: 400, Default: 10, Log: true, Flags: plug.Automatable, Format: ms},
 		{ID: CompReleaseID, Name: "Release", Unit: "ms", Min: 5, Max: 2000, Default: 120, Log: true, Flags: plug.Automatable, Format: ms},
 		{ID: CompMakeupID, Name: "Makeup", Unit: "dB", Min: 0, Max: 24, Flags: plug.Automatable, Format: signed},
+		{ID: SideModeID, Name: "Sidechain", Max: sideModes - 1, Steps: sideModes - 1, Flags: plug.Automatable,
+			Format: func(v float64) string { return sideNames[int(math.Round(v))] }},
+		{ID: SideFreqID, Name: "Frequency", Unit: "Hz", Min: 20, Max: 20000, Default: 1000, Log: true,
+			Flags: plug.Automatable, Format: hz},
+		{ID: SideListenID, Name: "Listen", Max: 1, Steps: 1, Format: onOff},
 
 		{ID: LimitOnID, Name: "Limiter", Max: 1, Default: 1, Steps: 1, Flags: plug.Automatable, Format: onOff},
 		{ID: LimitCeilingID, Name: "Ceiling", Unit: "dB", Min: -12, Max: 0, Default: -1, Flags: plug.Automatable, Format: db},
@@ -199,6 +240,7 @@ type processor struct {
 	gate gate
 	comp comp
 	lim  limiter
+	side side
 
 	// The least gain of each part over the last block, in decibels, as
 	// the plugin reports it, and by frame, for the views.
@@ -228,6 +270,48 @@ type comp struct {
 	attack, release, makeup float64
 	makeupTo                float64
 	gr                      float64 // in decibels, 0 or less
+}
+
+// side is the compressor's sidechain: a filter on each channel, of the
+// sound the compressor listens to, where its mode is a band.
+type side struct {
+	mode   int
+	freq   float64
+	listen bool
+	b      [3]float64 // b0, b1, b2
+	a      [2]float64 // a1, a2
+	z      [2][2]float64
+}
+
+// set works the filter out for its mode and frequency, as Robert
+// Bristow-Johnson's cookbook has it: a low or high pass, Butterworth,
+// or a band pass whose peak passes at its level.
+func (s *side) set(rate float64) {
+	w := 2 * math.Pi * min(s.freq, rate*0.45) / rate
+	q := math.Sqrt2 / 2
+	if s.mode == SideBand {
+		q = sideQ
+	}
+	cos, alpha := math.Cos(w), math.Sin(w)/(2*q)
+	a0 := 1 + alpha
+	switch s.mode {
+	case SideLow:
+		s.b = [3]float64{(1 - cos) / 2 / a0, (1 - cos) / a0, (1 - cos) / 2 / a0}
+	case SideHigh:
+		s.b = [3]float64{(1 + cos) / 2 / a0, -(1 + cos) / a0, (1 + cos) / 2 / a0}
+	default:
+		s.b = [3]float64{alpha / a0, 0, -alpha / a0}
+	}
+	s.a = [2]float64{-2 * cos / a0, (1 - alpha) / a0}
+}
+
+// run filters x, of channel c.
+func (s *side) run(c int, x float64) float64 {
+	z := &s.z[c]
+	y := s.b[0]*x + z[0]
+	z[0] = s.b[1]*x - s.a[0]*y + z[1]
+	z[1] = s.b[2]*x - s.a[1]*y
+	return y
 }
 
 // limiter keeps the sound under Ceiling. For each frame it works out
@@ -317,6 +401,14 @@ func (p *processor) take(c plug.Change) {
 		k.release = coef(v, rate)
 	case CompMakeupID:
 		k.makeupTo = gainOf(v)
+	case SideModeID:
+		p.side.mode = int(math.Round(v))
+		p.side.set(rate)
+	case SideFreqID:
+		p.side.freq = v
+		p.side.set(rate)
+	case SideListenID:
+		p.side.listen = v > 0.5
 	case LimitOnID:
 		l.on = v > 0.5
 	case LimitCeilingID:
@@ -354,10 +446,21 @@ func (p *processor) Process(b *plug.Block) {
 		left, right := float64(inL[i])*p.in, float64(inR[i])*p.in
 		peak := max(math.Abs(left), math.Abs(right))
 
+		// The compressor listens to the sidechain: the whole sound, or a
+		// band of it.
+		heard, sl, sr := peak, left, right
+		if p.side.mode != SideFull {
+			sl, sr = p.side.run(0, left), p.side.run(1, right)
+			heard = max(math.Abs(sl), math.Abs(sr))
+		}
 		gdb := g.step(peak)
-		cdb := k.step(dbOf(peak) + gdb)
+		cdb := k.step(dbOf(heard) + gdb)
 		shape := gainOf(gdb+cdb) * k.makeup
 		left, right = left*shape, right*shape
+		if p.side.listen {
+			// What the compressor listens to, in place of the sound.
+			left, right = sl, sr
+		}
 
 		// The gate's and compressor's reductions of this frame come out
 		// with it, lookahead later; those of the frame coming out now go
@@ -523,6 +626,7 @@ func (p *processor) Reset() {
 	l.gain = 1
 	p.gate.env, p.gate.open, p.gate.gain = 0, true, 0
 	p.comp.gr = 0
+	p.side.z = [2][2]float64{}
 	p.in, p.out, p.comp.makeup = p.inTo, p.outTo, p.comp.makeupTo
 	p.fresh = true
 	p.gateGR.Set(0)

@@ -8,6 +8,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
+	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/mastering-studio/plug"
 	"github.com/marrasen/mastering-studio/plug/plugui"
 )
@@ -62,5 +63,65 @@ func TestTheSoundFillsThePanelUnderItsControls(t *testing.T) {
 	if gr.Min.Y != out.Min.Y || gr.Max.X >= out.Min.X || out.Max.Y > first.Min.Y-plugui.SectionGap ||
 		math.Abs(float64((gr.Min.X+out.Max.X)/2-size.W/2)) > 1 {
 		t.Errorf("the meters are at %v and %v, over sections from %v: not side by side, centred above", gr, out, first)
+	}
+}
+
+func TestTheZeroVUTrimSitsInTheOutputMeterAndTurns(t *testing.T) {
+	p, h := newDynamics(t)
+	pn, ok := p.View(plug.Panel, h).(*panel)
+	if !ok {
+		t.Fatal("the panel is of another type")
+	}
+	b := boundsOf(t, pn, geom.Sz(1600, 860), pn.out, pn.zero)
+	out, pot := b[0], b[1]
+	if !out.Contains(pot.Min) || !out.Contains(pot.Max.Sub(geom.Pt(1, 1))) || pot.Center().X < out.Center().X ||
+		pot.Center().Y < out.Center().Y {
+		t.Errorf("the trim pot is at %v, the output meter at %v: not in its lower right corner", pot, out)
+	}
+	for _, s := range pn.sections {
+		for _, k := range s.Knobs {
+			if k.Param().ID == MeterID {
+				t.Error("0 VU is still a knob in a section")
+			}
+		}
+	}
+	// Dragged up, it sets 0 VU higher, as one gesture.
+	pn.zero.Handle(input.PointerDown{Pos: geom.Pt(12, 12), Button: input.ButtonPrimary, Clicks: 1}, nil)
+	pn.zero.Handle(input.PointerMove{Pos: geom.Pt(12, -40)}, nil)
+	pn.zero.Handle(input.PointerUp{Pos: geom.Pt(12, -40), Button: input.ButtonPrimary}, nil)
+	if got := h.values[MeterID]; got <= param(MeterID).Default || h.log[0] != "begin" || h.log[len(h.log)-1] != "end" {
+		t.Errorf("dragged up, 0 VU is at %v dBFS, by %v", got, h.log)
+	}
+	pn.Follow(MeterID, -20, nil)
+	if pn.zero.Value() != -20 || pn.ref != -20 {
+		t.Errorf("set elsewhere to -20, the trim shows %v and the meter reads from %v", pn.zero.Value(), pn.ref)
+	}
+}
+
+func TestTheSidechainsControlsWorkThroughTheHost(t *testing.T) {
+	p, h := newDynamics(t)
+	pn, ok := p.View(plug.Panel, h).(*panel)
+	if !ok {
+		t.Fatal("the panel is of another type")
+	}
+	if !pn.freq.Disabled {
+		t.Error("listening to the whole sound, the frequency is not greyed")
+	}
+	pn.side.OnPick(SideBand, nil)
+	if h.values[SideModeID] != SideBand || pn.freq.Disabled {
+		t.Errorf("band picked, the sidechain is %v, the frequency greyed %v", h.values[SideModeID], pn.freq.Disabled)
+	}
+	pn.listen.OnClick(nil)
+	if h.values[SideListenID] != 1 {
+		t.Errorf("listen pressed, it is %v", h.values[SideListenID])
+	}
+	pn.Follow(SideListenID, 1, nil)
+	pn.listen.OnClick(nil)
+	if h.values[SideListenID] != 0 {
+		t.Errorf("listen pressed again, it is %v", h.values[SideListenID])
+	}
+	pn.Follow(SideModeID, SideFull, nil)
+	if pn.side.Selected() != SideFull || !pn.freq.Disabled {
+		t.Errorf("set to the whole sound elsewhere, the selector shows %d, the frequency greyed %v", pn.side.Selected(), pn.freq.Disabled)
 	}
 }

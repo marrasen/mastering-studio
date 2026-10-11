@@ -523,3 +523,86 @@ func TestTheViewsWorkThroughTheHost(t *testing.T) {
 		t.Error("the gate switched on elsewhere stays off in the panel")
 	}
 }
+
+// tones returns n frames of a quiet low tone at 100 Hz under a loud high
+// one at 5 kHz.
+func tones(n int) []float32 {
+	out := make([]float32, n)
+	for i := range out {
+		t := float64(i) / 48000
+		out[i] = float32(0.05*math.Sin(2*math.Pi*100*t) + 0.5*math.Sin(2*math.Pi*5000*t))
+	}
+	return out
+}
+
+// compressed plays a second of tones through the compressor alone, set
+// by changes, and returns how far it turns down at the end, and the
+// level that comes out over the last tenth at 100 Hz and at 5 kHz, in
+// decibels, a sine of 1 at 0.
+func compressed(t *testing.T, changes ...float64) (gr, low, high float64) {
+	t.Helper()
+	p, _ := newDynamics(t)
+	pr := p.Processor()
+	pr.Prepare(plug.Setup{Rate: 48000, MaxBlock: 48000, Channels: 2})
+	ch := [][]float32{tones(48000), tones(48000)}
+	kv := make([]float64, 0, 10+len(changes))
+	kv = append(kv, float64(CompThresholdID), -20, float64(CompRatioID), 10, float64(CompKneeID), 0,
+		float64(CompAttackID), 1, float64(LimitOnID), 0)
+	pr.Process(&plug.Block{In: ch, Out: ch, Frames: 48000, Changes: set(append(kv, changes...)...)})
+	at := func(hz float64) float64 {
+		var re, im float64
+		for i, v := range ch[0][43200:] {
+			ph := 2 * math.Pi * hz * float64(i) / 48000
+			re, im = re+float64(v)*math.Cos(ph), im+float64(v)*math.Sin(ph)
+		}
+		return 20 * math.Log10(2*math.Hypot(re, im)/4800+1e-12)
+	}
+	return p.proc.Report(CompGRID), at(100), at(5000)
+}
+
+func TestTheSidechainHasTheCompressorListenToABand(t *testing.T) {
+	// The whole sound: the loud high tone, 14 dB over, turns it down.
+	full, _, _ := compressed(t)
+	// Under 300 Hz: only the quiet low tone, 6 dB under, which leaves it.
+	low, _, _ := compressed(t, float64(SideModeID), SideLow, float64(SideFreqID), 300)
+	// About 5 kHz, and over 2 kHz: the loud tone again.
+	band, _, _ := compressed(t, float64(SideModeID), SideBand, float64(SideFreqID), 5000)
+	high, _, _ := compressed(t, float64(SideModeID), SideHigh, float64(SideFreqID), 2000)
+	// About 100 Hz, the quiet tone: under the threshold.
+	quiet, _, _ := compressed(t, float64(SideModeID), SideBand, float64(SideFreqID), 100)
+	if full > -10 || band > -10 || high > -10 {
+		t.Errorf("listening to the loud tone, the compressor turns down %.1f, %.1f and %.1f dB", full, band, high)
+	}
+	if low < -1 || quiet < -1 {
+		t.Errorf("listening to the quiet tone, under 300 Hz and about 100 Hz, it turns down %.1f and %.1f dB", low, quiet)
+	}
+	// Listening, the sound out is what it listens to: under 300 Hz, the
+	// quiet low tone, at -26 dB, as it was; the loud high tone gone.
+	_, lo, hi := compressed(t, float64(SideModeID), SideLow, float64(SideFreqID), 300, float64(SideListenID), 1)
+	if math.Abs(lo+26) > 0.5 || hi > -50 {
+		t.Errorf("listening under 300 Hz, the low tone comes out at %.1f dB, want -26, and the high one at %.1f dB", lo, hi)
+	}
+	// Over 2 kHz, the high tone as it was, the low one gone.
+	_, lo, hi = compressed(t, float64(SideModeID), SideHigh, float64(SideFreqID), 2000, float64(SideListenID), 1)
+	if math.Abs(hi+6) > 0.5 || lo > -50 {
+		t.Errorf("listening over 2 kHz, the high tone comes out at %.1f dB, want -6, and the low one at %.1f dB", hi, lo)
+	}
+}
+
+func TestTheCompressorsAttackRunsToFourHundredMilliseconds(t *testing.T) {
+	if got := param(CompAttackID).Max; got != 400 {
+		t.Fatalf("the attack runs to %v ms", got)
+	}
+	// At 400 ms, after 400 ms a step 20 dB over is turned down about
+	// 63% of the way; at 10 ms, all of it.
+	for _, c := range []struct{ attack, want float64 }{{400, 0.63}, {10, 1}} {
+		k := comp{on: true, threshold: -20, ratio: 1e9, attack: coef(c.attack, 48000), release: coef(100, 48000)}
+		var gr float64
+		for range 19200 {
+			gr = k.step(0)
+		}
+		if got := gr / -20; math.Abs(got-c.want) > 0.02 {
+			t.Errorf("at an attack of %v ms, after 400 ms it has turned down %.2f of the way, want %.2f", c.attack, got, c.want)
+		}
+	}
+}
