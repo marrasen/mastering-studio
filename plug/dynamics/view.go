@@ -81,7 +81,7 @@ func vuOf(s plug.Sound, ref func() float64) func(time.Duration) (float32, bool) 
 // or the limiter's ceiling where the compressor is off, and a bar of
 // how far the two turn the sound down, growing from the right.
 type chip struct {
-	label  *widget.Label
+	label  *plugui.ChipText
 	values map[uint32]float64
 	r      *reduction
 	shown  *anim.Float
@@ -89,8 +89,7 @@ type chip struct {
 }
 
 func newChip(h plug.Host) *chip {
-	c := &chip{label: widget.NewLabel(""), values: map[uint32]float64{}, r: newReduction(h), shown: anim.NewFloat(0)}
-	c.label.NoWrap, c.label.MaxLines = true, 1
+	c := &chip{label: plugui.NewChipText(""), values: map[uint32]float64{}, r: newReduction(h), shown: anim.NewFloat(0)}
 	for _, id := range []uint32{CompOnID, CompRatioID, LimitOnID, LimitCeilingID} {
 		c.values[id] = h.Param(id)
 	}
@@ -110,7 +109,8 @@ func (c *chip) text() string {
 	return "Off"
 }
 
-// chipBar is how wide the chip's bar is, and how many decibels fill it.
+// chipBar is how wide the chip's bar is, and how many decibels fill it,
+// drawn by the square root, so a decibel shows.
 const (
 	chipBar   = 40
 	chipBarDB = 12
@@ -133,7 +133,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	x, h := box.W-chipBar, float32(5)
 	y := (box.H - h) / 2
 	p.RRect(geom.Rc(x, y, chipBar, h), h/2, paint.Solid(audioui.Faded(audioui.Ground.Get(th), 0.85)))
-	if w := chipBar * min(-c.shown.Value()/chipBarDB, 1); w > 0.5 {
+	if w := chipBar * -plugui.ChipScale(float64(c.shown.Value()), chipBarDB); w > 0.5 {
 		p.RRect(geom.Rc(x+chipBar-w, y, w, h), h/2, paint.Solid(HistoryCut.Get(th)))
 	}
 }

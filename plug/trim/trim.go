@@ -16,6 +16,7 @@ import (
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/mastering-studio/plug/plugui"
 )
 
 // GainID is the ID of the gain parameter, in decibels.
@@ -175,14 +176,13 @@ func (m *meter) step(dt time.Duration) bool {
 // chip shows the gain, in a plugin's chip in a chain, and, beside it,
 // the level that comes out, left over right.
 type chip struct {
-	label *widget.Label
+	label *plugui.ChipText
 	out   *meter
 	size  geom.Size
 }
 
 func newChip(h plug.Host) *chip {
-	l := widget.NewLabel(gainText(h.Param(GainID)))
-	l.NoWrap, l.MaxLines = true, 1
+	l := plugui.NewChipText(gainText(h.Param(GainID)))
 	_, out := h.Sound()
 	return &chip{label: l, out: newMeter(out)}
 }

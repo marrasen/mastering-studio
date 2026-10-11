@@ -795,7 +795,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	for b := range bands {
 		col := styleColor(th, c.v.style(b))
 		x := float32(b)*w + 1
-		if a := float32(c.v[AmountID+uint32(b)] / 100); a > 0 {
+		if a := plugui.ChipScale(c.v[AmountID+uint32(b)], 100); a > 0 {
 			h := max(a*(box.H-1), 1)
 			p.RRect(geom.Rc(x, box.H-1-h, w-2, h), 1, paint.Solid(audioui.Faded(col, 0.3)))
 		}

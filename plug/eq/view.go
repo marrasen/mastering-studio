@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"slices"
+	"time"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
@@ -13,6 +16,7 @@ import (
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/mastering-studio/plug/plugui"
 )
 
 // The EQ's sizes. Its colours are the theme's own: [widget.Ink] and
@@ -101,33 +105,90 @@ func paintFit(p *paint.Painter, s string, size float32, bold bool, at geom.Point
 const chipPoints = 64
 
 // chip is the EQ's curve, drawn across a plugin's chip in a chain:
-// flat where there are no bands, or the EQ is bypassed.
+// flat where there are no bands, or the EQ is bypassed, and each
+// dynamic band turned down live as far as it turns itself down.
 type chip struct {
 	p      *plugin
+	h      plug.Host
+	l      plug.Listener
 	bypass bool
 	// amount scales the gains, as a ratio.
 	amount float64
+	bands  []audio.Band
+	// down is how far each dynamic band turns itself down, by its ID,
+	// gliding.
+	down  map[int]*anim.Float
+	group anim.Group
 	// curve is the bands' response at chipPoints frequencies, from
 	// eqLow to eqHigh, worked out as the bands change.
 	curve [chipPoints]float32
 }
 
+// chipFull is how far the chip's curve reaches at its top and bottom, in
+// decibels; it draws by the square root, so a decibel shows.
+const chipFull = 12
+
 func newChip(p *plugin, h plug.Host) *chip {
-	c := &chip{p: p, bypass: h.Param(BypassID) > 0.5, amount: h.Param(AmountID) / 100}
+	_, out := h.Sound()
+	c := &chip{p: p, h: h, l: plug.Listener{Sound: out}, bypass: h.Param(BypassID) > 0.5,
+		amount: h.Param(AmountID) / 100, down: map[int]*anim.Float{}}
 	c.read()
 	return c
 }
 
-// read works the curve out again from the plugin's bands.
+// read reads the plugin's bands again, and works the curve out.
 func (c *chip) read() {
-	bands := c.p.Bands()
+	c.bands = c.p.Bands()
+	for _, b := range c.bands {
+		if b.Dynamic.On && c.down[b.ID] == nil {
+			c.down[b.ID] = anim.NewFloat(0)
+			c.group.Add(c.down[b.ID])
+		}
+	}
+	c.work()
+}
+
+// work works the curve out from the bands, each scaled by the amount
+// and turned down as far as it now is.
+func (c *chip) work() {
+	bands := slices.Clone(c.bands)
 	for i := range bands {
 		bands[i].Gain *= float32(c.amount)
+		if d := c.down[bands[i].ID]; d != nil && bands[i].Dynamic.On {
+			bands[i].Gain += d.Value()
+		}
 	}
 	for i := range c.curve {
 		hz := eqLow * math.Pow(eqHigh/eqLow, float64(i)/(chipPoints-1))
 		c.curve[i] = float32(audio.Response(bands, hz))
 	}
+}
+
+// Step implements [gunim.Animator]: each dynamic band glides to how far
+// it turns itself down at the frame heard, and back up once the sound
+// stops; the curve follows.
+func (c *chip) Step(dt time.Duration) bool {
+	_, _, playing := c.l.Hear(4096, dt)
+	for _, b := range c.bands {
+		d := c.down[b.ID]
+		if d == nil {
+			continue
+		}
+		to := float32(0)
+		if playing && b.Dynamic.On {
+			if v, ok := c.h.Traced(bandTrace+uint32(b.ID), c.l.At()-1); ok {
+				to = v
+			}
+		}
+		if d.Target() != to {
+			d.Animate(to, anim.Snappy)
+		}
+	}
+	moving := c.group.Step(dt)
+	if moving {
+		c.work()
+	}
+	return moving || playing
 }
 
 // Follow implements [plug.Follower]: the curve flattens while the EQ
@@ -138,7 +199,7 @@ func (c *chip) Follow(id uint32, v float64, u *gunim.UI) {
 		c.bypass = v > 0.5
 	case AmountID:
 		c.amount = v / 100
-		c.read()
+		c.work()
 	default:
 		return
 	}
@@ -157,7 +218,7 @@ func (c *chip) Layout(cs gunim.Constraints, _ gunim.Frame, _ gunim.Children) geo
 }
 
 // Paint implements [gunim.Node]: the line of 0 dB, faint, and the
-// curve over it, from -eqRange at the bottom to eqRange at the top.
+// curve over it, from -chipFull at the bottom to chipFull at the top.
 func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	ink, accent := widget.Ink.Get(th), widget.Accent.Get(th)
@@ -170,7 +231,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 		if c.bypass {
 			db = 0
 		}
-		y := mid - max(-1, min(db/eqRange, 1))*half
+		y := mid - plugui.ChipScale(float64(db), chipFull)*half
 		// The line's round ends stay inside the box.
 		pt := geom.Pt(width/2+(box.W-width)*float32(i)/(chipPoints-1), y)
 		if i > 0 {

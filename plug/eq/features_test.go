@@ -110,6 +110,23 @@ func TestADynamicBandTurnsDownAndTheViewsReadHowFar(t *testing.T) {
 	if got := d.playing(1).Response(1000); math.Abs(got+10.5) > 0.5 {
 		t.Errorf("the graph draws the bell at %+.2f dB at 1 kHz, want -10.5", got)
 	}
+	// So does the chip, and lets the bell back up once the sound stops.
+	out := &tone{level: 0.5, at: 47001}
+	h.out = out
+	c := newChip(p, h)
+	for range 60 {
+		out.at += 16
+		c.Step(time.Second / 60)
+	}
+	if low := slices.Min(c.curve[:]); math.Abs(float64(low)+10.5) > 0.7 {
+		t.Errorf("as the sound plays, the chip draws the bell down to %+.2f dB, want -10.5", low)
+	}
+	for range 60 {
+		c.Step(time.Second / 60)
+	}
+	if low := slices.Min(c.curve[:]); math.Abs(float64(low)) > 0.1 {
+		t.Errorf("once the sound stops, the chip draws the bell down to %+.2f dB, want 0", low)
+	}
 }
 
 func TestProcessingDynamicBandsAllocatesNothing(t *testing.T) {

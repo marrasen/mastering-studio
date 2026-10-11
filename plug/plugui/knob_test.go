@@ -86,3 +86,23 @@ func TestKeysWheelAndDoubleClickStepTheKnob(t *testing.T) {
 		t.Errorf("a screen reader set the knob to %v, want 20", h.values[3])
 	}
 }
+
+func TestTheChipsScaleShowsSmallChangesPlainly(t *testing.T) {
+	for _, c := range []struct{ v, want float64 }{{0, 0}, {0.75, 0.25}, {-3, -0.5}, {12, 1}, {-40, -1}} {
+		if got := ChipScale(c.v, 12); math.Abs(float64(got)-c.want) > 1e-6 {
+			t.Errorf("of 12, %v is drawn at %v, want %v", c.v, got, c.want)
+		}
+	}
+}
+
+func TestChipTextIsSmallAndCutShort(t *testing.T) {
+	c := NewChipText("-12.5 dB")
+	whole := c.Layout(gunim.Constraints{Max: geom.Sz(400, 40)}, gunim.Frame{}, gunim.Children{})
+	cut := c.Layout(gunim.Constraints{Max: geom.Sz(20, 40)}, gunim.Frame{}, gunim.Children{})
+	if whole.W < 30 || whole.H > ChipTextSize+5 || cut.W != 20 {
+		t.Errorf("a chip's words stand %v, and %v in 20 pixels", whole, cut)
+	}
+	if c.Access().Name != "-12.5 dB" {
+		t.Errorf("a chip's words read as %q", c.Access().Name)
+	}
+}

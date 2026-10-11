@@ -610,7 +610,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Chi
 	w := min(box.W/bands, 12)
 	p.RRect(geom.Rc(0, mid, w*bands, 1), 0, paint.Solid(audioui.Faded(ink, 0.25)))
 	for b := range bands {
-		v := float32(c.v[WidthID+uint32(b)] / 100)
+		v := plugui.ChipScale(c.v[WidthID+uint32(b)], 100)
 		col := widget.Accent.Get(th)
 		if v < 0 {
 			col = ImagerNarrow.Get(th)
