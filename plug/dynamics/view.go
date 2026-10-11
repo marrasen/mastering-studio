@@ -1,6 +1,7 @@
 package dynamics
 
 import (
+	"image/color"
 	"math"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
 	"github.com/marrasen/mastering-studio/plug/plugui"
@@ -155,123 +157,16 @@ func (c *chip) Follow(id uint32, v float64, u *gunim.UI) {
 	}
 }
 
-// section is a part of the plugin: its name, a switch where it can be
-// switched off, and its knobs, greyed while it is off.
-type section struct {
-	name  string
-	on    uint32
-	sw    *widget.Switch
-	knobs []*plugui.Knob
-	size  geom.Size
-}
-
-// The sections' look: the room round and between the knobs, and the
-// height of the name over them.
-const (
-	sectionPad  = 8
-	sectionHead = 26
-	sectionGap  = 10
-)
-
-func newSection(h plug.Host, name string, on uint32, ids ...uint32) *section {
-	s := &section{name: name, on: on}
-	for _, id := range ids {
-		s.knobs = append(s.knobs, plugui.NewKnob(h, param(id)))
-	}
-	if on != 0 {
-		s.sw = widget.NewSwitch("")
-		s.sw.SetChecked(h.Param(on) > 0.5, nil)
-		s.sw.OnChange = func(v bool, u *gunim.UI) gunim.Intent {
-			h.Begin(on, u)
-			h.Set(on, onOffValue(v), u)
-			h.End(on, u)
-			s.dim(v)
-			return nil
-		}
-		s.dim(h.Param(on) > 0.5)
-	}
-	return s
-}
-
-func onOffValue(on bool) float64 {
-	if on {
-		return 1
-	}
-	return 0
-}
-
-// dim greys the knobs while the section is off.
-func (s *section) dim(on bool) {
-	for _, k := range s.knobs {
-		k.Disabled = !on
-	}
-}
-
-// width is how wide the section is.
-func (s *section) width() float32 {
-	return float32(len(s.knobs))*plugui.KnobW + 2*sectionPad
-}
-
-// follow takes a parameter set elsewhere, where it is the section's.
-func (s *section) follow(id uint32, v float64, u *gunim.UI) {
-	if id == s.on && s.sw != nil {
-		s.sw.SetChecked(v > 0.5, u)
-		s.dim(v > 0.5)
-		u.Invalidate()
-	}
-	for _, k := range s.knobs {
-		if k.Param().ID == id {
-			k.Follow(v, u)
-		}
-	}
-}
-
-// Children implements [gunim.Composite].
-func (s *section) Children() []gunim.Node {
-	kids := make([]gunim.Node, 0, len(s.knobs)+1)
-	for _, k := range s.knobs {
-		kids = append(kids, k)
-	}
-	if s.sw != nil {
-		kids = append(kids, s.sw)
-	}
-	return kids
-}
-
-// Layout implements [gunim.Node].
-func (s *section) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	s.size = c.Constrain(geom.Sz(s.width(), sectionHead+plugui.KnobH+sectionPad))
-	for i := range s.knobs {
-		kids.At(i).Layout(gunim.Tight(geom.Sz(plugui.KnobW, plugui.KnobH)))
-		kids.At(i).Place(geom.Pt(sectionPad+float32(i)*plugui.KnobW, sectionHead))
-	}
-	if s.sw != nil {
-		sz := kids.At(len(s.knobs)).Layout(gunim.Constraints{Max: geom.Sz(60, 22)})
-		kids.At(len(s.knobs)).Place(geom.Pt(s.size.W-sectionPad-sz.W, (sectionHead-sz.H)/2+2))
-	}
-	return s.size
-}
-
-// Paint implements [gunim.Node].
-func (s *section) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
-	th := f.Theme
-	ink := widget.Ink.Get(th)
-	r := geom.Rect{Max: box.Point()}
-	plugui.PaintGlass(p, th, r, widget.CardRadius.Get(th))
-	name := audioui.Shaped(s.name, 10, true, false)
-	name.Paint(p, geom.Pt(sectionPad, (sectionHead-name.Height())/2+2), audioui.Faded(ink, 0.55))
-	for k := range kids.All {
-		k.Paint(p)
-	}
-}
-
 // panel is the history of the sound, beside two VU meters, of how far
 // the compressor and limiter turn the sound down and of the sound that
 // comes out, over the sections' knobs.
 type panel struct {
-	hist     *history
+	hist *plugui.History
+	// marks are where the history's lines are drawn: the thresholds and
+	// the ceiling, with whether each part is on.
+	marks    marks
 	gr, out  *vu
-	sections []*section
+	sections []*plugui.Section
 	ref      float64
 	// tuner tunes how the history shows behind the controls, and
 	// metersAt is where the meters' pane is.
@@ -282,16 +177,28 @@ type panel struct {
 func newPanel(h plug.Host) *panel {
 	r := newReduction(h)
 	_, out := h.Sound()
-	p := &panel{hist: newHistory(h), ref: h.Param(MeterID),
+	p := &panel{ref: h.Param(MeterID),
 		tuner: plugui.NewTuner("Tune how the sound shows behind the controls")}
+	for _, id := range []uint32{GateOnID, GateThresholdID, CompOnID, CompThresholdID, LimitOnID, LimitCeilingID} {
+		p.marks.follow(id, h.Param(id))
+	}
+	m := &p.marks
+	p.hist = plugui.NewHistory(h, []plugui.Reduction{
+		{IDs: []uint32{GateGRID}, Color: HistoryGate},
+		{IDs: []uint32{CompGRID, LimitGRID}, Color: HistoryCut, Line: true},
+	}, []plugui.Mark{
+		{Name: "GATE", Color: HistoryGate, At: func() (float64, bool) { return m.gateAt, m.gateOn }},
+		{Name: "THRESHOLD", Color: widget.Ink, At: func() (float64, bool) { return m.compAt, m.compOn }},
+		{Name: "CEILING", Color: HistoryCut, At: func() (float64, bool) { return m.ceiling, m.limOn }},
+	}, false)
 	p.gr = newVU("GAIN REDUCTION", r.read)
 	p.out = newVU("OUTPUT", vuOf(out, func() float64 { return p.ref }))
-	p.sections = []*section{
-		newSection(h, "INPUT", 0, InputID),
-		newSection(h, "GATE", GateOnID, GateThresholdID, GateRangeID, GateAttackID, GateReleaseID),
-		newSection(h, "COMPRESSOR", CompOnID, CompThresholdID, CompRatioID, CompKneeID, CompAttackID, CompReleaseID, CompMakeupID),
-		newSection(h, "LIMITER", LimitOnID, LimitCeilingID, LimitReleaseID),
-		newSection(h, "OUTPUT", 0, OutputID, MeterID),
+	p.sections = []*plugui.Section{
+		plugui.NewSection(h, &Descriptor, "INPUT", 0, InputID),
+		plugui.NewSection(h, &Descriptor, "GATE", GateOnID, GateThresholdID, GateRangeID, GateAttackID, GateReleaseID),
+		plugui.NewSection(h, &Descriptor, "COMPRESSOR", CompOnID, CompThresholdID, CompRatioID, CompKneeID, CompAttackID, CompReleaseID, CompMakeupID),
+		plugui.NewSection(h, &Descriptor, "LIMITER", LimitOnID, LimitCeilingID, LimitReleaseID),
+		plugui.NewSection(h, &Descriptor, "OUTPUT", 0, OutputID, MeterID),
 	}
 	return p
 }
@@ -314,47 +221,19 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	// and the meters side by side above them, centred.
 	kids.At(0).Layout(gunim.Tight(size))
 	kids.At(0).Place(geom.Point{})
-	type row struct {
-		from, to int
-		w        float32
-	}
-	var rows []row
-	cur := row{}
-	for i, s := range p.sections {
-		w := s.width()
-		// A row reaches as near the edges as half the inset.
-		if cur.to > cur.from && cur.w+sectionGap+w > size.W-panelInset {
-			rows = append(rows, cur)
-			cur = row{from: i}
-		}
-		if cur.to > cur.from {
-			cur.w += sectionGap
-		}
-		cur.w += w
-		cur.to = i + 1
-	}
-	rows = append(rows, cur)
-	sectionH := float32(sectionHead + plugui.KnobH + sectionPad)
-	knobsH := float32(len(rows))*(sectionH+sectionGap) - sectionGap
-	y := size.H - panelInset - knobsH
-	for _, r := range rows {
-		x := (size.W - r.w) / 2
-		for i := r.from; i < r.to; i++ {
-			s := kids.At(3 + i).Layout(gunim.Tight(geom.Sz(p.sections[i].width(), sectionH)))
-			kids.At(3 + i).Place(geom.Pt(x, y))
-			x += s.W + sectionGap
-		}
-		y += sectionH + sectionGap
-	}
+	top := plugui.PlaceSections(size, panelInset, p.sections, func(i int, r geom.Rect) {
+		kids.At(3 + i).Layout(gunim.Tight(r.Size()))
+		kids.At(3 + i).Place(r.Min)
+	})
 	// The meters, as a meter's face is, wider than tall, on their pane.
-	room := size.H - panelInset - knobsH - sectionGap - 2*meterPad - panelInset
+	room := top - plugui.SectionGap - 2*meterPad - panelInset
 	mh := max(min(room, meterH), 40)
 	mw := mh / 0.62
-	pw := 2*mw + sectionGap + 2*meterPad
-	p.metersAt = geom.Rc((size.W-pw)/2, size.H-panelInset-knobsH-sectionGap-mh-2*meterPad, pw, mh+2*meterPad)
+	pw := 2*mw + plugui.SectionGap + 2*meterPad
+	p.metersAt = geom.Rc((size.W-pw)/2, top-plugui.SectionGap-mh-2*meterPad, pw, mh+2*meterPad)
 	for i := range 2 {
 		kids.At(1 + i).Layout(gunim.Tight(geom.Sz(mw, mh)))
-		kids.At(1 + i).Place(p.metersAt.Min.Add(geom.Pt(meterPad+float32(i)*(mw+sectionGap), meterPad)))
+		kids.At(1 + i).Place(p.metersAt.Min.Add(geom.Pt(meterPad+float32(i)*(mw+plugui.SectionGap), meterPad)))
 	}
 	// The tuner's button at the top right, its card under it.
 	n := 3 + len(p.sections)
@@ -388,11 +267,43 @@ func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.
 // move.
 func (p *panel) Follow(id uint32, v float64, u *gunim.UI) {
 	for _, s := range p.sections {
-		s.follow(id, v, u)
+		s.Follow(id, v, u)
 	}
-	p.hist.follow(id, v)
+	p.marks.follow(id, v)
 	if id == MeterID {
 		p.ref = v
 	}
 	u.Invalidate()
+}
+
+// The history's colours: how far the compressor and limiter turn the
+// sound down, and how far the gate does.
+var (
+	HistoryCut  = theme.Color("dynamics.history.cut", color.NRGBA{R: 0xff, G: 0x5a, B: 0x4f, A: 0xff})
+	HistoryGate = theme.Color("dynamics.history.gate", color.NRGBA{R: 0x6c, G: 0x7c, B: 0xff, A: 0xff})
+)
+
+// marks are the thresholds and the ceiling the history draws lines at,
+// with whether each part is on.
+type marks struct {
+	gateAt, compAt, ceiling float64
+	gateOn, compOn, limOn   bool
+}
+
+// follow takes a parameter the history draws a line of.
+func (m *marks) follow(id uint32, v float64) {
+	switch id {
+	case GateOnID:
+		m.gateOn = v > 0.5
+	case GateThresholdID:
+		m.gateAt = v
+	case CompOnID:
+		m.compOn = v > 0.5
+	case CompThresholdID:
+		m.compAt = v
+	case LimitOnID:
+		m.limOn = v > 0.5
+	case LimitCeilingID:
+		m.ceiling = v
+	}
 }

@@ -434,7 +434,11 @@ func TestTheHistoryScrollsSmoothlyAndDrawsTheReduction(t *testing.T) {
 		pr.Process(&plug.Block{In: ch, Out: ch, Frames: 512, Changes: changes, Position: plug.Position{Frame: int64(at)}})
 		changes = nil
 	}
-	hs := newHistory(h)
+	pn, ok := p.View(plug.Panel, h).(*panel)
+	if !ok {
+		t.Fatal("the panel is of another type")
+	}
+	hs := pn.hist
 	// At 144 frames a second, a chunk of 1024 frames every third.
 	frame := time.Second / 144
 	var moves []float64
@@ -442,14 +446,14 @@ func TestTheHistoryScrollsSmoothlyAndDrawsTheReduction(t *testing.T) {
 		if i%3 == 0 {
 			s.at += 1024
 		}
-		was := hs.shown
+		was := hs.Scrolled()
 		hs.Step(frame)
 		if i > 20 {
-			moves = append(moves, hs.shown-was)
+			moves = append(moves, hs.Scrolled()-was)
 		}
 	}
-	if hs.n < 100 {
-		t.Fatalf("a second of sound made %d columns", hs.n)
+	if hs.Columns() < 100 {
+		t.Fatalf("a second of sound made %d columns", hs.Columns())
 	}
 	// Each frame moves on about as far as the last: no stalls between
 	// chunks and leaps as they come.
@@ -457,23 +461,24 @@ func TestTheHistoryScrollsSmoothlyAndDrawsTheReduction(t *testing.T) {
 	if least < 0.5*most {
 		t.Errorf("the scroll moves from %.2f to %.2f columns a frame, unevenly", least, most)
 	}
-	c := hs.cols[(hs.n-1)%histCols]
-	if c.comp > -10 || c.out < 0.4 {
-		t.Errorf("the last column shows the sound out at %v, turned down %v dB; want 0.5, about -18", c.out, c.comp)
+	// The compressor and the limiter, the second reduction drawn.
+	_, out, down, _ := hs.Column(hs.Columns() - 1)
+	if down[1] > -10 || out < 0.4 {
+		t.Errorf("the last column shows the sound out at %v, turned down %v dB; want 0.5, about -18", out, down[1])
 	}
 	// The window stalls for longer than its views read at once: the
 	// history goes on past the frames missed.
-	made := hs.n
+	made := hs.Columns()
 	s.at += 20000
 	hs.Step(frame)
-	if want := made + 20000/colFrames; hs.n < want-1 || hs.n > want+1 {
-		t.Errorf("past 20000 frames missed, the history has %d columns, want about %d", hs.n, want)
+	if want := made + 20000/(2*plug.TraceFrames); hs.Columns() < want-1 || hs.Columns() > want+1 {
+		t.Errorf("past 20000 frames missed, the history has %d columns, want about %d", hs.Columns(), want)
 	}
 	// Playing jumps back: the history starts again.
 	s.at -= 48000
 	hs.Step(frame)
-	if hs.n > 16 {
-		t.Errorf("after a jump back the history keeps %d columns", hs.n)
+	if hs.Columns() > 16 {
+		t.Errorf("after a jump back the history keeps %d columns", hs.Columns())
 	}
 }
 
@@ -498,23 +503,23 @@ func TestTheViewsWorkThroughTheHost(t *testing.T) {
 		t.Fatal("the panel is of another type")
 	}
 	comp := pn.sections[2]
-	if comp.sw.Checked() || !comp.knobs[0].Disabled {
+	if comp.Switch.Checked() || !comp.Knobs[0].Disabled {
 		t.Error("the compressor, off, shows on")
 	}
 	// Switched on, as one gesture, its knobs lit.
-	comp.sw.OnChange(true, nil)
-	if h.values[CompOnID] != 1 || comp.knobs[0].Disabled {
-		t.Errorf("switched on, the host has %v and the knobs are greyed %v", h.values[CompOnID], comp.knobs[0].Disabled)
+	comp.Switch.OnChange(true, nil)
+	if h.values[CompOnID] != 1 || comp.Knobs[0].Disabled {
+		t.Errorf("switched on, the host has %v and the knobs are greyed %v", h.values[CompOnID], comp.Knobs[0].Disabled)
 	}
 	if !slices.Equal(h.log, []string{"begin", "set", "end"}) {
 		t.Errorf("the switch sent %v, want one gesture", h.log)
 	}
 	pn.Follow(CompRatioID, 8, nil)
-	if comp.knobs[1].Value() != 8 {
-		t.Errorf("the ratio's knob follows to %v, want 8", comp.knobs[1].Value())
+	if comp.Knobs[1].Value() != 8 {
+		t.Errorf("the ratio's knob follows to %v, want 8", comp.Knobs[1].Value())
 	}
 	pn.Follow(GateOnID, 1, nil)
-	if !pn.sections[1].sw.Checked() || pn.sections[1].knobs[0].Disabled || !pn.hist.gateOn {
+	if !pn.sections[1].Switch.Checked() || pn.sections[1].Knobs[0].Disabled || !pn.marks.gateOn {
 		t.Error("the gate switched on elsewhere stays off in the panel")
 	}
 }

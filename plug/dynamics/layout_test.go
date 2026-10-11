@@ -9,6 +9,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/gunimtest"
 	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/mastering-studio/plug/plugui"
 )
 
 // boundsOf lays the panel out at size and returns where each of nodes
@@ -58,7 +59,7 @@ func TestTheSoundFillsThePanelUnderItsControls(t *testing.T) {
 	}
 	// The meters side by side, centred above them.
 	gr, out := b[1], b[2]
-	if gr.Min.Y != out.Min.Y || gr.Max.X >= out.Min.X || out.Max.Y > first.Min.Y-sectionGap ||
+	if gr.Min.Y != out.Min.Y || gr.Max.X >= out.Min.X || out.Max.Y > first.Min.Y-plugui.SectionGap ||
 		math.Abs(float64((gr.Min.X+out.Max.X)/2-size.W/2)) > 1 {
 		t.Errorf("the meters are at %v and %v, over sections from %v: not side by side, centred above", gr, out, first)
 	}
