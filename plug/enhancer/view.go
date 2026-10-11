@@ -812,7 +812,7 @@ func newPanel(h plug.Host) *panel {
 	for b := range bands {
 		s := plugui.NewSection(h, &Descriptor, bandNames[b], 0, AmountID+uint32(b))
 		s.Knobs[0].Tooltip = "How much the band's harmonics are added: none leaves it as it was"
-		sel := plugui.NewSelector(styleNames, styleTips)
+		sel := plugui.NewSelector("Style", styleNames, styleTips)
 		sel.Columns = 2
 		sel.SetSelected(v.style(b), nil)
 		id := StyleID + uint32(b)

@@ -11,9 +11,10 @@ import (
 	"github.com/marrasen/gunim/widget"
 )
 
-// Selector picks one of a few options, as a synth's panel does: a row
-// of lamps, the chosen one lit, and under them the chosen option's
-// name, or the name of the one under the pointer. A click on a lamp
+// Selector picks one of a few options, as a synth's panel does: its
+// lamps, the chosen one lit, where a knob's cap stands, and under them,
+// as under a knob, its title and the chosen option's name, or the name
+// of the one under the pointer. A click on a lamp
 // picks its option, and the wheel and the arrow keys step through them.
 // Lamps light and dim gliding, the name turns over as it changes, and
 // each lamp's tooltip says what its option does.
@@ -32,20 +33,20 @@ type Selector struct {
 	// Columns, where set, sets the lamps in rows of so many, as four
 	// two by two, which takes less room across; else all in one row.
 	Columns int
-	tip     widget.PartTip
-	cells   []geom.Rect
-	size    geom.Size
+	// Title is what it picks, written under its lamps as a knob's name.
+	Title string
+	tip   widget.PartTip
+	cells []geom.Rect
+	size  geom.Size
 }
 
-// SelectorH is how tall a selector of one row is: a row of lamps, and
-// the name
-// under them.
-const SelectorH = 34
+// SelectorH is how tall a selector is: as tall as a knob.
+const SelectorH = KnobH
 
-// NewSelector returns a selector of the options names, each with its
-// tooltip of tips, the first chosen.
-func NewSelector(names, tips []string) *Selector {
-	s := &Selector{names: names, tips: tips, hot: -1, shown: anim.NewFloat(0)}
+// NewSelector returns a selector titled title of the options names, each
+// with its tooltip of tips, the first chosen.
+func NewSelector(title string, names, tips []string) *Selector {
+	s := &Selector{Title: title, names: names, tips: tips, hot: -1, shown: anim.NewFloat(0)}
 	for i := range names {
 		s.lit = append(s.lit, anim.NewFloat(float32(onOff(i == 0))))
 		s.Add(s.lit[i])
@@ -82,8 +83,12 @@ func (s *Selector) glide(u *gunim.UI) {
 	u.Invalidate()
 }
 
-// lampRow is how tall a row of lamps is.
-const lampRow = 16
+// The lamps' rows: how far apart they stand, and where their middle is,
+// as a knob's cap's.
+const (
+	lampRow = 12
+	lampMid = 4 + 17
+)
 
 // grid returns how many lamps stand across, and how many rows they
 // take.
@@ -95,21 +100,25 @@ func (s *Selector) grid() (cols, rows int) {
 	return cols, (len(s.names) + cols - 1) / cols
 }
 
-// lampsH is how tall the lamps stand, all their rows.
-func (s *Selector) lampsH() float32 {
+// lampsAt returns where the lamps' rows run, from their top to their
+// foot.
+func (s *Selector) lampsAt() (top, foot float32) {
 	_, rows := s.grid()
-	return float32(rows) * lampRow
+	h := float32(rows) * lampRow
+	return lampMid - h/2, lampMid + h/2
 }
 
 // Layout implements [gunim.Node]: a lamp each, evenly across, in rows
-// of Columns where it is set, and the name under them.
+// of Columns where it is set, as tall as a knob, the title and the
+// name under them.
 func (s *Selector) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
 	cols, _ := s.grid()
-	s.size = c.Constrain(geom.Sz(max(float32(cols)*24, 48), s.lampsH()+SelectorH-lampRow))
+	s.size = c.Constrain(geom.Sz(max(float32(cols)*24, 48), SelectorH))
 	cw := s.size.W / float32(cols)
+	top, _ := s.lampsAt()
 	s.cells = s.cells[:0]
 	for i := range s.names {
-		s.cells = append(s.cells, geom.Rc(float32(i%cols)*cw, float32(i/cols)*lampRow, cw, lampRow))
+		s.cells = append(s.cells, geom.Rc(float32(i%cols)*cw, top+float32(i/cols)*lampRow, cw, lampRow))
 	}
 	return s.size
 }
@@ -122,7 +131,7 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	defer end()
 	for i, r := range s.cells {
 		lit := s.lit[i].Value()
-		cx, cy := (r.Min.X+r.Max.X)/2, r.Min.Y+8
+		cx, cy := (r.Min.X+r.Max.X)/2, (r.Min.Y+r.Max.Y)/2
 		if lit > 0.01 {
 			p.ShadowRRect(geom.Rc(cx-5, cy-5, 10, 10), 5, paint.Solid(audioui.Faded(accent, 0.3*lit)),
 				paint.Shadow{Blur: 8 * lit, Color: audioui.Faded(accent, 0.4*lit)})
@@ -133,8 +142,12 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		}
 		p.RRect(geom.Rc(cx-3.5, cy-3.5, 7, 7), 3.5, paint.Solid(lamp))
 	}
-	// The name: the chosen option's, or the one under the pointer, the
-	// words before sliding away as the new come.
+	// The title, as a knob's name, and under it the name: the chosen
+	// option's, or the one under the pointer, the words before sliding
+	// away as the new come, as a knob's value.
+	const text = 10.5
+	title := audioui.Shaped(s.Title, text, false, false)
+	title.Paint(p, geom.Pt((box.W-title.Advance)/2, lampMid+17+4), audioui.Faded(ink, 0.6))
 	at := s.shown.Value()
 	for i := range s.names {
 		d := at - float32(i)
@@ -145,8 +158,8 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		if i != s.sel {
 			alpha *= 0.7
 		}
-		t := audioui.Shaped(s.names[i], 10, i == s.sel, false)
-		t.Paint(p, geom.Pt((box.W-t.Advance)/2-d*20, s.lampsH()+3), audioui.Faded(ink, alpha))
+		t := audioui.Shaped(s.names[i], text, false, true)
+		t.Paint(p, geom.Pt((box.W-t.Advance)/2-d*20, lampMid+17+4+title.Height()), audioui.Faded(ink, alpha))
 	}
 }
 
@@ -163,7 +176,8 @@ func (s *Selector) at(pos geom.Point) int {
 	if pos.Y < 0 || pos.Y >= s.size.H {
 		return -1
 	}
-	y := min(pos.Y, s.lampsH()-1)
+	top, foot := s.lampsAt()
+	y := min(max(pos.Y, top), foot-1)
 	for i, r := range s.cells {
 		if pos.X >= r.Min.X && pos.X < r.Max.X && y >= r.Min.Y && y < r.Max.Y {
 			return i

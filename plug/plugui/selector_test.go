@@ -11,7 +11,7 @@ import (
 )
 
 func TestASelectorPicksByLampWheelAndKeys(t *testing.T) {
-	s := NewSelector([]string{"A", "B", "C"}, []string{"one", "two", "three"})
+	s := NewSelector("Test", []string{"A", "B", "C"}, []string{"one", "two", "three"})
 	var picked []int
 	s.OnPick = func(i int, _ *gunim.UI) { picked = append(picked, i) }
 	s.Layout(gunim.Constraints{Max: geom.Sz(72, 100)}, gunim.Frame{}, gunim.Children{})
@@ -71,19 +71,26 @@ func TestAKnobBoundToItsOwnValueTurnsItAsAGesture(t *testing.T) {
 }
 
 func TestFourLampsInTwoColumnsStandTwoByTwo(t *testing.T) {
-	s := NewSelector([]string{"A", "B", "C", "D"}, []string{"a", "b", "c", "d"})
+	s := NewSelector("Test", []string{"A", "B", "C", "D"}, []string{"a", "b", "c", "d"})
 	s.Columns = 2
 	size := s.Layout(gunim.Constraints{Min: geom.Sz(56, 0), Max: geom.Sz(56, 100)}, gunim.Frame{}, gunim.Children{})
-	if size.W != 56 || size.H != SelectorH+lampRow {
-		t.Errorf("four lamps two by two stand %v", size)
+	if size.W != 56 || size.H != KnobH {
+		t.Errorf("four lamps two by two stand %v, want as tall as a knob", size)
+	}
+	// Two rows, lampRow apart, about where a knob's cap's middle is.
+	top, foot := s.lampsAt()
+	if foot-top != 24 || (top+foot)/2 != lampMid || lampMid != 4+17 {
+		t.Errorf("the lamps run from %v to %v: want two rows 12 apart about a knob's cap's middle, 21", top, foot)
 	}
 	// Each lamp where it stands: the top row first, then the second.
-	for i, at := range []geom.Point{{X: 14, Y: 8}, {X: 42, Y: 8}, {X: 14, Y: 24}, {X: 42, Y: 24}} {
+	for i, at := range []geom.Point{{X: 14, Y: lampMid - 6}, {X: 42, Y: lampMid - 6}, {X: 14, Y: lampMid + 6},
+		{X: 42, Y: lampMid + 6}} {
 		if got := s.at(at); got != i {
 			t.Errorf("at %v is option %d, want %d", at, got, i)
 		}
 	}
-	// Under the lamps, on the name, the lamp of the last row above.
+	// Under the lamps, on the title and the name, the lamp of the last
+	// row above.
 	if got := s.at(geom.Pt(42, size.H-4)); got != 3 {
 		t.Errorf("under the right column, option %d", got)
 	}

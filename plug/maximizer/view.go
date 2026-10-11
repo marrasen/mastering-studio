@@ -164,7 +164,7 @@ func newPanel(pl *plugin, h plug.Host) *panel {
 			{Name: "TARGET", Color: MaxOnTarg, At: func() (float64, bool) { return p.values[TargetID], true }},
 		}, true)
 	p.readouts = &readouts{p: p}
-	p.mode = plugui.NewSelector(modeNames, modeTips)
+	p.mode = plugui.NewSelector("Mode", modeNames, modeTips)
 	p.mode.SetSelected(int(math.Round(p.values[ModeID])), nil)
 	p.mode.OnPick = func(i int, u *gunim.UI) {
 		h.Begin(ModeID, u)

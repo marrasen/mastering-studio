@@ -203,7 +203,7 @@ func newPanel(h plug.Host) *panel {
 	p.out = newVU("OUTPUT", vuOf(out, func() float64 { return p.ref }))
 	p.zero = plugui.NewTrimPot(h, param(MeterID))
 	p.zero.Tooltip = "The level that reads 0 VU on the output meter, in dBFS"
-	p.side = plugui.NewSelector(sideNames, sideTips)
+	p.side = plugui.NewSelector("Sidechain", sideNames, sideTips)
 	p.side.Columns = 2
 	p.side.SetSelected(int(math.Round(h.Param(SideModeID))), nil)
 	p.side.OnPick = func(i int, u *gunim.UI) {

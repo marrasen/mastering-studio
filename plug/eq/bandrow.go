@@ -98,7 +98,7 @@ const (
 func newBandRow(g *graph, numbered bool) *bandRow {
 	r := &bandRow{g: g, numbered: numbered, in: anim.NewFloat(0), dynIn: anim.NewFloat(0)}
 	r.Add(r.in, r.dynIn)
-	r.kind = plugui.NewSelector(kindNames, kindTips)
+	r.kind = plugui.NewSelector("Kind", kindNames, kindTips)
 	r.kind.OnPick = func(i int, u *gunim.UI) { g.setKind(r.id, audio.FilterKind(i), u) }
 	params := []plug.Param{freqParam, gainParam, qParam, thresholdParam, ratioParam, attackParam, releaseParam, rangeParam}
 	for k, p := range params {
@@ -310,7 +310,7 @@ func (r *bandRow) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children
 	if r.numbered {
 		x += rowNumber
 	}
-	place(0, geom.Rc(x, (plugui.KnobH-plugui.SelectorH)/2, rowKinds, plugui.SelectorH))
+	place(0, geom.Rc(x, 0, rowKinds, plugui.SelectorH))
 	x += rowKinds + rowSection
 	for k := range 3 {
 		place(4+k, geom.Rc(x, 0, plugui.KnobW, plugui.KnobH))
