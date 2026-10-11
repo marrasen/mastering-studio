@@ -257,7 +257,7 @@ func (s *section) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gun
 	th := f.Theme
 	ink := widget.Ink.Get(th)
 	r := geom.Rect{Max: box.Point()}
-	p.RRect(r, widget.CardRadius.Get(th), paint.Solid(audioui.Faded(audioui.Ground.Get(th), 0.6)))
+	plugui.PaintGlass(p, th, r, widget.CardRadius.Get(th))
 	name := audioui.Shaped(s.name, 10, true, false)
 	name.Paint(p, geom.Pt(sectionPad, (sectionHead-name.Height())/2+2), audioui.Faded(ink, 0.55))
 	for k := range kids.All {
@@ -273,12 +273,17 @@ type panel struct {
 	gr, out  *vu
 	sections []*section
 	ref      float64
+	// tuner tunes how the history shows behind the controls, and
+	// metersAt is where the meters' pane is.
+	tuner    *plugui.Tuner
+	metersAt geom.Rect
 }
 
 func newPanel(h plug.Host) *panel {
 	r := newReduction(h)
 	_, out := h.Sound()
-	p := &panel{hist: newHistory(h), ref: h.Param(MeterID)}
+	p := &panel{hist: newHistory(h), ref: h.Param(MeterID),
+		tuner: plugui.NewTuner("Tune how the sound shows behind the controls")}
 	p.gr = newVU("GAIN REDUCTION", r.read)
 	p.out = newVU("OUTPUT", vuOf(out, func() float64 { return p.ref }))
 	p.sections = []*section{
@@ -293,20 +298,22 @@ func newPanel(h plug.Host) *panel {
 
 // Children implements [gunim.Composite].
 func (p *panel) Children() []gunim.Node {
-	kids := make([]gunim.Node, 0, 3+len(p.sections))
+	kids := make([]gunim.Node, 0, 5+len(p.sections))
 	kids = append(kids, p.hist, p.gr, p.out)
 	for _, s := range p.sections {
 		kids = append(kids, s)
 	}
-	return kids
+	return append(kids, p.tuner.Button, p.tuner.Card)
 }
 
-// Layout implements [gunim.Node]: the history along the top, the
-// meters stacked at its right; the sections under them, in rows as
-// many as fit, each row centred.
+// Layout implements [gunim.Node].
 func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	size := c.Max
-	// The sections, in rows.
+	// The sound's history fills the panel; over it, on glass, the
+	// sections along the foot, in rows as many as fit, each row centred,
+	// and the meters side by side above them, centred.
+	kids.At(0).Layout(gunim.Tight(size))
+	kids.At(0).Place(geom.Point{})
 	type row struct {
 		from, to int
 		w        float32
@@ -315,7 +322,8 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	cur := row{}
 	for i, s := range p.sections {
 		w := s.width()
-		if cur.to > cur.from && cur.w+sectionGap+w > size.W {
+		// A row reaches as near the edges as half the inset.
+		if cur.to > cur.from && cur.w+sectionGap+w > size.W-panelInset {
 			rows = append(rows, cur)
 			cur = row{from: i}
 		}
@@ -328,17 +336,7 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	rows = append(rows, cur)
 	sectionH := float32(sectionHead + plugui.KnobH + sectionPad)
 	knobsH := float32(len(rows))*(sectionH+sectionGap) - sectionGap
-	top := max(size.H-knobsH-sectionGap, 120)
-	// The meters, as a meter's face is, wider than tall.
-	mh := min((top-sectionGap)/2, 150)
-	mw := mh / 0.62
-	kids.At(0).Layout(gunim.Tight(geom.Sz(max(size.W-mw-sectionGap, 0), top)))
-	kids.At(0).Place(geom.Point{})
-	for i := range 2 {
-		kids.At(1 + i).Layout(gunim.Tight(geom.Sz(mw, mh)))
-		kids.At(1 + i).Place(geom.Pt(size.W-mw, float32(i)*(mh+sectionGap)))
-	}
-	y := top + sectionGap
+	y := size.H - panelInset - knobsH
 	for _, r := range rows {
 		x := (size.W - r.w) / 2
 		for i := r.from; i < r.to; i++ {
@@ -348,13 +346,40 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 		}
 		y += sectionH + sectionGap
 	}
+	// The meters, as a meter's face is, wider than tall, on their pane.
+	room := size.H - panelInset - knobsH - sectionGap - 2*meterPad - panelInset
+	mh := max(min(room, meterH), 40)
+	mw := mh / 0.62
+	pw := 2*mw + sectionGap + 2*meterPad
+	p.metersAt = geom.Rc((size.W-pw)/2, size.H-panelInset-knobsH-sectionGap-mh-2*meterPad, pw, mh+2*meterPad)
+	for i := range 2 {
+		kids.At(1 + i).Layout(gunim.Tight(geom.Sz(mw, mh)))
+		kids.At(1 + i).Place(p.metersAt.Min.Add(geom.Pt(meterPad+float32(i)*(mw+sectionGap), meterPad)))
+	}
+	// The tuner's button at the top right, its card under it.
+	n := 3 + len(p.sections)
+	kids.At(n).Layout(gunim.Tight(geom.Sz(32, 32)))
+	kids.At(n).Place(geom.Pt(size.W-32-panelInset/2, panelInset/2))
+	cs := kids.At(n + 1).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
+	kids.At(n + 1).Place(geom.Pt(size.W-panelInset/2-max(cs.W, plugui.TunerW), panelInset/2+36))
 	return size
 }
 
-// Paint implements [gunim.Node].
-func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
-	for k := range kids.All {
-		k.Paint(pt)
+// The panel's sizes: how far in from its edges the glass stands, how
+// tall the meters are at most, and the room round them on their pane.
+const (
+	panelInset = 16
+	meterH     = 130
+	meterPad   = 10
+)
+
+// Paint implements [gunim.Node]: the history, then on it the meters'
+// pane, the meters, the sections and the tuner.
+func (p *panel) Paint(pt *paint.Painter, f gunim.Frame, _ geom.Size, kids gunim.Children) {
+	kids.At(0).Paint(pt)
+	plugui.PaintGlass(pt, f.Theme, p.metersAt, widget.CardRadius.Get(f.Theme)+4)
+	for i := 1; i < kids.Len(); i++ {
+		kids.At(i).Paint(pt)
 	}
 }
 

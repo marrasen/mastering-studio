@@ -254,6 +254,15 @@ func (r *bandRow) Overhear(e input.Event, u *gunim.UI) {
 	}
 }
 
+// dynWidth is how much wider a row is with its dynamics in.
+const dynWidth = rowSection + 5*plugui.KnobW
+
+// shownWidth is how wide the row is as it shows now: its dynamics as
+// far in as they are.
+func (r *bandRow) shownWidth() float32 {
+	return r.width() - dynWidth*(1-min(max(r.dynIn.Value(), 0), 1))
+}
+
 // width is how wide the row is with its dynamics in.
 func (r *bandRow) width() float32 {
 	w := float32(rowKinds + 3*plugui.KnobW + 3*(rowButton+rowGap) + 2*rowSection + 5*plugui.KnobW)
@@ -336,11 +345,8 @@ func (r *bandRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gun
 	if r.glass {
 		// The card: the graph behind it blurred, under a tint of the
 		// ground, its top edge catching the light.
-		card := geom.Rc(-8, -4, box.W+16, box.H+8)
-		glass := p.Layer(paint.LayerOpts{Bounds: card, Opacity: 1, Backdrop: float32(look.Blur), Clip: true, Radius: 12})
-		p.RRect(card, 12, paint.Solid(audioui.Faded(audioui.Ground.Get(th), float32(look.Card))))
-		glass()
-		p.RRectStroke(card, 12, paint.Fill{}, paint.Stroke{Width: 1, Color: audioui.Faded(widget.Ink.Get(th), 0.1)})
+		card := geom.Rc(-8, -4, r.shownWidth()+16, box.H+8)
+		plugui.PaintGlass(p, th, card, 12)
 		if r.g.lit == r.id && r.id != 0 {
 			c := bandColor(th, r.place)
 			p.RRectStroke(card, 12, paint.Fill{}, paint.Stroke{Width: 1.5, Color: audioui.Faded(c, 0.6)})

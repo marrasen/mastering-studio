@@ -13,6 +13,7 @@ import (
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/mastering-studio/plug/plugui"
 )
 
 // The history's colours: the sound in, how far the compressor and
@@ -213,36 +214,51 @@ func (hs *history) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 	colW := box.W / shownCols
 	in := HistoryIn.Get(th)
 	cut, gate := HistoryCut.Get(th), HistoryGate.Get(th)
-	newest := hs.n - 1
-	for k := max(0, hs.n-shownCols-1); k <= newest; k++ {
-		c := hs.cols[k%histCols]
-		// Whole pixels, each column starting where the last ended.
-		x1 := float32(math.Round(float64(box.W - float32(hs.shown-float64(k+1))*colW)))
-		x0 := float32(math.Round(float64(box.W - float32(hs.shown-float64(k))*colW)))
-		if x0 >= box.W || x1 <= 0 || x1 <= x0 {
-			continue
+	// each runs fn over the columns shown, with where each is.
+	each := func(fn func(c column, x0, w float32)) {
+		for k := max(0, hs.n-shownCols-1); k < hs.n; k++ {
+			// Whole pixels, each column starting where the last ended.
+			x1 := float32(math.Round(float64(box.W - float32(hs.shown-float64(k+1))*colW)))
+			x0 := float32(math.Round(float64(box.W - float32(hs.shown-float64(k))*colW)))
+			if x0 >= box.W || x1 <= 0 || x1 <= x0 {
+				continue
+			}
+			fn(hs.cols[k%histCols], x0, x1-x0)
 		}
-		w := x1 - x0
-		// The sound in, faint, and out over it, each with a bright top
-		// edge: between the two edges, what the plugin took away.
-		yIn, yOut := hs.y(float32(dbOf(float64(c.in)))), hs.y(float32(dbOf(float64(c.out))))
-		if yIn < box.H {
-			p.RRect(geom.Rc(x0, yIn, w, box.H-yIn), 0, paint.Solid(audioui.Faded(in, 0.35)))
-			p.RRect(geom.Rc(x0, yIn, w, 1.5), 0, paint.Solid(in))
+	}
+	// The sound in, faint, and out over it; what the gate, and the
+	// compressor and limiter, took away, hanging from the top.
+	each(func(c column, x0, w float32) {
+		if y := hs.y(float32(dbOf(float64(c.in)))); y < box.H {
+			p.RRect(geom.Rc(x0, y, w, box.H-y), 0, paint.Solid(audioui.Faded(in, 0.35)))
 		}
-		if yOut < box.H {
-			p.RRect(geom.Rc(x0, yOut, w, box.H-yOut), 0, paint.Solid(audioui.Faded(accent, 0.22)))
-			p.RRect(geom.Rc(x0, yOut, w, 1.5), 0, paint.Solid(audioui.Faded(accent, 0.9)))
+		if y := hs.y(float32(dbOf(float64(c.out)))); y < box.H {
+			p.RRect(geom.Rc(x0, y, w, box.H-y), 0, paint.Solid(audioui.Faded(accent, 0.22)))
 		}
 		if c.gate < -0.1 {
 			p.RRect(geom.Rc(x0, 0, w, hs.y(c.gate)), 0, paint.Solid(audioui.Faded(gate, 0.3)))
 		}
 		if cl := c.comp + c.lim; cl < -0.1 {
-			y := hs.y(cl)
-			p.RRect(geom.Rc(x0, 0, w, y), 0, paint.Solid(audioui.Faded(cut, 0.25)))
-			p.RRect(geom.Rc(x0, y-1, w, 2), 0, paint.Solid(cut))
+			p.RRect(geom.Rc(x0, 0, w, hs.y(cl)), 0, paint.Solid(audioui.Faded(cut, 0.25)))
 		}
-	}
+	})
+	// Darkened under the controls over it, and the lines over the dark:
+	// the bright top edges, in and out, between them what the plugin
+	// took away, and the line of the reduction.
+	plugui.Darken(p, whole, 1)
+	lines := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: plugui.Lines(1)})
+	defer lines()
+	each(func(c column, x0, w float32) {
+		if y := hs.y(float32(dbOf(float64(c.in)))); y < box.H {
+			p.RRect(geom.Rc(x0, y, w, 1.5), 0, paint.Solid(in))
+		}
+		if y := hs.y(float32(dbOf(float64(c.out)))); y < box.H {
+			p.RRect(geom.Rc(x0, y, w, 1.5), 0, paint.Solid(audioui.Faded(accent, 0.9)))
+		}
+		if cl := c.comp + c.lim; cl < -0.1 {
+			p.RRect(geom.Rc(x0, hs.y(cl)-1, w, 2), 0, paint.Solid(cut))
+		}
+	})
 	line := func(on bool, db float64, name string, c color.NRGBA) {
 		if !on {
 			return

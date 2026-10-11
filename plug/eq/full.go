@@ -34,13 +34,8 @@ type full struct {
 	row    *bandRow
 	list   *bandList
 	scroll *widget.Scroll
-	// tune opens the tuner of how the graph shows behind the list: its
-	// knobs, and reset puts them back; tuneIn is how far it is open.
-	tune   *widget.IconButton
-	card   *tunerCard
-	tuners []*plugui.Knob
-	reset  *widget.Button
-	tuneIn *anim.Float
+	// tuner tunes how the graph shows behind the list.
+	tuner *plugui.Tuner
 	// listed is how far the list shows, from 0 for the graph to 1, and
 	// stopIn how far the stop button is in.
 	listed, stopIn *anim.Float
@@ -55,8 +50,8 @@ type full struct {
 	calm      func()
 	size      geom.Size
 	// matchAt and rowAt are where the match button and the band's row
-	// are, and tunerAt the tuner's card.
-	matchAt, rowAt, tunerAt geom.Rect
+	// are.
+	matchAt, rowAt geom.Rect
 }
 
 // The match button's words, at rest and once done.
@@ -70,13 +65,15 @@ const (
 func newFull(p *plugin, h plug.Host) *full {
 	pn := newPanel(p, h)
 	v := &full{p: p, host: h, panel: pn, g: pn.graph, listed: anim.NewFloat(0), stopIn: anim.NewFloat(0),
-		tuneIn: anim.NewFloat(0)}
-	v.Add(v.listed, v.stopIn, v.tuneIn)
-	v.makeTuner()
+		tuner: plugui.NewTuner("Tune how the graph shows behind the bands")}
+	v.Add(v.listed, v.stopIn)
 	v.views = widget.NewSegmented("Graph", "Bands")
 	v.views.Tooltip = "Show the graph, with the band picked under it, or every band with all its knobs"
 	v.views.OnChange = func(i int, u *gunim.UI) gunim.Intent {
 		v.listed.Animate(float32(i), widget.Settle.Get(u.Theme()))
+		if i == 0 {
+			v.tuner.SetOpen(false, u)
+		}
 		v.list.show(u)
 		u.Invalidate()
 		return nil
@@ -96,6 +93,7 @@ func newFull(p *plugin, h plug.Host) *full {
 	v.amount.Compact = true
 	v.amount.Tooltip = "How far every bell and shelf lifts or lowers, their dynamics too, from none to twice"
 	v.row = newBandRow(v.g, false)
+	v.row.glass = true
 	v.list = newBandList(v.g)
 	v.scroll = widget.NewScroll(v.list)
 	// Its edges never fade, which would draw the rows apart from the
@@ -103,65 +101,6 @@ func newFull(p *plugin, h plug.Host) *full {
 	v.scroll.NoFade = true
 	v.g.onChange = v.changed
 	return v
-}
-
-// The tuner's knobs: what each turns of the look, and how.
-var tunerParams = []plug.Param{
-	{Name: "Darkness", Max: 100, Default: defaultLook.Dark * 100, Format: percent},
-	{Name: "Blur", Max: 30, Default: defaultLook.Blur, Format: func(v float64) string { return fmt.Sprintf("%.0f px", v) }},
-	{Name: "Card", Max: 100, Default: defaultLook.Card * 100, Format: percent},
-	{Name: "Curve", Max: 100, Default: defaultLook.Curve * 100, Format: percent},
-}
-
-func percent(v float64) string { return fmt.Sprintf("%.0f%%", v) }
-
-// lookOf returns the place of what tuner k turns.
-func lookOf(k int) *float64 {
-	return []*float64{&look.Dark, &look.Blur, &look.Card, &look.Curve}[k]
-}
-
-// makeTuner makes the tuner: a button that opens it, a knob for each of
-// the look's values, as they show at once, and a button to put them
-// back.
-func (v *full) makeTuner() {
-	v.tune = widget.NewIconButton(icon.SlidersHorizontal, "Tune how the graph shows behind the bands")
-	v.tune.OnClick = func(u *gunim.UI) gunim.Intent {
-		open := v.tuneIn.Target() == 0
-		v.tune.Active = open
-		v.tuneIn.Animate(onOff(open), widget.Settle.Get(u.Theme()))
-		u.Invalidate()
-		return nil
-	}
-	tips := []string{"How dark the graph goes behind the bands", "How far each band's card blurs the graph behind it",
-		"How much of each card's own colour shows", "How bright the curve and the points stay over the dark"}
-	for k, prm := range tunerParams {
-		scale := 100.0
-		if k == 1 {
-			scale = 1
-		}
-		at := lookOf(k)
-		kn := plugui.NewKnobFunc(prm, *at*scale, func(*gunim.UI) {}, func(x float64, u *gunim.UI) {
-			*at = x / scale
-			u.Invalidate()
-		}, func(*gunim.UI) {})
-		kn.Compact, kn.Tooltip = true, tips[k]
-		v.tuners = append(v.tuners, kn)
-	}
-	v.card = &tunerCard{}
-	v.reset = widget.NewButton("Reset")
-	v.reset.Tooltip = "Put the look back as it starts"
-	v.reset.OnClick = func(u *gunim.UI) gunim.Intent {
-		look = defaultLook
-		for k, kn := range v.tuners {
-			scale := 100.0
-			if k == 1 {
-				scale = 1
-			}
-			kn.Follow(*lookOf(k)*scale, u)
-		}
-		u.Invalidate()
-		return nil
-	}
 }
 
 // changed shows the band picked in the row, and every band in the list.
@@ -301,22 +240,16 @@ func (v *full) Follow(id uint32, val float64, u *gunim.UI) {
 
 // Children implements [gunim.Composite].
 func (v *full) Children() []gunim.Node {
-	kids := make([]gunim.Node, 0, 10+len(v.tuners))
-	kids = append(kids, v.panel, v.row, v.scroll, v.views, v.match, v.stop, v.amount, v.tune, v.card, v.reset)
-	for _, k := range v.tuners {
-		kids = append(kids, k)
-	}
-	return kids
+	return []gunim.Node{v.panel, v.row, v.scroll, v.views, v.match, v.stop, v.amount, v.tuner.Button, v.tuner.Card}
 }
 
-// The tuner's card: how wide and tall it is.
-const tunerW, tunerH = 4*plugui.CompactW + 3*8 + 2*12, plugui.CompactH + 44
-
-// barH is how tall the bar along the top is, and gap the room between
-// its parts.
+// barH is how tall the bar along the top is, gap the room between its
+// parts, and rowInset how far the band picked's row stands in from the
+// graph's edges.
 const (
-	barH = plugui.CompactH
-	gap  = 10
+	barH     = plugui.CompactH
+	gap      = 10
+	rowInset = 16
 )
 
 // Layout implements [gunim.Node].
@@ -348,16 +281,19 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	body := max(size.H-top, 0)
 	listed := min(max(v.listed.Value(), 0), 1)
 	rowH := float32(plugui.KnobH)
-	// The graph grows to fill the room as the list comes over it.
+	// The graph fills the room, the band picked's row over it, on glass,
+	// centred near its foot; the list comes over it all, the graph
+	// darkening behind it.
 	v.g.behind = listed
-	kids.At(0).Layout(gunim.Tight(geom.Sz(size.W, max(body-(rowH+gap)*(1-listed), 0))))
+	kids.At(0).Layout(gunim.Tight(geom.Sz(size.W, body)))
+	rowW := min(size.W-2*rowInset, v.row.shownWidth())
 	if listed > 0.99 && v.listed.Target() == 1 {
 		kids.At(1).Layout(gunim.Tight(geom.Size{}))
 	} else {
-		kids.At(1).Layout(gunim.Tight(geom.Sz(min(size.W, v.row.width()), rowH)))
+		kids.At(1).Layout(gunim.Tight(geom.Sz(rowW, rowH)))
 	}
 	kids.At(0).Place(geom.Pt(0, top))
-	v.rowAt = geom.Rc(0, top+max(body-rowH, 0), size.W, rowH)
+	v.rowAt = geom.Rc((size.W-rowW)/2, top+max(body-rowH-rowInset, 0), rowW, rowH)
 	kids.At(1).Place(v.rowAt.Min)
 	if listed < 0.01 && v.listed.Target() == 0 {
 		kids.At(2).Layout(gunim.Tight(geom.Size{}))
@@ -374,29 +310,8 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 		kids.At(7).Layout(gunim.Tight(geom.Size{}))
 	}
 	kids.At(7).Place(geom.Pt(sw.W+gap, (barH-32)/2))
-	open := tuneShown && !(v.tuneIn.Value() < 0.01 && v.tuneIn.Target() == 0)
-	v.tunerAt = geom.Rc(sw.W+gap, barH-4, tunerW, tunerH)
-	in := v.tunerAt.Min.Add(geom.Pt(12, 10))
-	if open {
-		kids.At(8).Layout(gunim.Tight(v.tunerAt.Size()))
-	} else {
-		kids.At(8).Layout(gunim.Tight(geom.Size{}))
-	}
-	kids.At(8).Place(v.tunerAt.Min)
-	for k := range v.tuners {
-		if open {
-			kids.At(10 + k).Layout(gunim.Tight(geom.Sz(plugui.CompactW, plugui.CompactH)))
-		} else {
-			kids.At(10 + k).Layout(gunim.Tight(geom.Size{}))
-		}
-		kids.At(10 + k).Place(in.Add(geom.Pt(float32(k)*(plugui.CompactW+8), 0)))
-	}
-	if open {
-		kids.At(9).Layout(gunim.Constraints{Max: geom.Sz(100, 28)})
-	} else {
-		kids.At(9).Layout(gunim.Tight(geom.Size{}))
-	}
-	kids.At(9).Place(in.Add(geom.Pt(0, plugui.CompactH+4)))
+	kids.At(8).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
+	kids.At(8).Place(geom.Pt(sw.W+gap, barH-4))
 	return size
 }
 
@@ -427,7 +342,7 @@ func (v *full) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	fade(2, listed, (1-listed)*12)
 	if b, _ := v.g.band(v.g.sel); b == nil && listed < 0.99 {
 		// No band picked: how to pick one, where its row would be.
-		r := v.rowAt
+		r := geom.Rc(rowInset, v.rowAt.Min.Y, box.W-2*rowInset, v.rowAt.Size().H)
 		msg := "Pick a band to change it, or double-click the graph to add one. Drag a point to move it, " +
 			"scroll on it to change its width, and right-click it for more."
 		paintFit(p, msg, ReadoutSize.Get(th), false, geom.Pt(4, r.Min.Y+(r.Size().H-ReadoutSize.Get(th))/2),
@@ -441,45 +356,6 @@ func (v *full) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 		kids.At(i).Paint(p)
 	}
 	fade(7, listed, 0)
-	if in := min(max(v.tuneIn.Value(), 0), 1) * listed; in > 0.01 {
-		// The tuner's card, over the list, dropping in.
-		defer p.Push(paint.Translate(geom.Pt(0, -(1-in)*8)))()
-		end := p.Layer(paint.LayerOpts{Bounds: v.tunerAt.Inset(geom.Uniform(-20)), Opacity: in})
-		for i := 8; i < kids.Len(); i++ {
-			kids.At(i).Paint(p)
-		}
-		end()
-	}
-	if v.listening || v.stopIn.Value() > 0.01 {
-		// How far the track is read, a light running along it.
-		mb := v.matchAt
-		bar := geom.Rc(mb.Min.X+8, mb.Max.Y+3, mb.Size().W-16, 3)
-		accent := widget.Accent.Get(th)
-		alpha := min(max(v.stopIn.Value(), 0), 1)
-		p.RRect(bar, 1.5, paint.Solid(audioui.Faded(widget.Ink.Get(th), 0.1*alpha)))
-		done := geom.Rc(bar.Min.X, bar.Min.Y, bar.Size().W*v.progress, 3)
-		p.RRect(done, 1.5, paint.Solid(audioui.Faded(accent, alpha)))
-		x := bar.Min.X + bar.Size().W*v.shimmer
-		p.ShadowRRect(geom.Rc(x-6, bar.Min.Y, 12, 3), 1.5, paint.Solid(audioui.Faded(accent, 0.6*alpha)),
-			paint.Shadow{Blur: 8, Color: audioui.Faded(accent, 0.5*alpha)})
-	}
-}
-
-// tunerCard is the tuner's card, under its knobs. Over the list, it is
-// what a click on it reaches, and nothing under it. Its one byte keeps
-// it apart from another in the tree, as a type of no size would not be.
-type tunerCard struct{ _ byte }
-
-// Layout implements [gunim.Node].
-func (*tunerCard) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
-	return c.Max
-}
-
-// Paint implements [gunim.Node]: a raised card, its shadow under it.
-func (*tunerCard) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
-	th := f.Theme
-	r := geom.Rect{Max: box.Point()}
-	p.ShadowRRect(r, 12, paint.Solid(audioui.Mix(audioui.Ground.Get(th), widget.Ink.Get(th), 0.08)),
-		paint.Shadow{Blur: 18, Offset: geom.Pt(0, 6), Color: audioui.Faded(audioui.Ground.Get(th), 0.8)})
-	p.RRectStroke(r, 12, paint.Fill{}, paint.Stroke{Width: 1, Color: audioui.Faded(widget.Ink.Get(th), 0.12)})
+	// The tuner's card, over the rest.
+	kids.At(8).Paint(p)
 }

@@ -2,7 +2,6 @@ package eq
 
 import (
 	"fmt"
-	"image/color"
 	"math"
 	"slices"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/mastering-studio/plug/plugui"
 )
 
 // dot is a band as the graph shows it: its settings gliding, how far
@@ -942,12 +942,10 @@ func (g *graph) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	end := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: 1, Clip: true, Radius: radius})
 	g.paintGrid(p, th, box)
 	g.paintSpectrum(p, th, box)
-	if g.behind > 0.001 {
-		// Behind the list: darkened, the curve and the points over the
-		// dark, as bright as the look says.
-		p.RRect(whole, 0, paint.Solid(color.NRGBA{A: uint8(255 * min(max(look.Dark*float64(g.behind), 0), 1))}))
-	}
-	curve := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: 1 - g.behind*float32(1-look.Curve)})
+	// Behind the list: darkened, the curve and the points over the dark,
+	// as bright as the look says.
+	plugui.Darken(p, whole, g.behind)
+	curve := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: plugui.Lines(g.behind)})
 	bypass := g.bypassAmt.Value()
 	g.paintCurve(p, th, box, bypass)
 	g.paintDots(p, th, bypass)

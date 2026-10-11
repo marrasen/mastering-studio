@@ -15,6 +15,7 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/mastering-studio/plug/plugui"
 )
 
 // loudBell is a dynamic bell at 1 kHz, flat until its band rises over
@@ -540,10 +541,16 @@ func TestTheGraphShowsDarkenedBehindTheBands(t *testing.T) {
 	two.ID, two.Freq = 2, 4000
 	p.setBands([]audio.Band{bell[0], two})
 	v, w, run := fullOf(t, p, h)
-	before := boundsIn(t, w, run, v.panel)
+	// The band picked's row stands over the graph, centred, on glass.
+	withUI(t, w, run, func(u *gunim.UI) { v.g.sel = 1; v.changed(u) })
+	run(30)
+	before, row := boundsIn(t, w, run, v.panel), boundsIn(t, w, run, v.row)
+	if !before.Contains(row.Min) || !before.Contains(row.Max.Sub(geom.Pt(1, 1))) || math.Abs(float64(row.Center().X-before.Center().X)) > 1 || !v.row.glass {
+		t.Fatalf("the band's row is at %v, over the graph at %v: not centred over it", row, before)
+	}
 	toBands(t, w, run, v)
 	graph, list := boundsIn(t, w, run, v.panel), boundsIn(t, w, run, v.scroll)
-	if v.g.behind != 1 || graph.Size().H <= before.Size().H || graph.Max.Y != list.Max.Y {
+	if v.g.behind != 1 || graph != before || graph.Max.Y != list.Max.Y {
 		t.Fatalf("under the list, the graph is %v (from %v), behind %v, the list %v", graph, before, v.g.behind, list)
 	}
 	// A double-click where the graph shows under the list adds no band.
@@ -577,35 +584,51 @@ func TestTheGraphShowsDarkenedBehindTheBands(t *testing.T) {
 }
 
 func TestTheTunerTurnsTheLookAndResetsIt(t *testing.T) {
-	t.Cleanup(func() { look = defaultLook })
+	t.Cleanup(func() { plugui.Look = plugui.DefaultLook })
 	p, h := newEQ(t)
 	p.setBands(bell)
 	v, w, run := fullOf(t, p, h)
 	toBands(t, w, run, v)
-	clickOn(t, w, run, v.tune)
+	tn := v.tuner
+	clickOn(t, w, run, tn.Button)
 	run(60)
-	if v.tuneIn.Value() < 0.99 {
-		t.Fatalf("clicked, the tuner is open %v", v.tuneIn.Value())
+	card := boundsIn(t, w, run, tn.Card)
+	if !tn.Open() || card.Size().W == 0 {
+		t.Fatalf("clicked, the tuner is open %v, its card %v", tn.Open(), card)
 	}
-	dragUp(t, w, run, v.tuners[0], 60)
-	dragUp(t, w, run, v.tuners[1], 60)
-	if look.Dark <= defaultLook.Dark || look.Blur <= defaultLook.Blur {
-		t.Fatalf("turned up, the look is %+v", look)
+	dragUp(t, w, run, tn.Card.Knobs[0], 60)
+	dragUp(t, w, run, tn.Card.Knobs[1], 60)
+	if plugui.Look.Dark <= plugui.DefaultLook.Dark || plugui.Look.Blur <= plugui.DefaultLook.Blur {
+		t.Fatalf("turned up, the look is %+v", plugui.Look)
 	}
-	// A click on the card, beside its Reset, over the first band's gain
-	// knob, reaches nothing under it.
-	h.log = nil
-	card := boundsIn(t, w, run, v.card)
-	at := card.Min.Add(geom.Pt(150, 90))
+	// A click on the card, on none of its own controls, over the first
+	// band's lamps, reaches nothing under it.
 	var first *bandRow
 	for _, r := range v.list.rows {
 		if r.id == 1 {
 			first = r
 		}
 	}
-	if !boundsIn(t, w, run, first.knobs[1]).Contains(at) {
-		t.Fatalf("the spot clicked, %v, is not over the gain knob, %v", at, boundsIn(t, w, run, first.knobs[1]))
+	lamps := boundsIn(t, w, run, first.kind)
+	own := make([]geom.Rect, 0, 1+len(tn.Card.Knobs))
+	own = append(own, boundsIn(t, w, run, tn.Card.Reset))
+	for _, k := range tn.Card.Knobs {
+		own = append(own, boundsIn(t, w, run, k))
 	}
+	var at geom.Point
+	found := false
+	for y := card.Min.Y + 2; y < card.Max.Y-2 && !found; y += 2 {
+		for x := card.Min.X + 2; x < card.Max.X-2 && !found; x += 2 {
+			pt := geom.Pt(x, y)
+			if lamps.Contains(pt) && !slices.ContainsFunc(own, func(r geom.Rect) bool { return r.Contains(pt) }) {
+				at, found = pt, true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no spot of the card, %v, lies over the lamps, %v, clear of its own controls", card, lamps)
+	}
+	h.log = nil
 	w.Input(input.PointerMove{Pos: at})
 	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
 	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
@@ -613,13 +636,13 @@ func TestTheTunerTurnsTheLookAndResetsIt(t *testing.T) {
 	if len(h.log) != 0 {
 		t.Errorf("a click on the tuner's card reached the bands: %v", h.log)
 	}
-	clickOn(t, w, run, v.reset)
-	if look != defaultLook || v.tuners[0].Value() != defaultLook.Dark*100 {
-		t.Errorf("reset, the look is %+v, its darkness knob at %v", look, v.tuners[0].Value())
+	clickOn(t, w, run, tn.Card.Reset)
+	if plugui.Look != plugui.DefaultLook || tn.Card.Knobs[0].Value() != plugui.DefaultLook.Dark*100 {
+		t.Errorf("reset, the look is %+v, its darkness knob at %v", plugui.Look, tn.Card.Knobs[0].Value())
 	}
-	clickOn(t, w, run, v.tune)
+	clickOn(t, w, run, tn.Button)
 	run(60)
-	if v.tuneIn.Value() > 0.01 {
-		t.Errorf("clicked again, the tuner is still open at %v", v.tuneIn.Value())
+	if tn.Open() || boundsIn(t, w, run, tn.Card).Size().W != 0 {
+		t.Errorf("clicked again, the tuner is still open")
 	}
 }

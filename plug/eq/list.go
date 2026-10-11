@@ -132,14 +132,17 @@ func (l *bandList) Children() []gunim.Node {
 // button under them.
 func (l *bandList) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	l.size = geom.Sz(c.Max.W, max(l.height(), c.Min.H))
-	// In from the edges as far as the rows' cards reach past them.
-	for k, r := range l.rows {
-		kids.At(k).Layout(gunim.Tight(geom.Sz(min(c.Max.W-2*listInset, r.width()), plugui.KnobH)))
-		kids.At(k).Place(geom.Pt(listInset, l.at[k].Value()+listInset))
+	// Centred, in from the edges at least as far as the rows' cards
+	// reach past them; the add button under the rows' numbers.
+	w := min(c.Max.W-2*listInset, l.rows[0].width())
+	x := (c.Max.W - w) / 2
+	for k := range l.rows {
+		kids.At(k).Layout(gunim.Tight(geom.Sz(w, plugui.KnobH)))
+		kids.At(k).Place(geom.Pt(x, l.at[k].Value()+listInset))
 	}
 	n := len(l.rows)
 	kids.At(n).Layout(gunim.Constraints{Max: geom.Sz(200, 36)})
-	kids.At(n).Place(geom.Pt(listInset+rowNumber, l.addAt.Value()+listInset+4))
+	kids.At(n).Place(geom.Pt(x, l.addAt.Value()+listInset+4))
 	return l.size
 }
 
