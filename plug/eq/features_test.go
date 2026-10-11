@@ -834,3 +834,28 @@ func TestOnlyTheBandInFocusWritesItsThreshold(t *testing.T) {
 		t.Errorf("the pointer on band %d, it stands out %v", b.ID, g.focusOf(b.ID))
 	}
 }
+
+func TestTheMatchButtonSaysLessWhereTheBarIsNarrow(t *testing.T) {
+	for _, c := range []struct {
+		w      float32
+		words  string
+		hidden bool
+	}{{1200, matchWords, false}, {560, matchShort, false}, {380, matchShort, true}} {
+		p, h := newEQ(t)
+		v, ok := p.View(plug.Full, h).(*full)
+		if !ok {
+			t.Fatal("the full view is of another type")
+		}
+		w, run := stage(t, geom.Sz(c.w, 500), v)
+		run(10)
+		views, match := boundsIn(t, w, run, v.views), boundsIn(t, w, run, v.match)
+		// Hidden, it is not drawn, so it stands nowhere.
+		hidden := match.Size().W == 0 && v.matchAt.Size().W == 0
+		if v.match.Label != c.words || hidden != c.hidden {
+			t.Errorf("%v wide, the match button says %q at %v, hidden %v", c.w, v.match.Label, match, hidden)
+		}
+		if !c.hidden && match.Min.X < views.Max.X+gap+32 {
+			t.Errorf("%v wide, the match button at %v runs into the switch at %v and the tuner after it", c.w, match, views)
+		}
+	}
+}

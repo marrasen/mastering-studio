@@ -49,19 +49,24 @@ type full struct {
 	// how far it has got, and calm puts the button's words back after
 	// it tells how it went.
 	listening bool
-	progress  float32
-	shimmer   float32
-	stopPoll  func()
-	calm      func()
-	size      geom.Size
+	// narrow says the bar has too little room for the match button's
+	// words, which it says shorter.
+	narrow   bool
+	progress float32
+	shimmer  float32
+	stopPoll func()
+	calm     func()
+	size     geom.Size
 	// matchAt, rowAt and barAt are where the match button, the band's
 	// row and the bar along the top are.
 	matchAt, rowAt, barAt geom.Rect
 }
 
-// The match button's words, at rest and once done.
+// The match button's words, at rest, at rest where the bar is narrow,
+// and once done.
 const (
 	matchWords   = "Match to pink noise"
+	matchShort   = "Pink noise"
 	matchedWords = "Matched to pink noise"
 	matchTip     = "Read the whole track as it reaches the EQ, and shape the bands so it sounds as even as pink noise. " +
 		"The bands it makes take the place of these; Undo brings them back."
@@ -185,6 +190,9 @@ func (v *full) watchReading(u *gunim.UI) {
 	case reading:
 		v.progress = float32(progress)
 		v.match.Label = fmt.Sprintf("Reading the track… %.0f%%", 100*progress)
+		if v.narrow {
+			v.match.Label = fmt.Sprintf("Reading… %.0f%%", 100*progress)
+		}
 		v.stopPoll = u.After(readPoll, v.watchReading)
 		u.Invalidate()
 		return
@@ -316,9 +324,27 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 		kids.At(6).Layout(gunim.Tight(geom.Sz(32, 32)))
 	}
 	kids.At(6).Place(geom.Pt(x-32, o.Y+(barH-32)/2))
-	mw := kids.At(5).Layout(gunim.Constraints{Max: geom.Sz(260, 32)})
+	// The match button in the room between the switch, with the tuner's
+	// button after it, and the knobs: its words shorter where the room is
+	// short, and none of it where it has none.
+	room := x - stopW - (o.X + sw.W + gap + 32 + gap)
+	if v.match.Label == matchWords || v.match.Label == matchShort {
+		v.match.Label = matchWords
+		full := kids.At(5).Layout(gunim.Constraints{Max: geom.Sz(400, 32)})
+		v.narrow = full.W > room
+		if v.narrow {
+			v.match.Label = matchShort
+		}
+	}
+	mw := kids.At(5).Layout(gunim.Constraints{Max: geom.Sz(400, 32)})
 	v.matchAt = geom.Rc(x-stopW-mw.W, o.Y+(barH-mw.H)/2, mw.W, mw.H)
 	kids.At(5).Place(v.matchAt.Min)
+	if mw.W > room {
+		// No room: out of the view, where it is not drawn and the pointer
+		// does not reach it.
+		v.matchAt = geom.Rect{}
+		kids.At(5).Place(geom.Pt(-1e4, -1e4))
+	}
 	// The graph fills the view, under the bar too, the band picked's row
 	// over it, on glass, centred near its foot; the list comes over it,
 	// under the bar, the graph darkening behind it. The one out of sight
@@ -391,7 +417,9 @@ func (v *full) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	// The bar's glass, then what stands on it.
 	kids.At(3).Paint(p)
 	kids.At(4).Paint(p)
-	kids.At(5).Paint(p)
+	if v.matchAt.Size().W > 0 {
+		kids.At(5).Paint(p)
+	}
 	fade(6, min(max(v.stopIn.Value(), 0), 1), 0)
 	for i := range v.knobs {
 		kids.At(firstKnob + i).Paint(p)

@@ -55,6 +55,9 @@ type chainRow struct {
 	// the place in the chain it would land.
 	down    int
 	pressAt geom.Point
+	// adding says the press held Ctrl: a click adds the plugin's views
+	// to those shown, or takes them away.
+	adding  bool
 	moving  int
 	grab    float32
 	moveTo  int
@@ -218,7 +221,7 @@ func (c *chainRow) show(t Track, s Album) {
 		k.slot, k.gone = sl, false
 		k.appear.Animate(1, anim.Spring{Response: 0.35 + 0.04*float32(i)*onOff(switched), Damping: 0.8})
 		k.on.Animate(onOff(!sl.Bypass), anim.Snappy)
-		k.open.Animate(onOff(sl.Open || c.r.pane.v != nil && c.r.pane.v.slot == sl.ID), anim.Gentle)
+		k.open.Animate(onOff(sl.Open || c.r.pane.showsSlot(sl.ID)), anim.Gentle)
 		k.lra.Animate(sl.LRA*onOff(sl.Ranged), anim.Spring{Response: 0.5, Damping: 0.9})
 		c.order = append(c.order, sl.ID)
 	}
@@ -572,7 +575,7 @@ func (c *chainRow) Handle(e input.Event, u *gunim.UI) bool {
 			c.rename(id, u)
 			break
 		}
-		c.down, c.pressAt = id, e.Pos
+		c.down, c.pressAt, c.adding = id, e.Pos, e.Mods.Has(input.ModControl)
 	case input.PointerUp:
 		id, down := c.moving, c.down
 		c.down = -1
@@ -592,6 +595,11 @@ func (c *chainRow) Handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		u.Cue(gunim.CueTick, c)
+		// With Ctrl, a Go plugin's views join those shown, or leave them.
+		if v := c.r.goViews[down]; c.adding && v != nil {
+			c.r.pane.toggle(v, c.slots, u)
+			break
+		}
 		k.open.Animate(1, anim.Gentle)
 		u.Send(c, ShowEditor{Track: c.track, Slot: down})
 	default:

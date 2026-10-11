@@ -1601,3 +1601,99 @@ func TestSwitchingPluginsGlidesTheirNameAndHidesWhatIsUnder(t *testing.T) {
 		t.Errorf("after, the names have swapped %v, the part %v wide", sw.swap.Value(), sw.partW(partPlugin))
 	}
 }
+
+func TestCtrlClickShowsUpToFourPluginsInAGrid(t *testing.T) {
+	a := goAlbum(0)
+	for id := 10; id <= 13; id++ {
+		a.Tracks[0].Chain = append(a.Tracks[0].Chain, trimSlot(id))
+	}
+	w, r, run := stage(t, a)
+	run(40)
+	click := func(id int, mods input.Mods) {
+		t.Helper()
+		b := boundsOf(t, w, run, r.chain)
+		at := b.Min.Add(r.chain.cardRect(r.chain.cards[id]).Center().Add(geom.Pt(20, 0)))
+		w.Input(input.PointerMove{Pos: at})
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Mods: mods})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Mods: mods})
+		run(1)
+		// A plain click asks the app to show the plugin, as it does.
+		if mods == 0 {
+			a.ShowGo, a.ShowGos = id, a.ShowGos+1
+			if err := w.Client().Publish(albumTopic, a); err != nil {
+				t.Fatal(err)
+			}
+		}
+		run(60)
+	}
+	slots := func() []int {
+		out := make([]int, 0, len(r.pane.shown))
+		for _, v := range r.pane.shown {
+			out = append(out, v.slot)
+		}
+		return out
+	}
+	click(9, 0)
+	click(10, input.ModControl)
+	if got := slots(); !slices.Equal(got, []int{9, 10}) {
+		t.Fatalf("a click and a Ctrl+click show %v", got)
+	}
+	// Two side by side, each half the pane.
+	size := r.pane.size
+	first, second := r.pane.sheets[r.goViews[9]].rect(), r.pane.sheets[r.goViews[10]].rect()
+	if first.Min.Y != 0 || second.Min.Y != 0 || first.Max.X >= second.Min.X || math.Abs(float64(first.Size().W-(size.W-paneGap)/2)) > 0.5 ||
+		first.Size().H != size.H {
+		t.Errorf("two show at %v and %v in a pane %v: not side by side", first, second, size)
+	}
+	if r.chain.cards[9].open.Target() != 1 || r.chain.cards[10].open.Target() != 1 {
+		t.Error("the two cards do not show open")
+	}
+	if r.head.view.plugName != "Trim · Trim" {
+		t.Errorf("the view switch names %q", r.head.view.plugName)
+	}
+	// Four: two by two.
+	click(11, input.ModControl)
+	click(12, input.ModControl)
+	want := cells(4, size)
+	for i, id := range []int{9, 10, 11, 12} {
+		if got := r.pane.sheets[r.goViews[id]].rect(); math.Abs(float64(got.Min.X-want[i].Min.X)) > 0.5 ||
+			math.Abs(float64(got.Min.Y-want[i].Min.Y)) > 0.5 || math.Abs(float64(got.Size().W-want[i].Size().W)) > 0.5 {
+			t.Errorf("of four, the sheet of slot %d stands at %v, want %v", id, got, want[i])
+		}
+	}
+	if want[3].Min.Y <= want[0].Min.Y || want[3].Min.X <= want[0].Min.X {
+		t.Errorf("four cells %v: not two by two", want)
+	}
+	// Each view laid out no smaller than viewLeast, and drawn down to its
+	// cell.
+	for _, id := range []int{9, 10, 11, 12} {
+		sh := r.pane.sheets[r.goViews[id]]
+		view := boundsOf(t, w, run, r.goViews[id].paneView())
+		if sh.scale >= 1 || sh.scale <= 0 || view.Size().W > sh.rect().Size().W+0.5 {
+			t.Errorf("of four, slot %d's view is drawn at %v, %v wide in a cell %v wide", id, sh.scale, view.Size().W, sh.rect().Size().W)
+		}
+		if lw := view.Size().W / sh.scale; lw < viewLeast.W-0.5 {
+			t.Errorf("of four, slot %d's view is laid out %v wide, under %v", id, lw, viewLeast.W)
+		}
+	}
+	// A fifth: the first gives way.
+	click(13, input.ModControl)
+	if got := slots(); !slices.Equal(got, []int{10, 11, 12, 13}) {
+		t.Errorf("a fifth shows %v", got)
+	}
+	// Ctrl+click on one shown takes it away; its own cross another.
+	click(11, input.ModControl)
+	gunim.RegisterPatch(w, "album", func(r *root, _ struct{}, u *gunim.UI) { r.pane.sheets[r.goViews[12]].closer.OnClick(u) })
+	if err := w.Client().Patch("album", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(60)
+	if got := slots(); !slices.Equal(got, []int{10, 13}) {
+		t.Errorf("one Ctrl+clicked away and one closed, %v show", got)
+	}
+	// A plain click shows the one alone.
+	click(9, 0)
+	if got := slots(); !slices.Equal(got, []int{9}) || r.pane.sheets[r.goViews[9]].rect().Size() != size {
+		t.Errorf("a click shows %v", got)
+	}
+}
