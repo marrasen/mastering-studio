@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -22,16 +23,27 @@ import (
 // BypassID is the ID of the bypass parameter: over 0.5 passes the
 // sound by the EQ. AmountID is the amount's, in percent: how far the
 // bells and shelves lift and lower, and the dynamic bands turn down,
-// from none at 0 to twice as set at 200.
+// from none at 0 to twice as set at 200. QID scales every bell's,
+// shelf's and notch's Q, in percent; ThresholdID moves every dynamic
+// band's threshold, in decibels; and GainID is the gain the EQ puts
+// on the sound it passes, in decibels.
 const (
-	BypassID uint32 = 1
-	AmountID uint32 = 2
+	BypassID    uint32 = 1
+	AmountID    uint32 = 2
+	QID         uint32 = 3
+	ThresholdID uint32 = 4
+	GainID      uint32 = 5
 )
 
 // bandTrace is where the IDs of the bands' traces start: band n's
 // reduction, as the views read it with [plug.Host.Traced], is traced
-// as bandTrace+n.
-const bandTrace = 1000
+// as bandTrace+n. heardTrace is where the levels the dynamic bands
+// hear start, each traced as the negative of its decibels, as a trace
+// keeps the least and the views want the loudest.
+const (
+	bandTrace  = 1000
+	heardTrace = 2000
+)
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
@@ -49,6 +61,21 @@ var Descriptor = plug.Descriptor{
 		Min: 0, Max: 200, Default: 100,
 		Flags:  plug.Automatable,
 		Format: func(v float64) string { return fmt.Sprintf("%.0f%%", v) },
+	}, {
+		ID: QID, Name: "Q", Unit: "%",
+		Min: 25, Max: 400, Default: 100, Log: true,
+		Flags:  plug.Automatable,
+		Format: func(v float64) string { return fmt.Sprintf("%.0f%%", v) },
+	}, {
+		ID: ThresholdID, Name: "Threshold", Unit: "dB",
+		Min: -24, Max: 24, Default: 0,
+		Flags:  plug.Automatable,
+		Format: func(v float64) string { return fmt.Sprintf("%+.1f dB", v) },
+	}, {
+		ID: GainID, Name: "Gain", Unit: "dB",
+		Min: -12, Max: 12, Default: 0,
+		Flags:  plug.Automatable,
+		Format: func(v float64) string { return fmt.Sprintf("%+.1f dB", v) },
 	}},
 	Patches: patches,
 	New:     func(h plug.Host) plug.Plugin { return newPlugin(h) },
@@ -98,7 +125,7 @@ type plugin struct {
 
 func newPlugin(h plug.Host) *plugin {
 	p := &plugin{host: h, eq: audio.NewEQ()}
-	p.proc.eq, p.proc.ids = p.eq, &p.ids
+	p.proc.eq, p.proc.ids, p.proc.gainTo = p.eq, &p.ids, 1
 	p.ids.Store(&[]int{})
 	return p
 }
@@ -301,27 +328,34 @@ type processor struct {
 	scratch []float32
 	// bypass is the bypass the EQ was last told.
 	bypass bool
+	// gain is the gain put on the sound, as set and as it glides there,
+	// a frame at a time at glide.
+	gainTo, gain, glide float32
 	// traces keep how far each band turned itself down, by frame, for
 	// the views: a trace a band, the band's ID with it.
 	traces [maxBands]bandTraced
 }
 
 // reducer is an EQ's insert, as it tells how far a band turns itself
-// down.
+// down, and the level it hears.
 type reducer interface {
 	Reduction(id int) (float64, bool)
+	Heard(id int) (float64, bool)
 }
 
-// bandTraced is a band's trace: the band's ID, 0 for none, and how far
-// it turned itself down.
+// bandTraced is a band's traces: the band's ID, 0 for none, how far it
+// turned itself down, and the level it heard.
 type bandTraced struct {
 	id    atomic.Int64
 	trace plug.Trace
+	heard plug.Trace
 }
 
 // Prepare implements [plug.Processor].
 func (p *processor) Prepare(s plug.Setup) {
 	p.rate = s.Rate
+	p.glide = float32(1 - math.Exp(-1/(0.02*s.Rate)))
+	p.gain = p.target()
 	p.setInsert(p.eq.InsertAt(int(s.Rate)))
 	p.scratch = make([]float32, 2*max(s.MaxBlock, 0))
 }
@@ -369,16 +403,29 @@ func (p *processor) run(b *plug.Block, at, n int) {
 		p.insert.Process(buf[2*i : 2*end])
 		p.keepDown(b.Position.Frame+int64(at+i), b.Position.Frame+int64(at+end-1))
 	}
+	// The gain, gliding a frame at a time.
 	outL := b.Out[0][at : at+n]
-	for i := range n {
-		outL[i] = buf[2*i]
-	}
+	var outR []float32
 	if len(b.Out) > 1 {
-		outR := b.Out[1][at : at+n]
-		for i := range n {
-			outR[i] = buf[2*i+1]
+		outR = b.Out[1][at : at+n]
+	}
+	to := p.target()
+	for i := range n {
+		p.gain += (to - p.gain) * p.glide
+		outL[i] = buf[2*i] * p.gain
+		if outR != nil {
+			outR[i] = buf[2*i+1] * p.gain
 		}
 	}
+}
+
+// target is the gain the sound glides to: as set, or none while the EQ
+// is bypassed.
+func (p *processor) target() float32 {
+	if p.bypass {
+		return 1
+	}
+	return p.gainTo
 }
 
 // passBy copies the first two channels through unchanged, as a
@@ -392,11 +439,23 @@ func (p *processor) passBy(b *plug.Block) {
 	}
 }
 
-// take takes a change to the bypass or the amount.
+// take takes a change to the bypass, the amount, the Q, the threshold
+// or the gain.
 func (p *processor) take(c plug.Change) {
+	prm, ok := Descriptor.Param(c.ID)
+	if !ok {
+		return
+	}
+	v := prm.Clamp(c.Value)
 	switch c.ID {
 	case AmountID:
-		p.eq.SetAmount(Descriptor.Params[1].Clamp(c.Value) / 100)
+		p.eq.SetAmount(v / 100)
+	case QID:
+		p.eq.SetQScale(v / 100)
+	case ThresholdID:
+		p.eq.SetThresholdShift(v)
+	case GainID:
+		p.gainTo = float32(math.Pow(10, v/20))
 	case BypassID:
 		if on := c.Value > 0.5; on != p.bypass {
 			p.bypass = on
@@ -429,11 +488,11 @@ func (p *processor) claimTraces() {
 	}
 }
 
-// traceOf returns band id's trace, or nil.
-func (p *processor) traceOf(id int64) *plug.Trace {
+// traceOf returns band id's traces, or nil.
+func (p *processor) traceOf(id int64) *bandTraced {
 	for k := range p.traces {
 		if p.traces[k].id.Load() == id {
-			return &p.traces[k].trace
+			return &p.traces[k]
 		}
 	}
 	return nil
@@ -457,15 +516,27 @@ func (p *processor) keepDown(from, to int64) {
 		}
 		t.trace.Put(from, float32(r))
 		t.trace.Put(to, float32(r))
+		if h, ok := p.reducer.Heard(int(id)); ok {
+			t.heard.Put(from, -float32(h))
+			t.heard.Put(to, -float32(h))
+		}
 	}
 }
 
-// Trace implements [plug.Tracer]: band n's reduction as bandTrace+n.
+// Trace implements [plug.Tracer]: band n's reduction as bandTrace+n,
+// and the level it hears as heardTrace+n.
 func (p *processor) Trace(id uint32) *plug.Trace {
-	if id <= bandTrace {
-		return nil
+	switch {
+	case id > heardTrace:
+		if t := p.traceOf(int64(id - heardTrace)); t != nil {
+			return &t.heard
+		}
+	case id > bandTrace:
+		if t := p.traceOf(int64(id - bandTrace)); t != nil {
+			return &t.trace
+		}
 	}
-	return p.traceOf(int64(id - bandTrace))
+	return nil
 }
 
 // Latency implements [plug.Processor]: the EQ is never late.

@@ -99,6 +99,10 @@ func TestADynamicBandTurnsDownAndTheViewsReadHowFar(t *testing.T) {
 	if _, ok := h.Traced(bandTrace+99, 47000); ok {
 		t.Error("the views read a band the EQ has not")
 	}
+	// The level it hears, a sine at -6 dB, traced as its negative.
+	if v, ok := h.Traced(heardTrace+uint32(loudBell.ID), 47000); !ok || math.Abs(float64(v)-6.02) > 0.5 {
+		t.Errorf("the views read the bell hearing %v dB (%v), want -6", -v, ok)
+	}
 	// The graph draws the curve as it plays.
 	g := newGraph(p, h)
 	g.spec.playing, g.spec.at = true, 47001
@@ -107,8 +111,11 @@ func TestADynamicBandTurnsDownAndTheViewsReadHowFar(t *testing.T) {
 	for range 60 {
 		g.Group.Step(time.Second / 60)
 	}
-	if got := d.playing(1).Response(1000); math.Abs(got+10.5) > 0.5 {
+	if got := d.playing(1, 1).Response(1000); math.Abs(got+10.5) > 0.5 {
 		t.Errorf("the graph draws the bell at %+.2f dB at 1 kHz, want -10.5", got)
+	}
+	if got := d.heard.Value(); math.Abs(float64(got)+6.02) > 0.5 {
+		t.Errorf("the graph draws the bell hearing %+.2f dB, want -6", got)
 	}
 	// So does the chip, and lets the bell back up once the sound stops.
 	out := &tone{level: 0.5, at: 47001}
@@ -145,7 +152,8 @@ func TestProcessingDynamicBandsAllocatesNothing(t *testing.T) {
 			setBands(t, p, steps[i/4])
 		}
 		b := &plug.Block{In: ch, Out: ch, Frames: 512, Position: plug.Position{Frame: int64(512 * i)},
-			Changes: []plug.Change{{ID: AmountID, Value: float64(50 * (i % 4))}}}
+			Changes: []plug.Change{{ID: AmountID, Value: float64(50 * (i % 4))}, {ID: QID, Value: float64(50 + 50*(i%4))},
+				{ID: ThresholdID, Value: float64(i%4) - 2}, {ID: GainID, Value: float64(i % 4)}}}
 		var before, after runtime.MemStats
 		runtime.ReadMemStats(&before)
 		pr.Process(b)
@@ -709,7 +717,7 @@ func TestTheTopControlsStandOnGlassOverTheGraph(t *testing.T) {
 	if graph.Min != (geom.Point{}) || !graph.Contains(bar.Min) || !graph.Contains(bar.Max.Sub(geom.Pt(1, 1))) {
 		t.Fatalf("the graph is %v and the bar %v: the graph not under the bar", graph, bar)
 	}
-	for _, n := range []gunim.Node{v.views, v.match, v.amount} {
+	for _, n := range []gunim.Node{v.views, v.match, v.knobs[0], v.knobs[3]} {
 		if b := boundsIn(t, w, run, n); !bar.Contains(b.Min) || !bar.Contains(b.Max.Sub(geom.Pt(1, 1))) {
 			t.Errorf("a control along the top, %v, is off the bar, %v", b, bar)
 		}
@@ -740,5 +748,70 @@ func TestTheHintStandsCentredWhereTheRowWould(t *testing.T) {
 	if card.Max.Y > graph.Max.Y-18 || card.Max.Y < graph.Max.Y-rowFoot-plugui.KnobH {
 		t.Errorf("the hint's card is at %v: not where the row stands, clear of the frequencies at %v", card,
 			graph.Max.Y-16)
+	}
+}
+
+func TestTheQThresholdAndGainWorkOnEveryBand(t *testing.T) {
+	// A bell of +6 dB at 1 kHz, an octave over it: narrower at 400%,
+	// wider at 25%.
+	for _, c := range []struct{ q, want float64 }{{100, 1}, {400, 4}, {25, 0.25}} {
+		p, _ := newEQ(t)
+		p.setBands(bell)
+		want := audio.Response([]audio.Band{bell[0].Scaled(c.want)}, 2000)
+		if got := through(t, p, 2000, 0.1, []plug.Change{{ID: QID, Value: c.q}}); math.Abs(got-want) > 0.3 {
+			t.Errorf("at a Q of %v%%, a bell of +6 dB lifts %+.2f dB an octave over, want %+.2f", c.q, got, want)
+		}
+	}
+	// A dynamic bell, 14 dB over its threshold at 4:1: with the
+	// thresholds up 8 dB, 6 dB over.
+	p, _ := newEQ(t)
+	p.setBands([]audio.Band{loudBell})
+	if got := through(t, p, 1000, 0.5, []plug.Change{{ID: ThresholdID, Value: 8}}); math.Abs(got+4.5) > 0.5 {
+		t.Errorf("with the thresholds up 8 dB, a sine 14 dB over comes out %+.2f dB, want -4.5", got)
+	}
+	// The gain, and none of it while the EQ is bypassed.
+	p, _ = newEQ(t)
+	if got := through(t, p, 1000, 0.1, []plug.Change{{ID: GainID, Value: 6}}); math.Abs(got-6) > 0.05 {
+		t.Errorf("at a gain of +6 dB the sound comes out %+.2f dB", got)
+	}
+	p, _ = newEQ(t)
+	if got := through(t, p, 1000, 0.1, []plug.Change{{ID: GainID, Value: 6}, {ID: BypassID, Value: 1}}); math.Abs(got) > 0.05 {
+		t.Errorf("bypassed, at a gain of +6 dB the sound comes out %+.2f dB", got)
+	}
+}
+
+func TestTheViewsDrawTheQAndTheThresholds(t *testing.T) {
+	p, h := newEQ(t)
+	dyn := loudBell
+	dyn.Gain = 6
+	p.setBands([]audio.Band{dyn})
+	g := newGraph(p, h)
+	c := newChip(p, h)
+	g.Follow(QID, 400, nil)
+	g.Follow(ThresholdID, -6, nil)
+	c.Follow(QID, 400, nil)
+	for range 60 {
+		g.Group.Step(time.Second / 60)
+	}
+	want := audio.Response([]audio.Band{dyn.Scaled(4)}, 2000)
+	if got := g.dots[dyn.ID].playing(g.amount.Value(), g.qScale.Value()).Response(2000); math.Abs(got-want) > 0.05 {
+		t.Errorf("at a Q of 400%%, the graph draws the bell at %+.2f dB an octave over, want %+.2f", got, want)
+	}
+	i := int(math.Round(math.Log(2000/eqLow) / math.Log(eqHigh/eqLow) * (chipPoints - 1)))
+	hz := eqLow * math.Pow(eqHigh/eqLow, float64(i)/(chipPoints-1))
+	if got, want := float64(c.curve[i]), audio.Response([]audio.Band{dyn.Scaled(4)}, hz); math.Abs(got-want) > 0.05 {
+		t.Errorf("at a Q of 400%%, the chip draws the bell at %+.2f dB at %.0f Hz, want %+.2f", got, hz, want)
+	}
+	if g.shift.Value() != -6 {
+		t.Errorf("the thresholds moved down 6 dB, the graph draws them moved %v", g.shift.Value())
+	}
+	// A bell hears an octave about its frequency at a Q of 1.41, and a
+	// shelf from its frequency out.
+	from, to := g.heardSpan(audio.Band{Kind: audio.Bell, Freq: 1000, Q: 1.4142})
+	if math.Abs(from-707.1) > 1 || math.Abs(to-1414.2) > 1 {
+		t.Errorf("a bell at 1 kHz of Q 1.41 hears %.1f to %.1f Hz, want an octave about it", from, to)
+	}
+	if from, to := g.heardSpan(audio.Band{Kind: audio.HighShelf, Freq: 8000, Q: 0.7}); from != 8000 || to != eqHigh {
+		t.Errorf("a high shelf at 8 kHz hears %v to %v Hz", from, to)
 	}
 }

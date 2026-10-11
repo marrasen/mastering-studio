@@ -33,8 +33,9 @@ type dot struct {
 	gone              bool
 	band              audio.Band
 	// down is how far a dynamic band turns itself down as it plays, in
-	// decibels, below zero, gliding to what the plugin playing says.
-	down *anim.Float
+	// decibels, below zero, and heard the level it hears, each gliding
+	// to what the plugin playing says.
+	down, heard *anim.Float
 }
 
 // value returns the band as it shows now, mid-glide.
@@ -48,13 +49,14 @@ func (d *dot) value() audio.Band {
 }
 
 // playing returns the band as it plays now: its gain scaled by amount,
-// and turned down as far as it turns itself down.
-func (d *dot) playing(amount float32) audio.Band {
+// and turned down as far as it turns itself down, and its Q scaled by
+// qScale.
+func (d *dot) playing(amount, qScale float32) audio.Band {
 	b := d.value()
 	if hasGain(b.Kind) {
 		b.Gain = b.Gain*amount + d.down.Value()
 	}
-	return b
+	return b.Scaled(float64(qScale))
 }
 
 // weight is how much of the band shows: grown in, and on.
@@ -102,6 +104,9 @@ type graph struct {
 	// bypassAmt dims the curve while the EQ is bypassed, ring is the
 	// focus ring's strength, and amount the amount, as a ratio.
 	bypassAmt, ring, amount *anim.Float
+	// qScale is how far every band's Q is scaled, and shift how far the
+	// dynamic bands' thresholds are moved, each gliding.
+	qScale, shift *anim.Float
 	// laid says the graph has been laid out once: before, springs jump.
 	laid bool
 	spec spectrum
@@ -230,8 +235,9 @@ func (s *spectrum) step(dt time.Duration) bool {
 
 func newGraph(p *plugin, h plug.Host) *graph {
 	g := &graph{p: p, host: h, dots: map[int]*dot{}, bypassAmt: anim.NewFloat(0), ring: anim.NewFloat(0),
-		amount: anim.NewFloat(float32(h.Param(AmountID) / 100)), spec: newSpectrum(h), tipIn: anim.NewFloat(0)}
-	g.Add(g.bypassAmt, g.ring, g.amount, g.tipIn)
+		amount: anim.NewFloat(float32(h.Param(AmountID) / 100)), qScale: anim.NewFloat(float32(h.Param(QID) / 100)),
+		shift: anim.NewFloat(float32(h.Param(ThresholdID))), spec: newSpectrum(h), tipIn: anim.NewFloat(0)}
+	g.Add(g.bypassAmt, g.ring, g.amount, g.qScale, g.shift, g.tipIn)
 	g.bands = p.Bands()
 	g.bypass = h.Param(BypassID) > 0.5
 	if g.bypass {
@@ -321,6 +327,7 @@ func (g *graph) dot(b audio.Band, u *gunim.UI) *dot {
 			logHz: anim.NewFloat(float32(math.Log2(float64(b.Freq)))), gain: anim.NewFloat(b.Gain),
 			logQ: anim.NewFloat(float32(math.Log2(float64(max(b.Q, 0.025))))),
 			in:   anim.NewFloat(1), on: anim.NewFloat(1), hot: anim.NewFloat(0), down: anim.NewFloat(0),
+			heard: anim.NewFloat(specBottom - 20),
 		}
 		if !b.On {
 			d.on.Jump(0)
@@ -330,7 +337,7 @@ func (g *graph) dot(b audio.Band, u *gunim.UI) *dot {
 			d.in.Animate(1, widget.Bounce.Get(u.Theme()))
 		}
 		g.dots[b.ID] = d
-		g.Add(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot, d.down)
+		g.Add(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot, d.down, d.heard)
 	}
 	if d.gone {
 		// A band back again, as an undo brings it, before its point
@@ -395,10 +402,19 @@ func (g *graph) FollowState(u *gunim.UI) {
 }
 
 // Follow implements [plug.Follower]: the curve dims while the EQ is
-// bypassed, and scales with the amount.
+// bypassed, and scales with the amount and the Q; the thresholds move.
 func (g *graph) Follow(id uint32, v float64, u *gunim.UI) {
-	if id == AmountID {
+	switch id {
+	case AmountID:
 		g.spring(g.amount, float32(v/100), widget.Settle, u)
+		u.Invalidate()
+		return
+	case QID:
+		g.spring(g.qScale, float32(v/100), widget.Settle, u)
+		u.Invalidate()
+		return
+	case ThresholdID:
+		g.spring(g.shift, float32(v), widget.Settle, u)
 		u.Invalidate()
 		return
 	}
@@ -871,7 +887,7 @@ func (g *graph) Step(dt time.Duration) bool {
 	g.followTip()
 	for id, d := range g.dots {
 		if d.gone && d.in.Value() < 0.01 && !d.in.Active() {
-			g.Remove(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot, d.down)
+			g.Remove(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot, d.down, d.heard)
 			delete(g.dots, id)
 		}
 	}
@@ -901,17 +917,24 @@ func (g *graph) followTip() {
 
 // followDown glides each dynamic band's dot to how far the band turns
 // itself down at the frame heard, as the plugin playing kept it, and
-// back up once the sound stops.
+// back up once the sound stops; and its threshold's level to the level
+// it hears, down to silence once the sound stops.
 func (g *graph) followDown() {
 	for id, d := range g.dots {
-		to := float32(0)
+		to, heard := float32(0), float32(specBottom-20)
 		if g.spec.playing && d.band.Dynamic.On {
 			if v, ok := g.host.Traced(bandTrace+uint32(id), g.spec.at-1); ok {
 				to = v
 			}
+			if v, ok := g.host.Traced(heardTrace+uint32(id), g.spec.at-1); ok {
+				heard = -v
+			}
 		}
 		if d.down.Target() != to {
 			d.down.Animate(to, anim.Snappy)
+		}
+		if d.heard.Target() != heard {
+			d.heard.Animate(heard, anim.Snappy)
 		}
 	}
 }
@@ -951,6 +974,7 @@ func (g *graph) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	curve := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: plugui.Lines(g.behind)})
 	bypass := g.bypassAmt.Value()
 	g.paintCurve(p, th, box, bypass)
+	g.paintThresholds(p, th, bypass)
 	g.paintDots(p, th, bypass)
 	curve()
 	if g.behind < 0.5 {
@@ -1069,7 +1093,7 @@ func (g *graph) paintCurve(p *paint.Painter, th *theme.Live, box geom.Size, bypa
 			if w <= 0.001 {
 				continue
 			}
-			r := float32(d.playing(g.amount.Value()).Response(hz)) * w
+			r := float32(d.playing(g.amount.Value(), g.qScale.Value()).Response(hz)) * w
 			db += r
 			if d == focused && own != nil {
 				own[i] = r
@@ -1115,6 +1139,64 @@ func (g *graph) place(id int) int {
 
 // paintDots draws each band's point: numbered, in its colour, hollow
 // while off, larger under the pointer, ringed while picked.
+// paintThresholds draws each dynamic band's threshold, moved by the
+// shift, on the spectrum's scale, across the pitches the band hears: a
+// bell's about its frequency, as wide as its Q, and a shelf's from its
+// frequency out to the edge; and, as the sound plays, the level the
+// band hears there, a fainter line, lit up to the threshold where it is
+// over, which is where the band turns down.
+func (g *graph) paintThresholds(p *paint.Painter, th *theme.Live, bypass float32) {
+	ground, ink := audioui.Ground.Get(th), widget.Ink.Get(th)
+	for i, b := range g.bands {
+		d := g.dots[b.ID]
+		if d == nil || !b.Dynamic.On || !hasGain(b.Kind) {
+			continue
+		}
+		w := d.weight()
+		if w < 0.01 {
+			continue
+		}
+		c := audioui.Mix(bandColor(th, i), audioui.Mix(ground, ink, 0.5), 0.7*bypass)
+		from, to := g.heardSpan(d.playing(g.amount.Value(), g.qScale.Value()))
+		db := b.Dynamic.Threshold + g.shift.Value()
+		y := g.specY(db)
+		x0, x1 := g.xOf(from), g.xOf(to)
+		if heard := d.heard.Value(); heard > specBottom {
+			hy := g.specY(heard)
+			if hy < y {
+				p.RRect(geom.Rc(x0, hy, x1-x0, y-hy), 0, paint.Solid(audioui.Faded(c, 0.22*w)))
+			}
+			p.RRect(geom.Rc(x0, hy-0.5, x1-x0, 1), 0.5, paint.Solid(audioui.Faded(c, 0.45*w)))
+		}
+		p.RRect(geom.Rc(x0, y-0.75, x1-x0, 1.5), 0.75, paint.Solid(audioui.Faded(c, 0.8*w)))
+		for _, x := range []float32{x0, x1} {
+			if x > 1 && x < g.size.W-1 {
+				p.RRect(geom.Rc(x-0.75, y-4, 1.5, 8), 0.75, paint.Solid(audioui.Faded(c, 0.8*w)))
+			}
+		}
+		label := audioui.Shaped(fmt.Sprintf("%.0f dB", db), 9, false, true)
+		lx := min(max((x0+x1-label.Advance)/2, x0), g.size.W-label.Advance-4)
+		label.Paint(p, geom.Pt(lx, y-13), audioui.Faded(c, 0.9*w))
+	}
+}
+
+// heardSpan returns the pitches band b hears, in hertz: a shelf's from
+// its frequency out to the graph's edge, and about another's frequency
+// as wide as its Q, half the band on each side.
+func (g *graph) heardSpan(b audio.Band) (from, to float64) {
+	hz := float64(b.Freq)
+	switch b.Kind {
+	case audio.LowShelf:
+		return eqLow, hz
+	case audio.HighShelf:
+		return hz, eqHigh
+	case audio.Bell, audio.Notch, audio.LowCut, audio.HighCut:
+	}
+	// A bandwidth in octaves from the Q.
+	half := math.Asinh(1/(2*float64(max(b.Q, 0.05)))) / math.Ln2
+	return max(hz*math.Exp2(-half), eqLow), min(hz*math.Exp2(half), eqHigh)
+}
+
 func (g *graph) paintDots(p *paint.Painter, th *theme.Live, bypass float32) {
 	for i, b := range g.bands {
 		if d := g.dots[b.ID]; d != nil {

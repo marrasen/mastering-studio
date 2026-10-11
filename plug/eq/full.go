@@ -20,7 +20,8 @@ import (
 // full is the EQ as the plugin's pane shows it. Along the top: a switch
 // between the graph and the list of bands; the button that matches the
 // track to pink noise, with a bar of how far it has read the track and
-// a button to stop it, gliding in while it reads; and the amount's knob.
+// a button to stop it, gliding in while it reads; and the knobs that
+// work on every band: the amount, the Q, the threshold, and the gain.
 // Under them, the graph with the band picked's row under it, or the
 // list of every band's row, crossfading as the switch turns.
 type full struct {
@@ -32,7 +33,7 @@ type full struct {
 	views  *widget.Segmented
 	match  *widget.Button
 	stop   *widget.IconButton
-	amount *plugui.Knob
+	knobs  []*plugui.Knob
 	row    *bandRow
 	list   *bandList
 	scroll *widget.Scroll
@@ -94,9 +95,18 @@ func newFull(p *plugin, h plug.Host) *full {
 		v.halt(u)
 		return nil
 	}
-	v.amount = plugui.NewKnob(h, Descriptor.Params[1])
-	v.amount.Compact = true
-	v.amount.Tooltip = "How far every bell and shelf lifts or lowers, their dynamics too, from none to twice"
+	tips := map[uint32]string{
+		AmountID:    "How far every bell and shelf lifts or lowers, their dynamics too, from none to twice",
+		QID:         "Every bell, shelf and notch narrower, over 100%, or wider, under it; the cuts stay as they are",
+		ThresholdID: "Every dynamic band's threshold, moved up, so it turns down later, or down, so it turns down sooner",
+		GainID:      "The gain on the sound the EQ passes, to keep it as loud as it came",
+	}
+	for _, id := range []uint32{AmountID, QID, ThresholdID, GainID} {
+		prm, _ := Descriptor.Param(id)
+		k := plugui.NewKnob(h, prm)
+		k.Compact, k.Tooltip = true, tips[id]
+		v.knobs = append(v.knobs, k)
+	}
 	v.row = newBandRow(v.g, false)
 	v.row.glass = true
 	v.list = newBandList(v.g)
@@ -238,8 +248,10 @@ func (v *full) FollowDocument(u *gunim.UI) {
 // Follow implements [plug.Follower].
 func (v *full) Follow(id uint32, val float64, u *gunim.UI) {
 	v.panel.Follow(id, val, u)
-	if id == AmountID {
-		v.amount.Follow(val, u)
+	for _, k := range v.knobs {
+		if k.Param().ID == id {
+			k.Follow(val, u)
+		}
 	}
 }
 
@@ -247,9 +259,17 @@ func (v *full) Follow(id uint32, val float64, u *gunim.UI) {
 func (v *full) Children() []gunim.Node {
 	// The bar's glass before what stands on it, which the pointer reaches
 	// first.
-	return []gunim.Node{v.panel, v.row, v.scroll, v.bar, v.views, v.match, v.stop, v.amount, v.tuner.Button,
-		v.tuner.Card}
+	// The tuner's card last, over the rest.
+	kids := []gunim.Node{v.panel, v.row, v.scroll, v.bar, v.views, v.match, v.stop}
+	for _, k := range v.knobs {
+		kids = append(kids, k)
+	}
+	return append(kids, v.tuner.Button, v.tuner.Card)
 }
+
+// firstKnob is where the knobs start among the view's children; the
+// tuner's button and card follow them.
+const firstKnob = 7
 
 // barH is how tall the things on the bar along the top are, barInset
 // how far in from the view's edges the bar stands, and barPadX and
@@ -273,17 +293,21 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	v.size = c.Max
 	size := v.size
 	// The bar along the top, a pane of glass over the graph, in from its
-	// edges: on it the switch at the left, the knob at the right, and the
-	// match button, and the stop button as far in as it is, before the
-	// knob.
+	// edges: on it the switch at the left, the knobs at the right, and
+	// the match button, and the stop button as far in as it is, before
+	// the knobs.
 	v.barAt = geom.Rc(barInset, barInset, max(size.W-2*barInset, 0), barH+2*barPadY)
 	o := v.barAt.Min.Add(geom.Pt(barPadX, barPadY))
 	right := v.barAt.Max.X - barPadX
 	sw := kids.At(4).Layout(gunim.Constraints{Max: geom.Sz(220, 32)})
 	kids.At(4).Place(o.Add(geom.Pt(0, (barH-sw.H)/2)))
-	kids.At(7).Layout(gunim.Tight(geom.Sz(plugui.CompactW, plugui.CompactH)))
-	kids.At(7).Place(geom.Pt(right-plugui.CompactW, o.Y))
-	x := right - plugui.CompactW - gap
+	knobsW := float32(len(v.knobs)) * plugui.CompactW
+	for i := range v.knobs {
+		k := kids.At(firstKnob + i)
+		k.Layout(gunim.Tight(geom.Sz(plugui.CompactW, plugui.CompactH)))
+		k.Place(geom.Pt(right-knobsW+float32(i)*plugui.CompactW, o.Y))
+	}
+	x := right - knobsW - gap
 	stopIn := min(max(v.stopIn.Value(), 0), 1)
 	stopW := (32 + 6) * stopIn
 	if stopIn < 0.01 && v.stopIn.Target() == 0 {
@@ -322,14 +346,15 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	// The tuner's button, after the switch, as the list shows; its card
 	// under the bar, as it opens.
 	tuneShown := !(listed < 0.01 && v.listed.Target() == 0)
+	tb, tc := v.tunerAt()
 	if tuneShown {
-		kids.At(8).Layout(gunim.Tight(geom.Sz(32, 32)))
+		kids.At(tb).Layout(gunim.Tight(geom.Sz(32, 32)))
 	} else {
-		kids.At(8).Layout(gunim.Tight(geom.Size{}))
+		kids.At(tb).Layout(gunim.Tight(geom.Size{}))
 	}
-	kids.At(8).Place(o.Add(geom.Pt(sw.W+gap, (barH-32)/2)))
-	kids.At(9).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
-	kids.At(9).Place(geom.Pt(o.X+sw.W+gap, v.barAt.Max.Y+4))
+	kids.At(tb).Place(o.Add(geom.Pt(sw.W+gap, (barH-32)/2)))
+	kids.At(tc).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
+	kids.At(tc).Place(geom.Pt(o.X+sw.W+gap, v.barAt.Max.Y+4))
 	kids.At(3).Layout(gunim.Tight(v.barAt.Size()))
 	kids.At(3).Place(v.barAt.Min)
 	return size
@@ -365,16 +390,22 @@ func (v *full) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	}
 	// The bar's glass, then what stands on it.
 	kids.At(3).Paint(p)
-	for i := 4; i < 8; i++ {
-		if i == 6 {
-			fade(6, min(max(v.stopIn.Value(), 0), 1), 0)
-			continue
-		}
-		kids.At(i).Paint(p)
+	kids.At(4).Paint(p)
+	kids.At(5).Paint(p)
+	fade(6, min(max(v.stopIn.Value(), 0), 1), 0)
+	for i := range v.knobs {
+		kids.At(firstKnob + i).Paint(p)
 	}
-	fade(8, listed, 0)
+	tb, tc := v.tunerAt()
+	fade(tb, listed, 0)
 	// The tuner's card, over the rest.
-	kids.At(9).Paint(p)
+	kids.At(tc).Paint(p)
+}
+
+// tunerAt returns where the tuner's button and card are among the
+// view's children.
+func (v *full) tunerAt() (button, card int) {
+	return firstKnob + len(v.knobs), firstKnob + len(v.knobs) + 1
 }
 
 // glassPane is a pane of glass over a display, as the bar along the top

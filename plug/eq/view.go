@@ -112,9 +112,9 @@ type chip struct {
 	h      plug.Host
 	l      plug.Listener
 	bypass bool
-	// amount scales the gains, as a ratio.
-	amount float64
-	bands  []audio.Band
+	// amount scales the gains, and qScale the Qs, as ratios.
+	amount, qScale float64
+	bands          []audio.Band
 	// down is how far each dynamic band turns itself down, by its ID,
 	// gliding.
 	down  map[int]*anim.Float
@@ -131,7 +131,7 @@ const chipFull = 12
 func newChip(p *plugin, h plug.Host) *chip {
 	_, out := h.Sound()
 	c := &chip{p: p, h: h, l: plug.Listener{Sound: out}, bypass: h.Param(BypassID) > 0.5,
-		amount: h.Param(AmountID) / 100, down: map[int]*anim.Float{}}
+		amount: h.Param(AmountID) / 100, qScale: h.Param(QID) / 100, down: map[int]*anim.Float{}}
 	c.read()
 	return c
 }
@@ -149,7 +149,7 @@ func (c *chip) read() {
 }
 
 // work works the curve out from the bands, each scaled by the amount
-// and turned down as far as it now is.
+// and the Q's scale, and turned down as far as it now is.
 func (c *chip) work() {
 	bands := slices.Clone(c.bands)
 	for i := range bands {
@@ -157,6 +157,7 @@ func (c *chip) work() {
 		if d := c.down[bands[i].ID]; d != nil && bands[i].Dynamic.On {
 			bands[i].Gain += d.Value()
 		}
+		bands[i] = bands[i].Scaled(c.qScale)
 	}
 	for i := range c.curve {
 		hz := eqLow * math.Pow(eqHigh/eqLow, float64(i)/(chipPoints-1))
@@ -192,13 +193,16 @@ func (c *chip) Step(dt time.Duration) bool {
 }
 
 // Follow implements [plug.Follower]: the curve flattens while the EQ
-// is bypassed, and scales with the amount.
+// is bypassed, and scales with the amount and the Q.
 func (c *chip) Follow(id uint32, v float64, u *gunim.UI) {
 	switch id {
 	case BypassID:
 		c.bypass = v > 0.5
 	case AmountID:
 		c.amount = v / 100
+		c.work()
+	case QID:
+		c.qScale = v / 100
 		c.work()
 	default:
 		return
