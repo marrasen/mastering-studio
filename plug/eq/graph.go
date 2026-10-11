@@ -1144,7 +1144,9 @@ func (g *graph) place(id int) int {
 // bell's about its frequency, as wide as its Q, and a shelf's from its
 // frequency out to the edge; and, as the sound plays, the level the
 // band hears there, a fainter line, lit up to the threshold where it is
-// over, which is where the band turns down.
+// over, which is where the band turns down. The band picked, or under
+// the pointer, stands out, its threshold written by it; the others are
+// fainter, and unwritten, so many do not crowd.
 func (g *graph) paintThresholds(p *paint.Painter, th *theme.Live, bypass float32) {
 	ground, ink := audioui.Ground.Get(th), widget.Ink.Get(th)
 	for i, b := range g.bands {
@@ -1156,6 +1158,8 @@ func (g *graph) paintThresholds(p *paint.Painter, th *theme.Live, bypass float32
 		if w < 0.01 {
 			continue
 		}
+		focus := g.focusOf(b.ID)
+		strength := w * (0.45 + 0.55*focus)
 		c := audioui.Mix(bandColor(th, i), audioui.Mix(ground, ink, 0.5), 0.7*bypass)
 		from, to := g.heardSpan(d.playing(g.amount.Value(), g.qScale.Value()))
 		db := b.Dynamic.Threshold + g.shift.Value()
@@ -1164,20 +1168,34 @@ func (g *graph) paintThresholds(p *paint.Painter, th *theme.Live, bypass float32
 		if heard := d.heard.Value(); heard > specBottom {
 			hy := g.specY(heard)
 			if hy < y {
-				p.RRect(geom.Rc(x0, hy, x1-x0, y-hy), 0, paint.Solid(audioui.Faded(c, 0.22*w)))
+				p.RRect(geom.Rc(x0, hy, x1-x0, y-hy), 0, paint.Solid(audioui.Faded(c, 0.22*strength)))
 			}
-			p.RRect(geom.Rc(x0, hy-0.5, x1-x0, 1), 0.5, paint.Solid(audioui.Faded(c, 0.45*w)))
+			p.RRect(geom.Rc(x0, hy-0.5, x1-x0, 1), 0.5, paint.Solid(audioui.Faded(c, 0.45*strength)))
 		}
-		p.RRect(geom.Rc(x0, y-0.75, x1-x0, 1.5), 0.75, paint.Solid(audioui.Faded(c, 0.8*w)))
+		p.RRect(geom.Rc(x0, y-0.75, x1-x0, 1.5), 0.75, paint.Solid(audioui.Faded(c, 0.8*strength)))
 		for _, x := range []float32{x0, x1} {
 			if x > 1 && x < g.size.W-1 {
-				p.RRect(geom.Rc(x-0.75, y-4, 1.5, 8), 0.75, paint.Solid(audioui.Faded(c, 0.8*w)))
+				p.RRect(geom.Rc(x-0.75, y-4, 1.5, 8), 0.75, paint.Solid(audioui.Faded(c, 0.8*strength)))
 			}
 		}
-		label := audioui.Shaped(fmt.Sprintf("%.0f dB", db), 9, false, true)
-		lx := min(max((x0+x1-label.Advance)/2, x0), g.size.W-label.Advance-4)
-		label.Paint(p, geom.Pt(lx, y-13), audioui.Faded(c, 0.9*w))
+		if focus > 0.01 {
+			label := audioui.Shaped(fmt.Sprintf("threshold %.0f dB", db), 9, false, true)
+			lx := min(max((x0+x1-label.Advance)/2, x0), g.size.W-label.Advance-4)
+			label.Paint(p, geom.Pt(lx, y-13), audioui.Faded(c, 0.9*w*focus))
+		}
 	}
+}
+
+// focusOf is how far band id stands out among the thresholds: fully
+// picked, and as far as the pointer is on its point otherwise.
+func (g *graph) focusOf(id int) float32 {
+	if id == g.sel {
+		return 1
+	}
+	if d := g.dots[id]; d != nil {
+		return min(max(d.hot.Value(), 0), 1)
+	}
+	return 0
 }
 
 // heardSpan returns the pitches band b hears, in hertz: a shelf's from

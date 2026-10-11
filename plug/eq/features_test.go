@@ -815,3 +815,22 @@ func TestTheViewsDrawTheQAndTheThresholds(t *testing.T) {
 		t.Errorf("a high shelf at 8 kHz hears %v to %v Hz", from, to)
 	}
 }
+
+func TestOnlyTheBandInFocusWritesItsThreshold(t *testing.T) {
+	p, h := newEQ(t)
+	a, b := loudBell, loudBell
+	b.ID, b.Freq = 8, 4000
+	p.setBands([]audio.Band{a, b})
+	g := newGraph(p, h)
+	g.sel = a.ID
+	if g.focusOf(a.ID) != 1 || g.focusOf(b.ID) != 0 {
+		t.Errorf("band %d picked, the two stand out %v and %v", a.ID, g.focusOf(a.ID), g.focusOf(b.ID))
+	}
+	g.hover(b.ID, nil)
+	for range 30 {
+		g.Group.Step(time.Second / 60)
+	}
+	if g.focusOf(b.ID) < 0.99 {
+		t.Errorf("the pointer on band %d, it stands out %v", b.ID, g.focusOf(b.ID))
+	}
+}
