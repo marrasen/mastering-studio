@@ -69,9 +69,7 @@ type (
 		// Patches are the Go plugins' patches the user kept, by plugin,
 		// each plugin's in order.
 		Patches []PatchName
-		// Spectra are the spectra the plugins asked for, the last of each
-		// slot's.
-		Spectra []SlotSpectrum
+
 		// Match plays every track at the target loudness, to compare
 		// them on their sound alone; Volume is the listening level.
 		Match  bool
@@ -476,8 +474,8 @@ type app struct {
 	// due once its edits have paused.
 	scans    chan scanned
 	measures chan measured
-	// spectra carries the spectra measured for the plugins.
-	spectra  chan SlotSpectrum
+	// docs are the Go plugins' slots' documents, by slot.
+	docs     map[int]*slotDoc
 	measurer map[int]context.CancelFunc
 	settle   map[int]time.Time
 	// choose shows the system's dialog; chosen carries what was chosen.
@@ -594,7 +592,7 @@ type exported struct {
 func newApp(ctx context.Context, d *deck, file string) *app {
 	ctx, stop := context.WithCancel(ctx)
 	a := &app{ctx: ctx, stop: stop, d: d, file: file,
-		scans: make(chan scanned, 16), measures: make(chan measured, 16), spectra: make(chan SlotSpectrum, 4),
+		scans: make(chan scanned, 16), measures: make(chan measured, 16), docs: map[int]*slotDoc{},
 		measurer: map[int]context.CancelFunc{}, settle: map[int]time.Time{},
 		checks: make(chan checked, 1), quitNow: make(chan struct{}, 1),
 		chosen: make(chan []string, 1), chosenRefs: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
@@ -1007,8 +1005,6 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			a.Plugins, a.Scanning = ps, false
 		case r := <-a.replacing:
 			a.handle(r)
-		case sp := <-a.spectra:
-			a.tookSpectrum(sp)
 		case id := <-a.d.turns:
 			// Album play ran on into the next track.
 			a.turned(id)
@@ -1074,6 +1070,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		}
 		a.queueNext()
 		a.applyLoop()
+		a.syncDocs()
 		a.showGoSettings()
 		_ = c.Publish(albumTopic, a.Album)
 		if a.settingsOpen {

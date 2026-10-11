@@ -24,13 +24,12 @@ func (h *host) Set(id uint32, v float64, _ *gunim.UI) {
 	h.values[id] = v
 	h.log = append(h.log, "set")
 }
-func (h *host) End(uint32, *gunim.UI)                                            { h.log = append(h.log, "end") }
-func (h *host) BeginEdit(string, *gunim.UI)                                      {}
-func (h *host) Changed(*gunim.UI)                                                {}
-func (h *host) EndEdit(*gunim.UI)                                                {}
-func (h *host) Sound() (in, out plug.Sound)                                      { return nil, nil }
-func (h *host) Traced(uint32, int64) (float32, bool)                             { return 0, false }
-func (h *host) Spectrum([]float64, func([]float64, error, *gunim.UI), *gunim.UI) {}
+func (h *host) End(uint32, *gunim.UI)                { h.log = append(h.log, "end") }
+func (h *host) BeginEdit(string, *gunim.UI)          {}
+func (h *host) Changed(*gunim.UI)                    {}
+func (h *host) EndEdit(*gunim.UI)                    {}
+func (h *host) Sound() (in, out plug.Sound)          { return nil, nil }
+func (h *host) Traced(uint32, int64) (float32, bool) { return 0, false }
 
 var release = plug.Param{ID: 3, Name: "Release", Min: 10, Max: 1000, Default: 100, Log: true}
 

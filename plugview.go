@@ -42,8 +42,8 @@ type goView struct {
 	edit    string
 	chip    gunim.Node
 	pane    gunim.Node
-	// spectra are the spectra asked for and not yet come, by ticket.
-	spectra map[int]spectrumDone
+	// doc is the document the plugin was given last.
+	doc plug.Document
 }
 
 // newGoView returns the views of slot s, on track, or nil where its
@@ -286,6 +286,23 @@ func (s heardSound) Heard(dst []float32) (frames int, at int64, rate int) {
 	return len(got) / 2, upto, rate
 }
 
+// takeDoc gives a plugin that reads whole tracks the document of its
+// slot, where the app made a new one.
+func (v *goView) takeDoc() {
+	tp, ok := v.p.(plug.TrackPlugin)
+	if !ok {
+		return
+	}
+	got, ok := trackDocs.Load(v.slot)
+	if !ok {
+		return
+	}
+	if doc, ok := got.(plug.Document); ok && doc != v.doc {
+		v.doc = doc
+		tp.SetDocument(doc)
+	}
+}
+
 // showGo makes and keeps the views of track t's Go plugins, and lets
 // those of plugins gone go.
 func (r *root) showGo(t Track, s, was Album, u *gunim.UI) {
@@ -303,6 +320,7 @@ func (r *root) showGo(t Track, s, was Album, u *gunim.UI) {
 			r.goViews[sl.ID] = v
 		}
 		v.take(sl, u)
+		v.takeDoc()
 	}
 	gone := map[int]*goView{}
 	for id, v := range r.goViews {

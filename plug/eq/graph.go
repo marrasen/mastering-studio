@@ -1131,8 +1131,10 @@ type full struct {
 	note   *widget.Label
 	amount *plugui.Knob
 	host   plug.Host
-	// listening says Auto waits for the track to be measured.
+	// listening says Auto waits for the track to be read, and stopPoll
+	// stops it looking how far the reading has got.
 	listening bool
+	stopPoll  func()
 }
 
 func newFull(p *plugin, h plug.Host) *full {
@@ -1148,37 +1150,49 @@ func newFull(p *plugin, h plug.Host) *full {
 	return v
 }
 
-// listen has the host measure the track, for Auto.
+// listen starts reading the track, for Auto, and follows it.
 func (v *full) listen(u *gunim.UI) {
 	if v.listening {
 		return
 	}
 	v.listening = true
-	v.auto.Disabled, v.note.Text = true, "Listening…"
-	u.Invalidate()
-	v.host.Spectrum(autoFreqs, v.heard, u)
+	v.auto.Disabled, v.note.Text = true, "Reading the track…"
+	v.panel.graph.p.startReading()
+	v.watchReading(u)
 }
 
-// heard takes the track's spectrum, measured, and shapes the bands to
-// bring it to pink, as one step to undo.
-func (v *full) heard(levels []float64, err error, u *gunim.UI) {
+// readPoll is how often Auto looks how far the reading has got.
+const readPoll = 50 * time.Millisecond
+
+// watchReading looks how far the reading has got: while it reads, it shows
+// how far and looks again a moment later; once the track is read, it
+// shapes the bands to bring it to pink, as one step to undo.
+func (v *full) watchReading(u *gunim.UI) {
+	if !v.listening {
+		return
+	}
+	levels, reading, progress, err := v.panel.graph.p.readState()
+	switch {
+	case reading:
+		v.note.Text = fmt.Sprintf("Reading the track… %.0f%%", 100*progress)
+		v.stopPoll = u.After(readPoll, v.watchReading)
+		u.Invalidate()
+		return
+	case err != nil:
+		v.note.Text = "Could not read the track: " + err.Error()
+	case len(levels) == len(autoFreqs):
+		g := v.panel.graph
+		bands := autoBands(levels)
+		g.edit("Auto EQ", true, u, func() bool {
+			g.bands, g.sel = bands, 0
+			return true
+		})
+		v.note.Text = "Matched to pink noise"
+	default:
+		v.note.Text = ""
+	}
 	v.listening, v.auto.Disabled = false, false
 	u.Invalidate()
-	if err != nil {
-		v.note.Text = "Could not listen: " + err.Error()
-		return
-	}
-	if len(levels) != len(autoFreqs) {
-		v.note.Text = "Could not listen to the track"
-		return
-	}
-	g := v.panel.graph
-	bands := autoBands(levels)
-	g.edit("Auto EQ", true, u, func() bool {
-		g.bands, g.sel = bands, 0
-		return true
-	})
-	v.note.Text = "Matched to pink noise"
 }
 
 // sideW is how wide the room beside the strip is, for Auto and the

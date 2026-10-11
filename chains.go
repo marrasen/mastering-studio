@@ -81,6 +81,7 @@ func (a *app) closeRacks() {
 func (a *app) shutdown() {
 	a.stop()
 	a.d.stop()
+	a.closeDocs()
 	stopped := make(chan struct{})
 	go func() {
 		a.work.Wait()
@@ -331,8 +332,6 @@ func (a *app) handleChain(in gunim.Intent) {
 		a.setGoParam(in.Track, in.Slot, in.ID, in.Value)
 	case SetGoState:
 		a.setGoState(in.Track, in.Slot, in.State)
-	case MeasureSpectrum:
-		a.measureSpectrum(in)
 	case CopyChain:
 		from := a.track(in.From)
 		if from == nil {

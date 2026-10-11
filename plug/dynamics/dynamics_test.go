@@ -44,7 +44,6 @@ func (h *host) Traced(id uint32, f int64) (float32, bool) {
 	}
 	return h.proc.Trace(id).Get(f)
 }
-func (h *host) Spectrum([]float64, func([]float64, error, *gunim.UI), *gunim.UI) {}
 
 func newDynamics(t *testing.T) (*plugin, *host) {
 	t.Helper()

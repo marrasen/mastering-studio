@@ -24,10 +24,6 @@ type host struct {
 	// is the processor whose traces the views read.
 	in, out plug.Sound
 	proc    *processor
-	// asked are the frequencies of the spectrum asked for last, and
-	// answer answers it.
-	asked  []float64
-	answer func([]float64, error, *gunim.UI)
 }
 
 func (h *host) Param(id uint32) float64 {
@@ -56,9 +52,6 @@ func (h *host) Traced(id uint32, f int64) (float32, bool) {
 		return t.Get(f)
 	}
 	return 0, false
-}
-func (h *host) Spectrum(freqs []float64, done func([]float64, error, *gunim.UI), _ *gunim.UI) {
-	h.asked, h.answer = freqs, done
 }
 
 func newEQ(t *testing.T) (*plugin, *host) {

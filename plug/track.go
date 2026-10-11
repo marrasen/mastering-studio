@@ -4,7 +4,12 @@ package plug
 // played through it, as ARA 2 lets a VST3 plugin: to find the notes in
 // a vocal, or the loudness of a whole song before its first block plays.
 // The host tells it of each change to its [Document]; it reads the
-// sound whenever it likes, and plays it back through its [Processor].
+// sound whenever it likes, on a goroutine of its own, and plays it back
+// through its [Processor].
+//
+// A host gives the document to each copy of the plugin: the one made
+// for its sound, and the one made for its views, which may read the
+// track to show it, or to set the plugin from it.
 type TrackPlugin interface {
 	Plugin
 	// SetDocument gives the plugin the host's document as it is now,
@@ -24,7 +29,11 @@ type Document interface {
 	Regions() []Region
 }
 
-// Source is a recording the host has, as a track's file.
+// Source is a recording the host has, as a track's file. A host may
+// give a plugin the track as it reaches the plugin, in place of the file
+// itself: as it is edited, and through the plugins before it in a chain,
+// so a plugin reads what it is fed. Reading it the first time may wait
+// while the host renders it.
 type Source interface {
 	// ID tells the source from the others, for as long as it is in
 	// the document.

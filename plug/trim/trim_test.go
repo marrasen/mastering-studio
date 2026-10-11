@@ -24,13 +24,12 @@ func (h *host) Set(id uint32, v float64, _ *gunim.UI) {
 	h.values[id] = v
 	h.log = append(h.log, "set")
 }
-func (h *host) End(uint32, *gunim.UI)                                            { h.log = append(h.log, "end") }
-func (h *host) BeginEdit(name string, _ *gunim.UI)                               { h.log = append(h.log, "edit "+name) }
-func (h *host) Changed(*gunim.UI)                                                { h.log = append(h.log, "changed") }
-func (h *host) EndEdit(*gunim.UI)                                                { h.log = append(h.log, "end edit") }
-func (h *host) Sound() (in, out plug.Sound)                                      { return nil, h.out }
-func (h *host) Traced(uint32, int64) (float32, bool)                             { return 0, false }
-func (h *host) Spectrum([]float64, func([]float64, error, *gunim.UI), *gunim.UI) {}
+func (h *host) End(uint32, *gunim.UI)                { h.log = append(h.log, "end") }
+func (h *host) BeginEdit(name string, _ *gunim.UI)   { h.log = append(h.log, "edit "+name) }
+func (h *host) Changed(*gunim.UI)                    { h.log = append(h.log, "changed") }
+func (h *host) EndEdit(*gunim.UI)                    { h.log = append(h.log, "end edit") }
+func (h *host) Sound() (in, out plug.Sound)          { return nil, h.out }
+func (h *host) Traced(uint32, int64) (float32, bool) { return 0, false }
 
 func newPlugin(t *testing.T) (plug.Plugin, *host) {
 	t.Helper()

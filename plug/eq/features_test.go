@@ -1,13 +1,16 @@
 package eq
 
 import (
+	"context"
 	"errors"
 	"math"
+	"math/rand/v2"
 	"runtime"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
@@ -188,41 +191,167 @@ func TestTheStripMakesABandDynamicAndMovesItsDynamics(t *testing.T) {
 	}
 }
 
-func TestAutoAsksForTheTracksSpectrumAndShapesTheBands(t *testing.T) {
+// memSource is a track in memory, of version, as a host gives a plugin.
+type memSource struct {
+	frames  [][]float32
+	version int
+	// gate, where set, holds each read until it is closed.
+	gate chan struct{}
+}
+
+func (m *memSource) ID() int       { return 1 }
+func (m *memSource) Version() int  { return m.version }
+func (m *memSource) Name() string  { return "noise" }
+func (m *memSource) Rate() float64 { return 48000 }
+func (m *memSource) Channels() int { return 2 }
+func (m *memSource) Frames() int64 { return int64(len(m.frames[0])) }
+func (m *memSource) ReadAt(dst [][]float32, at int64) (int, error) {
+	if m.gate != nil {
+		<-m.gate
+	}
+	n := 0
+	for c := range dst {
+		n = copy(dst[c], m.frames[c%2][min(at, m.Frames()):])
+	}
+	return n, nil
+}
+
+type memDoc struct{ src *memSource }
+
+func (d memDoc) Sources() []plug.Source { return []plug.Source{d.src} }
+func (d memDoc) Regions() []plug.Region { return []plug.Region{{Source: 1, Length: d.src.Frames()}} }
+
+// noise returns seconds of white noise at 48 kHz, as a source.
+func noise(seconds, version int) *memSource {
+	r := rand.New(rand.NewPCG(3, 4))
+	m := &memSource{frames: [][]float32{make([]float32, seconds*48000), make([]float32, seconds*48000)}, version: version}
+	for c := range m.frames {
+		for i := range m.frames[c] {
+			m.frames[c][i] = float32(0.2 * (2*r.Float64() - 1))
+		}
+	}
+	return m
+}
+
+func TestTheEQReadsATracksSpectrum(t *testing.T) {
+	var at float64
+	levels, err := spectrumOf(context.Background(), noise(6, 1), autoFreqs, func(p float64) { at = p })
+	if err != nil {
+		t.Fatal(err)
+	}
+	// White noise's power rises 3 dB an octave, sixth-octave bands
+	// summing it: a line through the levels.
+	var sx, sy, sxx, sxy float64
+	for i, f := range autoFreqs {
+		x := math.Log2(f / 100)
+		sx, sy, sxx, sxy = sx+x, sy+levels[i], sxx+x*x, sxy+x*levels[i]
+	}
+	n := float64(len(autoFreqs))
+	if slope := (n*sxy - sx*sy) / (n*sxx - sx*sx); math.Abs(slope-3) > 0.15 {
+		t.Errorf("white noise rises %.2f dB an octave, want 3", slope)
+	}
+	if at < 0.95 {
+		t.Errorf("read whole, the reading says it got %.2f of the way", at)
+	}
+	silent := &memSource{frames: [][]float32{make([]float32, 48000), make([]float32, 48000)}}
+	if _, err := spectrumOf(context.Background(), silent, autoFreqs, func(float64) {}); !errors.Is(err, errSilent) {
+		t.Errorf("a silent track reads with %v", err)
+	}
+}
+
+func TestAReadingStopsAndANewTrackIsReadAnew(t *testing.T) {
+	p, _ := newEQ(t)
+	if p.canRead() {
+		t.Fatal("with no document the EQ says it can read")
+	}
+	src := noise(2, 1)
+	src.gate = make(chan struct{})
+	p.SetDocument(memDoc{src})
+	p.startReading()
+	if _, reading, _, _ := p.readState(); !reading {
+		t.Fatal("started, the EQ is not reading")
+	}
+	p.stopReading()
+	close(src.gate)
+	// Long enough for the reading to have run through, had it not
+	// stopped.
+	time.Sleep(200 * time.Millisecond)
+	if levels, reading, _, _ := p.readState(); reading || levels != nil {
+		t.Fatal("stopped, the EQ reads on, or kept what it read")
+	}
+	// Read through, started again at once, the reading stopped ending
+	// meanwhile: it leaves the new one be.
+	src.gate = make(chan struct{})
+	p.SetDocument(memDoc{src})
+	p.startReading()
+	p.stopReading()
+	p.startReading()
+	close(src.gate)
+	waitRead(t, p)
+	if levels, _, _, err := p.readState(); len(levels) != len(autoFreqs) || p.Analysed() != 1 || err != nil {
+		t.Fatalf("read, the EQ has %d levels, says %.2f, and failed with %v", len(levels), p.Analysed(), err)
+	}
+	// A new version of the track: what was read of the old goes.
+	p.SetDocument(memDoc{noise(2, 2)})
+	if levels, _, _, _ := p.readState(); levels != nil || p.Analysed() != 0 {
+		t.Error("a new version of the track keeps what was read of the old")
+	}
+}
+
+// waitRead waits for p to finish reading.
+func waitRead(t *testing.T, p *plugin) {
+	t.Helper()
+	for range 1000 {
+		if _, reading, _, _ := p.readState(); !reading {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the EQ never finished reading")
+}
+
+func TestAutoReadsTheTrackAndShapesTheBands(t *testing.T) {
 	p, h := newEQ(t)
 	p.setBands(bell)
+	// White noise, brighter than pink: Auto darkens it.
+	p.SetDocument(memDoc{noise(4, 1)})
 	v, ok := p.View(plug.Full, h).(*full)
 	if !ok {
 		t.Fatal("the full view is of another type")
 	}
-	v.auto.OnClick(nil)
-	if !slices.Equal(h.asked, autoFreqs) || !v.auto.Disabled {
-		t.Fatalf("Auto asked for the spectrum at %v, and is disabled %v", h.asked, v.auto.Disabled)
-	}
-	// Twice: one listen at a time.
-	h.asked = nil
-	v.auto.OnClick(nil)
-	if h.asked != nil {
-		t.Error("Auto asked again while listening")
-	}
-	// A track with 6 dB too much about 1 kHz.
-	levels := levelsOf(func(f float64) float64 { o := math.Log2(f / 1000); return 6 * math.Exp(-o*o) })
+	w, run := stage(t, geom.Sz(1200, 600), v)
 	h.log = nil
-	h.answer(levels, nil, nil)
-	if got := audio.Response(p.Bands(), 1000); got > -3 {
-		t.Errorf("for a track loud about 1 kHz, Auto lowers it by %+.2f dB", got)
+	clickOn(t, w, run, v.auto)
+	for range 600 {
+		run(1)
+		if !v.listening {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if v.listening || v.note.Text != "Matched to pink noise" {
+		t.Fatalf("Auto still reads %v, and says %q", v.listening, v.note.Text)
+	}
+	if low, high := audio.Response(p.Bands(), 100), audio.Response(p.Bands(), 8000); high > low-6 {
+		t.Errorf("for white noise, Auto sets 100 Hz to %+.1f dB and 8 kHz to %+.1f dB: not darker", low, high)
 	}
 	if want := []string{"edit Auto EQ", "changed", "end edit"}; !slices.Equal(h.log, want) {
 		t.Errorf("Auto sent %v, want one step", h.log)
 	}
-	if v.auto.Disabled || v.note.Text != "Matched to pink noise" {
-		t.Errorf("done, Auto is disabled %v, and says %q", v.auto.Disabled, v.note.Text)
+}
+
+// clickOn clicks the middle of node n in w.
+func clickOn(t *testing.T, w *gunim.Window, run func(int), n gunim.Node) {
+	t.Helper()
+	var b geom.Rect
+	gunim.RegisterPatch(w, "eq", func(_ gunim.Node, _ struct{}, u *gunim.UI) { b, _ = u.Bounds(n) })
+	if err := w.Client().Patch("eq", struct{}{}); err != nil {
+		t.Fatal(err)
 	}
-	// A track the host could not measure changes nothing.
-	was := p.Bands()
-	v.auto.OnClick(nil)
-	h.answer(nil, errors.New("the track is silent"), nil)
-	if !slices.Equal(p.Bands(), was) || v.note.Text != "Could not listen: the track is silent" {
-		t.Errorf("unmeasured, the bands are %v, and Auto says %q", p.Bands(), v.note.Text)
-	}
+	run(1)
+	at := b.Center()
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(1)
 }

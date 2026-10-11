@@ -92,6 +92,8 @@ type plugin struct {
 	mu    sync.Mutex
 	bands []audio.Band
 	ids   atomic.Pointer[[]int]
+	// reader reads the whole track, for Auto.
+	reader reader
 }
 
 func newPlugin(h plug.Host) *plugin {
@@ -128,8 +130,8 @@ func (p *plugin) SetState(b []byte) error {
 	return nil
 }
 
-// Close implements [plug.Plugin].
-func (p *plugin) Close() {}
+// Close implements [plug.Plugin]: a reading under way stops.
+func (p *plugin) Close() { p.stopReading() }
 
 // Bands returns a copy of the EQ's bands.
 func (p *plugin) Bands() []audio.Band {
