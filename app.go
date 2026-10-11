@@ -163,8 +163,8 @@ type (
 		Preset string
 		// OnB says Chain is the track's chain B, not A. Other is the chain
 		// of the other side, kept as a preset keeps one, with OtherPreset
-		// its preset; OtherSet says the other side has been set: until it
-		// is, it is a copy of this one.
+		// its preset: a side of its own, empty until plugins are added to
+		// it. OtherSet says it has been switched to or copied to.
 		OnB         bool
 		Other       []keptSlot
 		OtherPreset string
@@ -332,7 +332,8 @@ type (
 	// ShowEditor opens a plugin's editor.
 	ShowEditor struct{ Track, Slot int }
 	// SwitchChain plays a track's chain B, or A: the one played is kept
-	// as the other side, and the other side's plugins load in its place.
+	// as the other side, and the other side's plugins, none at first,
+	// load in its place.
 	SwitchChain struct {
 		Track int
 		B     bool

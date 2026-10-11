@@ -15,7 +15,8 @@ import (
 // chainAB switches the track between its two chains, A and B, to
 // compare them: two small parts, the one played lit, the light gliding
 // to the other as it is picked. Each side keeps its own plugins and
-// their settings; B starts as a copy of A.
+// their settings; B starts empty, and the Chain menu copies one side to
+// the other.
 type chainAB struct {
 	anim.Group
 	r *root
@@ -107,7 +108,7 @@ func (s *chainAB) tipOf(i int) string {
 	case 0:
 		return "Play chain A. A and B each keep their own plugins and settings, to compare"
 	case 1:
-		return "Play chain B. It starts as a copy of A; the Chain menu copies one side to the other"
+		return "Play chain B, with plugins of its own: empty until you add some. The Chain menu copies one side to the other"
 	}
 	return ""
 }

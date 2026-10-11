@@ -6,6 +6,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/marrasen/mastering-studio/plug/trim"
+
 	"github.com/marrasen/gunim/audio"
 )
 
@@ -97,7 +99,7 @@ func TestSwitchingSidesAloneKeepsSessionBsTrack(t *testing.T) {
 	}
 }
 
-func TestATracksChainBStartsAsAAndKeepsItsOwn(t *testing.T) {
+func TestATracksChainBStartsEmptyAndEachSideKeepsItsOwn(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a := newApp(ctx, newDeck(audio.NewMixer()), "")
@@ -111,28 +113,24 @@ func TestATracksChainBStartsAsAAndKeepsItsOwn(t *testing.T) {
 		}
 		return names, states
 	}
-	// To B: a copy of A, its own slots.
+	// To B: empty, a side of its own.
 	a.handle(SwitchChain{Track: 1, B: true})
-	t1 := a.Tracks[0]
-	if names, states := chain(); !t1.OnB || !slices.Equal(names, []string{"More bass"}) || !slices.Equal(states, []string{"a"}) ||
-		t1.Chain[0].ID == 3 || t1.Preset != "Loud" {
-		t.Fatalf("switched to B, the chain is %v %v, on B %v, preset %q", names, states, t1.OnB, t1.Preset)
+	if names, _ := chain(); !a.Tracks[0].OnB || len(names) != 0 || a.Tracks[0].Preset != "" {
+		t.Fatalf("switched to B, the chain is %v, on B %v, preset %q; want empty", names, a.Tracks[0].OnB, a.Tracks[0].Preset)
 	}
 	if a.UndoLabel != "switching to chain B on One" {
 		t.Errorf("switching is undone as %q", a.UndoLabel)
 	}
-	// B changed: A keeps its own.
-	a.states[t1.Chain[0].ID] = []byte("b")
+	// A plugin added to B: A has none of it.
 	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 99, Name: "Trim"})
 	a.states[99] = []byte("trim")
-	a.Tracks[0].Preset = ""
 	a.handle(SwitchChain{Track: 1, B: false})
 	if names, states := chain(); a.Tracks[0].OnB || !slices.Equal(names, []string{"More bass"}) || !slices.Equal(states, []string{"a"}) ||
 		a.Tracks[0].Preset != "Loud" {
 		t.Fatalf("back on A, the chain is %v %v, preset %q", names, states, a.Tracks[0].Preset)
 	}
 	a.handle(SwitchChain{Track: 1, B: true})
-	if names, states := chain(); !slices.Equal(names, []string{"More bass", "Trim"}) || !slices.Equal(states, []string{"b", "trim"}) {
+	if names, states := chain(); !slices.Equal(names, []string{"Trim"}) || !slices.Equal(states, []string{"trim"}) {
 		t.Fatalf("on B again, the chain is %v %v", names, states)
 	}
 	// Copied to A: back on A, the same as B.
@@ -141,7 +139,7 @@ func TestATracksChainBStartsAsAAndKeepsItsOwn(t *testing.T) {
 		t.Errorf("copying is undone as %q", a.UndoLabel)
 	}
 	a.handle(SwitchChain{Track: 1, B: false})
-	if names, states := chain(); !slices.Equal(names, []string{"More bass", "Trim"}) || !slices.Equal(states, []string{"b", "trim"}) {
+	if names, states := chain(); !slices.Equal(names, []string{"Trim"}) || !slices.Equal(states, []string{"trim"}) {
 		t.Fatalf("B copied to A, A is %v %v", names, states)
 	}
 }
@@ -169,7 +167,68 @@ func TestSwitchingChainsWhilePlayingKeepsTheChainLoaded(t *testing.T) {
 	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
 	r := a.rackOf(&a.Tracks[0])
 	a.handle(SwitchChain{Track: id, B: true})
+	if a.racks[id] != r || len(r.list()) != 0 {
+		t.Fatalf("switched to B, empty, the track's chain loaded is %p, was %p, with %d plugins", a.racks[id], r, len(r.list()))
+	}
+	a.handle(SwitchChain{Track: id, B: false})
 	if a.racks[id] != r || len(r.list()) != 1 || r.list()[0].slot != a.Tracks[0].Chain[0].ID {
-		t.Fatalf("switched, the track's chain loaded is %p, was %p, with %d plugins", a.racks[id], r, len(r.list()))
+		t.Fatalf("back on A, the track's chain loaded is %p, was %p, with %d plugins", a.racks[id], r, len(r.list()))
+	}
+}
+
+func TestSwitchingChainsKeepsEachSidesLiveSettings(t *testing.T) {
+	a := savedApp(t)
+	id := a.Tracks[0].ID
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
+	a.handle(TogglePlay{})
+	r := a.rackOf(&a.Tracks[0])
+	// gain is the trim's gain as the chain plays it, as the app keeps
+	// it, and as the views are shown it.
+	gain := func() (live, kept, shown float64) {
+		t.Helper()
+		s := a.Tracks[0].Chain[0]
+		lp := r.find(s.ID)
+		if lp == nil {
+			t.Fatal("the trim is not in the chain playing")
+		}
+		e, ok := lp.p.(*goEngine)
+		if !ok {
+			t.Fatal("the trim is not a Go plugin")
+		}
+		set, err := readGoSettings(a.states[s.ID])
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.showGoSettings()
+		return e.param(trim.GainID).value(), set.Params[trim.GainID], a.Tracks[0].Chain[0].Values[trim.GainID]
+	}
+	setGain := func(db float64) {
+		a.handle(SetGoParam{Track: id, Slot: a.Tracks[0].Chain[0].ID, ID: trim.GainID, Value: db, Gesture: 1})
+	}
+	setGain(-4)
+	// B, empty: a trim of its own, set apart.
+	a.handle(SwitchChain{Track: id, B: true})
+	if len(a.Tracks[0].Chain) != 0 {
+		t.Fatalf("B has %d plugins, want none of A's", len(a.Tracks[0].Chain))
+	}
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
+	setGain(-8)
+	a.handle(SwitchChain{Track: id, B: false})
+	if live, kept, shown := gain(); live != -4 || kept != -4 || shown != -4 {
+		t.Fatalf("back on A, it plays %v, keeps %v, shows %v; want A's -4", live, kept, shown)
+	}
+	a.handle(SwitchChain{Track: id, B: true})
+	if live, kept, shown := gain(); live != -8 || kept != -8 || shown != -8 {
+		t.Fatalf("back on B, it plays %v, keeps %v, shows %v; want B's -8", live, kept, shown)
+	}
+	// Bypassed on B, and back: A is not, B still is.
+	a.handle(SetBypass{Track: id, Slot: a.Tracks[0].Chain[0].ID, On: true})
+	a.handle(SwitchChain{Track: id, B: false})
+	if a.Tracks[0].Chain[0].Bypass || r.find(a.Tracks[0].Chain[0].ID).bypass {
+		t.Error("B's bypass came over to A")
+	}
+	a.handle(SwitchChain{Track: id, B: true})
+	if !a.Tracks[0].Chain[0].Bypass || !r.find(a.Tracks[0].Chain[0].ID).bypass {
+		t.Error("B's bypass was lost going to A and back")
 	}
 }

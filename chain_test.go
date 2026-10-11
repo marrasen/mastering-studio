@@ -1017,3 +1017,77 @@ func TestTheNotesCopiedAreEveryTracksWithAny(t *testing.T) {
 		t.Fatal("with no notes, the button to copy them is on")
 	}
 }
+
+func TestSwitchingChainsKeepsAVST3PluginsLiveSettings(t *testing.T) {
+	a := chainApp(t, audio.NewMixer())
+	id := a.Tracks[0].ID
+	a.handle(TogglePlay{})
+	// outGain sets, or reads, the equalizer's output gain, in the
+	// plugin playing, as its own editor would.
+	plugin := func() *livePlugin {
+		t.Helper()
+		lp := a.rackOf(&a.Tracks[0]).find(a.Tracks[0].Chain[0].ID)
+		if lp == nil {
+			t.Fatal("the equalizer is not in the chain playing")
+		}
+		return lp
+	}
+	param := func(lp *livePlugin) vst3.Param {
+		t.Helper()
+		for _, q := range paramsOf(t, lp) {
+			if q.Title == "Output gain" {
+				return q
+			}
+		}
+		t.Fatal("the equalizer has no output gain")
+		return vst3.Param{}
+	}
+	set := func(v float64) {
+		t.Helper()
+		lp := plugin()
+		q := param(lp)
+		was, err := lp.p.State()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lp.p.Set(q.ID, v)
+		// LSP's state takes up a change a moment after it processes it.
+		// Asked of the plugin alone: the app is left to read it, as the
+		// switch does, so the change is only in the plugin playing.
+		eventually(t, "the equalizer's state never took the change", func() bool {
+			lp.p.Process(make([]float32, 2*512))
+			st, err := lp.p.State()
+			return err == nil && !bytes.Equal(st, was)
+		})
+	}
+	// read is the equalizer's state, as the plugin playing has it.
+	read := func() []byte {
+		t.Helper()
+		st, err := plugin().p.State()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st
+	}
+	set(param(plugin()).Default / 3)
+	onA := read()
+	// Copied to B, as the Chain menu does, then set apart there.
+	a.handle(CopyChainSide{Track: id})
+	a.handle(SwitchChain{Track: id, B: true})
+	if !bytes.Equal(read(), onA) {
+		t.Fatal("A copied to B, B is not set as A was")
+	}
+	set(param(plugin()).Default / 5)
+	onB := read()
+	if bytes.Equal(onA, onB) {
+		t.Fatal("set apart on B, the equalizer's state is A's")
+	}
+	a.handle(SwitchChain{Track: id, B: false})
+	if !bytes.Equal(read(), onA) {
+		t.Error("back on A, the equalizer is not set as A was")
+	}
+	a.handle(SwitchChain{Track: id, B: true})
+	if !bytes.Equal(read(), onB) {
+		t.Error("back on B, the equalizer is not set as B was")
+	}
+}
