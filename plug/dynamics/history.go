@@ -101,7 +101,13 @@ func (hs *history) Step(dt time.Duration) bool {
 	if len(out) > 0 {
 		end := hs.out.At()
 		start := end - int64(len(out)/2)
-		if start != hs.end {
+		switch {
+		case start == hs.end:
+		case start > hs.end && hs.n > 0 && start-hs.end < 2*int64(rate):
+			// Frames missed, as the window stalled: the history goes on
+			// past them.
+			hs.skip(start - hs.end)
+		default:
 			// A jump: the history starts again from here.
 			hs.n, hs.curN, hs.shown = 0, 0, 0
 			hs.curAt = start
@@ -133,13 +139,32 @@ func (hs *history) take(in, out []float32) {
 		}
 		hs.curN++
 		if hs.curN == colFrames {
-			hs.cur.gate = hs.traced(GateGRID)
-			hs.cur.comp = hs.traced(CompGRID)
-			hs.cur.lim = hs.traced(LimitGRID)
-			hs.cols[hs.n%histCols] = hs.cur
-			hs.n++
-			hs.curN = 0
-			hs.curAt += colFrames
+			hs.endColumn()
+		}
+	}
+}
+
+// endColumn ends the column being made, with how far each part turned
+// it down.
+func (hs *history) endColumn() {
+	hs.cur.gate = hs.traced(GateGRID)
+	hs.cur.comp = hs.traced(CompGRID)
+	hs.cur.lim = hs.traced(LimitGRID)
+	hs.cols[hs.n%histCols] = hs.cur
+	hs.n++
+	hs.curN = 0
+	hs.curAt += colFrames
+}
+
+// skip moves the history on over n frames missed, as silence.
+func (hs *history) skip(n int64) {
+	for ; n > 0; n-- {
+		if hs.curN == 0 {
+			hs.cur = column{}
+		}
+		hs.curN++
+		if hs.curN == colFrames {
+			hs.endColumn()
 		}
 	}
 }

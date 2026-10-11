@@ -461,6 +461,20 @@ func TestTheHistoryScrollsSmoothlyAndDrawsTheReduction(t *testing.T) {
 	if c.comp > -10 || c.out < 0.4 {
 		t.Errorf("the last column shows the sound out at %v, turned down %v dB; want 0.5, about -18", c.out, c.comp)
 	}
+	// The window stalls for longer than its views read at once: the
+	// history goes on past the frames missed.
+	made := hs.n
+	s.at += 20000
+	hs.Step(frame)
+	if want := made + 20000/colFrames; hs.n < want-1 || hs.n > want+1 {
+		t.Errorf("past 20000 frames missed, the history has %d columns, want about %d", hs.n, want)
+	}
+	// Playing jumps back: the history starts again.
+	s.at -= 48000
+	hs.Step(frame)
+	if hs.n > 16 {
+		t.Errorf("after a jump back the history keeps %d columns", hs.n)
+	}
 }
 
 func TestTheViewsWorkThroughTheHost(t *testing.T) {
