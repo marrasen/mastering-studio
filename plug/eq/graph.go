@@ -113,6 +113,9 @@ type graph struct {
 	// graph shows filled, as it does the band picked.
 	behind float32
 	lit    int
+	// held is the band whose row has a control held, which stays lit
+	// while it is, wherever the pointer goes.
+	held int
 	// tipBand is the band the readout beside a point shows, and tipIn how
 	// far it is in: it fades and rises in as the pointer comes over a
 	// point, and away as it leaves.

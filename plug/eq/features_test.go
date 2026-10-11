@@ -581,6 +581,29 @@ func TestTheGraphShowsDarkenedBehindTheBands(t *testing.T) {
 	if v.g.lit != 0 {
 		t.Errorf("the pointer off the rows still lights band %d", v.g.lit)
 	}
+	// A knob of the first band's row, held and dragged over the second
+	// band's row, keeps the first band lit: the band it turns.
+	var first *bandRow
+	for _, r := range v.list.rows {
+		if r.id == 1 {
+			first = r
+		}
+	}
+	knob := boundsIn(t, w, run, first.knobs[1]).Center()
+	w.Input(input.PointerMove{Pos: knob})
+	w.Input(input.PointerDown{Pos: knob, Button: input.ButtonPrimary, Clicks: 1})
+	over := boundsIn(t, w, run, second).Center()
+	w.Input(input.PointerMove{Pos: over})
+	run(1)
+	if v.g.lit != 1 {
+		t.Errorf("a knob of the first band's row, dragged over the second's, lights band %d", v.g.lit)
+	}
+	w.Input(input.PointerUp{Pos: over, Button: input.ButtonPrimary})
+	w.Input(input.PointerMove{Pos: over.Add(geom.Pt(1, 0))})
+	run(1)
+	if v.g.lit != 2 {
+		t.Errorf("let go over the second band's row, the pointer lights band %d", v.g.lit)
+	}
 }
 
 func TestTheTunerTurnsTheLookAndResetsIt(t *testing.T) {

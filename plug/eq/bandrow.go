@@ -126,6 +126,7 @@ func (r *bandRow) begin(k int) func(*gunim.UI) {
 		if b == nil {
 			return
 		}
+		r.g.held = r.id
 		name := fmt.Sprintf("Move band %d", i+1)
 		switch {
 		case k == 2:
@@ -178,7 +179,10 @@ func (r *bandRow) set(k int) func(float64, *gunim.UI) {
 }
 
 // end ends a knob's gesture.
-func (r *bandRow) end(u *gunim.UI) { r.g.host.EndEdit(u) }
+func (r *bandRow) end(u *gunim.UI) {
+	r.g.held = 0
+	r.g.host.EndEdit(u)
+}
 
 // show shows band b, at place, or none where b is nil: the controls
 // glide to it.
@@ -232,9 +236,10 @@ func (r *bandRow) show(b *audio.Band, place int, u *gunim.UI) {
 }
 
 // Overhear implements [gunim.Overhearer]: a row of the list lights its
-// band on the graph while the pointer is on it.
+// band on the graph while the pointer is on it, unless a control of a
+// row is held, whose band stays lit.
 func (r *bandRow) Overhear(e input.Event, u *gunim.UI) {
-	if !r.glass {
+	if !r.glass || r.g.held != 0 {
 		return
 	}
 	m, ok := e.(input.PointerMove)
