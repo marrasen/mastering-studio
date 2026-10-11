@@ -52,7 +52,7 @@ func matchGain(ctx context.Context, path string, gap time.Duration, e Edit, chai
 		ed.Gain = gain
 		k := rk
 		if k == nil {
-			k = &rack{active: true}
+			k = newRackOf(nil)
 		}
 		// Each measure starts the plugins from silence.
 		for _, lp := range k.plugins {

@@ -44,6 +44,16 @@ func lspSlot(t *testing.T, id int, name string) Slot {
 	return Slot{}
 }
 
+// paramsOf returns the parameters of lp, a VST3 plugin.
+func paramsOf(t *testing.T, lp *livePlugin) []vst3.Param {
+	t.Helper()
+	p, ok := lp.p.(*vst3.Plugin)
+	if !ok {
+		t.Fatalf("slot %d is no VST3 plugin", lp.slot)
+	}
+	return p.Params()
+}
+
 // clicks is a second of silence at 44.1 kHz with one click, at frame at.
 type clicks struct {
 	at, pos, n int64
@@ -77,7 +87,7 @@ func TestAChainsLatencyIsMadeUp(t *testing.T) {
 		t.Fatal(failed)
 	}
 	defer r.close()
-	if lat := r.latencyLocked(); lat == 0 {
+	if lat := r.latency(); lat == 0 {
 		t.Fatal("the limiter has no latency to make up")
 	}
 	for _, seek := range []int64{0, 5000} {
@@ -116,7 +126,7 @@ func TestATrackMeasuresThroughItsChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gain vst3.Param
-	for _, q := range lp.p.Params() {
+	for _, q := range paramsOf(t, lp) {
 		if q.Title == "Output gain" {
 			gain = q
 		}
@@ -178,7 +188,7 @@ func TestOnlyTheTrackHeardRunsItsPlugins(t *testing.T) {
 	one, two := a.Tracks[0].ID, a.Tracks[1].ID
 	a.handle(TogglePlay{})
 	mix.Mix(make([]float32, 2*4096))
-	if !a.racks[one].active {
+	if !a.racks[one].isActive() {
 		t.Fatal("the track playing has its plugins stopped")
 	}
 	a.handle(Pick{ID: two})
@@ -187,14 +197,12 @@ func TestOnlyTheTrackHeardRunsItsPlugins(t *testing.T) {
 		mix.Mix(make([]float32, 2*4096))
 	}
 	eventually(t, "the track left still runs its plugins", func() bool {
-		a.racks[one].mu.Lock()
-		defer a.racks[one].mu.Unlock()
-		return !a.racks[one].active
+		return !a.racks[one].isActive()
 	})
-	if !a.racks[two].active {
+	if !a.racks[two].isActive() {
 		t.Fatal("the track picked has its plugins stopped")
 	}
-	if r := a.racks[a.Tracks[2].ID]; r != nil && r.active {
+	if r := a.racks[a.Tracks[2].ID]; r != nil && r.isActive() {
 		t.Fatal("a track never heard runs its plugins")
 	}
 }
@@ -206,7 +214,7 @@ func TestCopyingAChainCopiesEveryPluginAsSet(t *testing.T) {
 	lp := a.rackOf(&a.Tracks[0]).find(from.Chain[0].ID)
 	a.readRack(from.ID)
 	was := a.states[from.Chain[0].ID]
-	for _, q := range lp.p.Params() {
+	for _, q := range paramsOf(t, lp) {
 		if q.Title == "Output gain" {
 			lp.p.Set(q.ID, q.Default/3)
 		}
@@ -685,8 +693,8 @@ func TestTheGainAfterTheChainIsMeasured(t *testing.T) {
 }
 
 func TestTheTapHoldsWhatTheChainIsFed(t *testing.T) {
-	tap := &ioTap{}
-	st := newStage(&clicks{at: 1000, n: 44100}, &rack{active: true}, 0)
+	tap := newIOTap(tapKeep)
+	st := newStage(&clicks{at: 1000, n: 44100}, newRackOf(nil), 0)
 	st.tap = tap
 	buf := make([]float32, 2*700)
 	for range 4 {
@@ -938,7 +946,7 @@ func TestAPluginsGainIsMeasuredAndPlayedInItsPlaceBypassed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range lp.p.Params() {
+	for _, q := range paramsOf(t, lp) {
 		if q.Title == "Output gain" {
 			lp.p.Set(q.ID, q.Default/2)
 		}
@@ -982,9 +990,8 @@ func TestAPluginsGainIsMeasuredAndPlayedInItsPlaceBypassed(t *testing.T) {
 		for i := range frames {
 			frames[i] = 0.5
 		}
-		r.mu.Lock()
-		r.processLocked(frames)
-		r.mu.Unlock()
+		r.process(r.enter(), frames, 0)
+		r.leave()
 		return frames[len(frames)-2]
 	}
 	if v := level(false); math.Abs(float64(v)-0.5) > 1e-3 {

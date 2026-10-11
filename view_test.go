@@ -344,19 +344,130 @@ func TestAClickOnACardsLightBypassesItsPluginAndOnItOpensItsEditor(t *testing.T)
 	}
 }
 
-func TestTheChainsCardsLeaveRoomForItsButtons(t *testing.T) {
+func TestADraggedCardMovesItsPluginTheOthersMakingWay(t *testing.T) {
+	// Three, short enough to stand in one row.
 	a := chained()
-	for i := range 4 {
-		a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 20 + i, Name: "Another Plugin Of Some Length", Vendor: "Somebody"})
+	a.Tracks[0].Chain[0].Name = "Ozone 11 Equalizer"
+	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 9, Name: "Trim", Vendor: "Marras"})
+	w, r, run := stage(t, a)
+	run(40)
+	b := boundsOf(t, w, run, r.chain)
+	c := r.chain
+	first, second, last := c.cards[7], c.cards[8], c.cards[9]
+	secondAt := second.x.Value()
+	from := b.Min.Add(c.cardRect(first).Center().Add(geom.Pt(20, 0)))
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	// Along, a step a frame, to past the middle of the last card.
+	to := b.Min.X + c.cardRect(last).Center().X + 30
+	for x := from.X; x < to; x += 20 {
+		w.Input(input.PointerMove{Pos: geom.Pt(x, from.Y)})
+		run(1)
 	}
+	w.Input(input.PointerMove{Pos: geom.Pt(to, from.Y)})
+	run(20)
+	if c.moving != 7 || c.moveTo != 2 {
+		t.Fatalf("dragging, card %d is moving to %d; want the first to the end", c.moving, c.moveTo)
+	}
+	if second.x.Value() >= secondAt {
+		t.Errorf("the second card stays at %.0f, from %.0f: it makes no way", second.x.Value(), secondAt)
+	}
+	if got := b.Min.X + first.x.Value() + c.grab; got != to {
+		t.Errorf("the card dragged is at %.0f, want under the pointer at %.0f", got, to)
+	}
+	w.Input(input.PointerUp{Pos: geom.Pt(to, from.Y), Button: input.ButtonPrimary})
+	run(1)
+	_, sent := edits(w)
+	if len(sent) != 1 || sent[0] != (MovePlugin{Track: 1, From: 0, To: 2}) {
+		t.Fatalf("the drag sent %v, want the move alone", sent)
+	}
+	// A press that hardly moves is a click.
+	at := b.Min.Add(c.cardRect(second).Center().Add(geom.Pt(20, 0)))
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(4, 0))})
+	w.Input(input.PointerUp{Pos: at.Add(geom.Pt(4, 0)), Button: input.ButtonPrimary})
+	run(1)
+	if _, sent := edits(w); len(sent) != 1 || sent[0] != (ShowEditor{Track: 1, Slot: 8}) {
+		t.Fatalf("a click sent %v, want the editor shown", sent)
+	}
+}
+
+func TestTheChainsCardsLeaveRoomForItsButtons(t *testing.T) {
+	// A plugin more: one row, its cards clear of the buttons.
+	a := chained()
+	a.Tracks[0].Chain[0].Name = "Ozone 11 Equalizer"
+	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 20, Name: "Trim", Vendor: "Somebody"})
 	_, r, run := stage(t, a)
 	run(40)
 	c := r.chain
+	// The A/B switch stands before the menu.
+	menuAt := c.size.W - menuPillWidth(c.more.words) - 8 - abSwitchW
 	last := c.cards[c.order[len(c.order)-1]]
-	end := c.cardRect(last).Max.X
-	copyAt := c.size.W - pillWidth("Copy to…")
-	if end > copyAt || c.addX+pillWidth("+ Plugin") > copyAt+1 {
-		t.Fatalf("the cards end at %.0f and the add button at %.0f, past the copy button at %.0f", end, c.addX+pillWidth("+ Plugin"), copyAt)
+	if c.rows != 1 || c.cardRect(last).Max.X > menuAt || c.addX+pillWidth("+ Plugin") > menuAt+1 {
+		t.Fatalf("in %d rows, the cards end at %.0f and the add button at %.0f, past the menu at %.0f", c.rows,
+			c.cardRect(last).Max.X, c.addX+pillWidth("+ Plugin"), menuAt)
+	}
+}
+
+func TestAChainTooLongForItsRowTakesTwo(t *testing.T) {
+	a := chained()
+	for i := range 6 {
+		a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 20 + i, Name: "Another Plugin Of Some Length", Vendor: "Somebody"})
+	}
+	_, r, run := stage(t, a)
+	run(60)
+	c := r.chain
+	if c.rows != 2 || math.Abs(float64(c.height()-(chainH+rowStep))) > 0.5 || math.Abs(float64(c.size.H-c.height())) > 0.5 {
+		t.Fatalf("a long chain takes %d rows, %v tall, laid out %v", c.rows, c.height(), c.size.H)
+	}
+	// The first row clear of the menu, the second of the add button,
+	// which ends inside the row; the second row's cards under the first's.
+	// The A/B switch stands before the menu.
+	menuAt := c.size.W - menuPillWidth(c.more.words) - 8 - abSwitchW
+	rows := c.splitRows(c.order)
+	for _, id := range rows[0] {
+		if r := c.cardRect(c.cards[id]); r.Max.X > menuAt || math.Abs(float64(r.Center().Y-rowMid(0))) > 0.5 {
+			t.Errorf("a card of the first row is at %v, the menu at %.0f", r, menuAt)
+		}
+	}
+	for _, id := range rows[1] {
+		if r := c.cardRect(c.cards[id]); r.Max.X > c.addX || math.Abs(float64(r.Center().Y-rowMid(1))) > 0.5 {
+			t.Errorf("a card of the second row is at %v, the add button at %.0f", r, c.addX)
+		}
+	}
+	if c.addX+pillWidth("+ Plugin") > c.size.W || c.addY != rowMid(1) {
+		t.Errorf("the add button is at %.0f, %.0f, in a row %.0f wide", c.addX, c.addY, c.size.W)
+	}
+	// The sound runs along both rows, round from the first to the second.
+	path := c.soundPath()
+	if len(path) != 6 || path[0].Y != rowMid(0) || path[len(path)-1].Y != rowMid(1) {
+		t.Errorf("the sound's line runs %v", path)
+	}
+	// A card dragged down onto the second row lands there.
+	first := c.cards[c.order[0]]
+	c.moving, c.grab = c.order[0], 0
+	first.x.Jump(c.cardRect(c.cards[rows[1][0]]).Center().X + 5)
+	first.y.Jump(rowMid(1))
+	if to := c.landing(); to != len(rows[0]) {
+		t.Errorf("dragged onto the second row past its first card, the card would land at %d, want %d", to, len(rows[0]))
+	}
+	c.moving = 0
+}
+
+func TestADoubleClickOnACardRenamesIt(t *testing.T) {
+	w, r, run := stage(t, chained())
+	run(40)
+	b := boundsOf(t, w, run, r.chain)
+	at := b.Min.Add(r.chain.cardRect(r.chain.cards[8]).Center().Add(geom.Pt(20, 0)))
+	w.Input(input.PointerMove{Pos: at})
+	for _, n := range []int{1, 2} {
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: n})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	}
+	run(2)
+	if r.chain.renaming != 8 {
+		t.Errorf("a double-click on the card names slot %d", r.chain.renaming)
 	}
 }
 
@@ -399,7 +510,7 @@ func playing(t *testing.T, follow Follow) (r *root, run func(int), mix func(time
 	tr.File, tr.Wave, tr.Frames, tr.Format = path, sc.Wave, sc.Frames, sc.Format
 	a.Playing, a.Follow = true, follow
 	_, r, run = stage(t, a)
-	if err := r.d.play(tr.ID, path, a.Gap, tr.Edit, &rack{active: true}, 0, false, 0); err != nil {
+	if err := r.d.play(tr.ID, path, a.Gap, tr.Edit, newRackOf(nil), 0, false, 0); err != nil {
 		t.Fatal(err)
 	}
 	// The mixer runs in blocks of 10 ms, as many as the time asks, the
@@ -721,9 +832,10 @@ func TestTheLegendSwitchesTheLoudnessCurves(t *testing.T) {
 func TestTheViewSwitchesToTheSpectrogramAndANoteIsKeptAsTyped(t *testing.T) {
 	w, r, run := stage(t, album())
 	b := boundsOf(t, w, run, r.head.view)
-	w.Input(input.PointerMove{Pos: b.Center()})
-	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
-	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
+	at := b.Min.Add(r.head.view.parts[partGram].Center())
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
 	run(1)
 	if _, rest := edits(w); len(rest) != 1 || rest[0] != (SetView{View: ViewGram}) {
 		t.Fatalf("the view's switch sent %v", rest)
@@ -1354,7 +1466,7 @@ func TestTheChainsMenuCopiesAndKeepsPresets(t *testing.T) {
 		run(1)
 	}
 	patch(-1)
-	want := []string{"Copy to…", "Save preset “Loud”", "Save preset as…", "Load preset…", "Delete preset…"}
+	want := []string{"Copy to…", "Copy to B", "Save preset “Loud”", "Save preset as…", "Load preset…", "Delete preset…"}
 	items := c.menu.Items()
 	labels := make([]string, len(items))
 	for i, it := range items {
@@ -1364,7 +1476,7 @@ func TestTheChainsMenuCopiesAndKeepsPresets(t *testing.T) {
 		t.Fatalf("the chain's menu offers %v", items)
 	}
 	// Load: the presets, the track's ticked; one picked loads.
-	patch(3)
+	patch(4)
 	items = c.menu.Items()
 	if len(items) != 2 || items[0].Label != "Gentle" || items[1].Label != "Loud" || items[0].Checked || !items[1].Checked {
 		t.Fatalf("the presets to load are %v", items)
@@ -1399,4 +1511,279 @@ func TestATracksRowCountsItsTimedNotes(t *testing.T) {
 	a.Tracks[0].Marks = []Mark{{ID: 1, At: time.Second, Text: "a"}, {ID: 2, At: 2 * time.Second, Text: "b"}}
 	_, _, run := stage(t, a)
 	run(2)
+}
+
+func TestTheViewSwitchShowsAPluginOpenAndClosesIt(t *testing.T) {
+	a := goAlbum(0)
+	w, r, run := stage(t, a)
+	sw := r.head.view
+	open := func() {
+		t.Helper()
+		a.ShowGo, a.ShowGos = 9, a.ShowGos+1
+		if err := w.Client().Publish(albumTopic, a); err != nil {
+			t.Fatal(err)
+		}
+		run(60)
+		if !r.pane.isOpen() || sw.shown() != partPlugin || sw.plugIn.Value() < 0.99 || sw.plugName != "Trim" {
+			t.Fatalf("opened, the switch shows part %d, the plugin's in %v, named %q", sw.shown(), sw.plugIn.Value(), sw.plugName)
+		}
+		if r.head.followIn.Value() > 0.01 {
+			t.Errorf("with a plugin shown, Follow is still in at %v", r.head.followIn.Value())
+		}
+	}
+	clickPart := func(at geom.Point) {
+		t.Helper()
+		b := boundsOf(t, w, run, sw)
+		w.Input(input.PointerMove{Pos: b.Min.Add(at)})
+		w.Input(input.PointerDown{Pos: b.Min.Add(at), Button: input.ButtonPrimary, Clicks: 1})
+		w.Input(input.PointerUp{Pos: b.Min.Add(at), Button: input.ButtonPrimary})
+		run(60)
+	}
+	// Wave closes the plugin, the view being the waveform already.
+	open()
+	clickPart(sw.parts[partWave].Center())
+	if _, rest := edits(w); r.pane.isOpen() || len(rest) != 0 || r.head.followIn.Value() < 0.99 {
+		t.Fatalf("Wave left the plugin open %v, sent %v, Follow in at %v", r.pane.isOpen(), rest, r.head.followIn.Value())
+	}
+	// The cross closes it.
+	open()
+	clickPart(sw.closeAt().Center())
+	if r.pane.isOpen() || sw.plugIn.Value() > 0.01 {
+		t.Fatalf("the cross left the plugin open %v, its part in at %v", r.pane.isOpen(), sw.plugIn.Value())
+	}
+	// Spectrogram closes it, and shows the spectrogram.
+	open()
+	clickPart(sw.parts[partGram].Center())
+	if _, rest := edits(w); r.pane.isOpen() || len(rest) != 1 || rest[0] != (SetView{View: ViewGram}) {
+		t.Errorf("Spectrogram left the plugin open %v, and sent %v", r.pane.isOpen(), rest)
+	}
+}
+
+func TestSwitchingPluginsGlidesTheirNameAndHidesWhatIsUnder(t *testing.T) {
+	a := goAlbum(0)
+	other := trimSlot(10)
+	other.Label = "A much longer name"
+	a.Tracks[0].Chain = append(a.Tracks[0].Chain, other)
+	w, r, run := stage(t, a)
+	sw := r.head.view
+	show := func(slot int) {
+		a.ShowGo, a.ShowGos = slot, a.ShowGos+1
+		if err := w.Client().Publish(albumTopic, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	show(9)
+	run(60)
+	short := sw.partW(partPlugin)
+	show(10)
+	run(4)
+	// Partway: the names crossing, the part between their widths, and
+	// a card under the two sheets as solid as they are in together.
+	mid := sw.partW(partPlugin)
+	if s := sw.swap.Value(); s <= 0.05 || s >= 0.95 || sw.wasName != "Trim" {
+		t.Errorf("partway, the names have swapped %v, from %q", s, sw.wasName)
+	}
+	if mid <= short+1 || mid >= pillWidth(other.Label)+switchClose-1 {
+		t.Errorf("partway, the plugin's part is %v wide, from %v to %v", mid, short, pillWidth(other.Label)+switchClose)
+	}
+	if len(r.pane.sheets) != 2 {
+		t.Errorf("partway, %d sheets", len(r.pane.sheets))
+	}
+	// At every frame of the swap, what is under the pane hardly shows
+	// through the card under the sheets and the sheets over it.
+	for f := range 40 {
+		through := 1 - r.pane.under()
+		for _, sh := range r.pane.sheets {
+			through *= 1 - min(max(sh.in.Value(), 0), 1)
+		}
+		if through > 0.05 {
+			t.Fatalf("%d frames into the swap, %.0f%% of what is under the pane shows through", f+4, 100*through)
+		}
+		run(1)
+	}
+	run(30)
+	if sw.swap.Value() < 0.99 || math.Abs(float64(sw.partW(partPlugin)-(pillWidth(other.Label)+switchClose))) > 0.5 {
+		t.Errorf("after, the names have swapped %v, the part %v wide", sw.swap.Value(), sw.partW(partPlugin))
+	}
+}
+
+func TestCtrlClickShowsUpToFourPluginsInAGrid(t *testing.T) {
+	a := goAlbum(0)
+	for id := 10; id <= 13; id++ {
+		a.Tracks[0].Chain = append(a.Tracks[0].Chain, trimSlot(id))
+	}
+	w, r, run := stage(t, a)
+	run(40)
+	click := func(id int, mods input.Mods) {
+		t.Helper()
+		b := boundsOf(t, w, run, r.chain)
+		at := b.Min.Add(r.chain.cardRect(r.chain.cards[id]).Center().Add(geom.Pt(20, 0)))
+		w.Input(input.PointerMove{Pos: at})
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1, Mods: mods})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary, Mods: mods})
+		run(1)
+		// A plain click asks the app to show the plugin, as it does.
+		if mods == 0 {
+			a.ShowGo, a.ShowGos = id, a.ShowGos+1
+			if err := w.Client().Publish(albumTopic, a); err != nil {
+				t.Fatal(err)
+			}
+		}
+		run(60)
+	}
+	slots := func() []int {
+		out := make([]int, 0, len(r.pane.shown))
+		for _, v := range r.pane.shown {
+			out = append(out, v.slot)
+		}
+		return out
+	}
+	click(9, 0)
+	click(10, input.ModControl)
+	if got := slots(); !slices.Equal(got, []int{9, 10}) {
+		t.Fatalf("a click and a Ctrl+click show %v", got)
+	}
+	// Two side by side, each half the pane.
+	size := r.pane.size
+	first, second := r.pane.sheets[r.goViews[9]].rect(), r.pane.sheets[r.goViews[10]].rect()
+	if first.Min.Y != 0 || second.Min.Y != 0 || first.Max.X >= second.Min.X || math.Abs(float64(first.Size().W-(size.W-paneGap)/2)) > 0.5 ||
+		first.Size().H != size.H {
+		t.Errorf("two show at %v and %v in a pane %v: not side by side", first, second, size)
+	}
+	if r.chain.cards[9].open.Target() != 1 || r.chain.cards[10].open.Target() != 1 {
+		t.Error("the two cards do not show open")
+	}
+	if r.head.view.plugName != "Trim · Trim" {
+		t.Errorf("the view switch names %q", r.head.view.plugName)
+	}
+	// Four: two by two.
+	click(11, input.ModControl)
+	click(12, input.ModControl)
+	want := cells(4, size)
+	for i, id := range []int{9, 10, 11, 12} {
+		if got := r.pane.sheets[r.goViews[id]].rect(); math.Abs(float64(got.Min.X-want[i].Min.X)) > 0.5 ||
+			math.Abs(float64(got.Min.Y-want[i].Min.Y)) > 0.5 || math.Abs(float64(got.Size().W-want[i].Size().W)) > 0.5 {
+			t.Errorf("of four, the sheet of slot %d stands at %v, want %v", id, got, want[i])
+		}
+	}
+	if want[3].Min.Y <= want[0].Min.Y || want[3].Min.X <= want[0].Min.X {
+		t.Errorf("four cells %v: not two by two", want)
+	}
+	// Each view laid out no smaller than viewLeast, and drawn down to its
+	// cell.
+	for _, id := range []int{9, 10, 11, 12} {
+		sh := r.pane.sheets[r.goViews[id]]
+		view := boundsOf(t, w, run, r.goViews[id].paneView())
+		if sh.scale >= 1 || sh.scale <= 0 || view.Size().W > sh.rect().Size().W+0.5 {
+			t.Errorf("of four, slot %d's view is drawn at %v, %v wide in a cell %v wide", id, sh.scale, view.Size().W, sh.rect().Size().W)
+		}
+		if lw := view.Size().W / sh.scale; lw < viewLeast.W-0.5 {
+			t.Errorf("of four, slot %d's view is laid out %v wide, under %v", id, lw, viewLeast.W)
+		}
+	}
+	// A fifth: the first gives way.
+	click(13, input.ModControl)
+	if got := slots(); !slices.Equal(got, []int{10, 11, 12, 13}) {
+		t.Errorf("a fifth shows %v", got)
+	}
+	// Ctrl+click on one shown takes it away; its own cross another.
+	click(11, input.ModControl)
+	gunim.RegisterPatch(w, "album", func(r *root, _ struct{}, u *gunim.UI) { r.pane.sheets[r.goViews[12]].closer.OnClick(u) })
+	if err := w.Client().Patch("album", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(60)
+	if got := slots(); !slices.Equal(got, []int{10, 13}) {
+		t.Errorf("one Ctrl+clicked away and one closed, %v show", got)
+	}
+	// A plain click shows the one alone.
+	click(9, 0)
+	if got := slots(); !slices.Equal(got, []int{9}) || r.pane.sheets[r.goViews[9]].rect().Size() != size {
+		t.Errorf("a click shows %v", got)
+	}
+}
+
+func TestADoubleClickOnAPluginsTitleRenamesIt(t *testing.T) {
+	a := goAlbum(0)
+	a.ShowGo, a.ShowGos = 9, 1
+	w, r, run := stage(t, a)
+	run(60)
+	sh := r.pane.sheets[r.goViews[9]]
+	at := boundsOf(t, w, run, r.pane).Min.Add(sh.rect().Min).Add(geom.Pt(30, 20))
+	w.Input(input.PointerMove{Pos: at})
+	for _, n := range []int{1, 2} {
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: n})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	}
+	run(2)
+	if !sh.renaming || sh.field.Text() != "Trim" {
+		t.Fatalf("double-clicked, the title is renaming %v, from %q", sh.renaming, sh.field.Text())
+	}
+	edits(w)
+	gunim.RegisterPatch(w, "album", func(_ *root, _ struct{}, u *gunim.UI) { sh.field.SetText("More bass", u) })
+	if err := w.Client().Patch("album", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	run(2)
+	if _, rest := edits(w); sh.renaming || !slices.Contains(rest, gunim.Intent(RenamePlugin{Track: 1, Slot: 9, Label: "More bass"})) {
+		t.Errorf("Enter sent %v, renaming still %v", rest, sh.renaming)
+	}
+	// Named so, the title, the switch and the card say it.
+	a.Tracks[0].Chain[0].Label = "More bass"
+	if err := w.Client().Publish(albumTopic, a); err != nil {
+		t.Fatal(err)
+	}
+	run(30)
+	if sh.title.Text != "More bass" || r.head.view.plugName != "More bass" {
+		t.Errorf("renamed, the sheet says %q and the switch %q", sh.title.Text, r.head.view.plugName)
+	}
+}
+
+func TestTheChainsABSwitchPlaysTheOtherSide(t *testing.T) {
+	w, r, run := stage(t, chained())
+	run(40)
+	c := r.chain
+	ab, menu := boundsOf(t, w, run, c.ab), boundsOf(t, w, run, c.more)
+	if ab.Max.X > menu.Min.X || ab.Max.X < menu.Min.X-12 || math.Abs(float64(ab.Center().Y-menu.Center().Y)) > 0.5 {
+		t.Errorf("the A/B switch is at %v, the menu at %v: not just before it", ab, menu)
+	}
+	edits(w)
+	at := geom.Pt(ab.Min.X+abSideW*1.5, ab.Center().Y)
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(30)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (SwitchChain{Track: 1, B: true}) || c.ab.at.Value() < 0.99 {
+		t.Fatalf("B clicked, the switch sent %v, its light at %v", rest, c.ab.at.Value())
+	}
+	// On B, the menu copies to A.
+	a := chained()
+	a.Tracks[0].OnB = true
+	if err := w.Client().Publish(albumTopic, a); err != nil {
+		t.Fatal(err)
+	}
+	run(2)
+	gunim.RegisterPatch(w, "album", func(r *root, item int, u *gunim.UI) {
+		if item < 0 {
+			r.chain.openMore(u)
+			return
+		}
+		u.Send(r, r.chain.menu.OnPick(item, u))
+	})
+	if err := w.Client().Patch("album", -1); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	if got := c.menu.Items()[1].Label; got != "Copy to A" {
+		t.Fatalf("on B, the menu offers %q", got)
+	}
+	if err := w.Client().Patch("album", 1); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	if _, rest := edits(w); len(rest) != 1 || rest[0] != (CopyChainSide{Track: 1}) {
+		t.Errorf("Copy to A sent %v", rest)
+	}
 }

@@ -101,6 +101,16 @@ type render struct {
 	gain           float32
 	// at is the next frame, counted from the start of the silence.
 	at int64
+	// cursor, where set, is the cursor of a stream src is, to close as
+	// the render goes.
+	cursor *audio.Cursor
+}
+
+// release lets the render's cursor go, where it has one.
+func (r *render) release() {
+	if r.cursor != nil {
+		r.cursor.Close()
+	}
 }
 
 func newRender(src audio.Seeker, rate int, gap time.Duration, e Edit) *render {
@@ -149,7 +159,12 @@ func (r *render) Read(dst []float32) (int, error) {
 		}
 		n += got
 		r.at += int64(got)
-		if r.at < r.Len() && (err != nil || got == 0) {
+		if got == 0 && err == nil {
+			// Nothing yet, as a stream not decoded this far: the rest
+			// comes at the next read.
+			return n, nil
+		}
+		if r.at < r.Len() && err != nil {
 			// A file shorter than it said: the rest is silence.
 			k := int(min(int64(want-n), r.Len()-r.at))
 			clear(dst[2*n : 2*(n+k)])

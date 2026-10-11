@@ -66,6 +66,10 @@ type (
 		Presets       []string
 		DeletedPreset string
 		Deletes       int
+		// Patches are the Go plugins' patches the user kept, by plugin,
+		// each plugin's in order.
+		Patches []PatchName
+
 		// Match plays every track at the target loudness, to compare
 		// them on their sound alone; Volume is the listening level.
 		Match  bool
@@ -97,6 +101,10 @@ type (
 		Profiling bool
 		Told      string
 		Tolds     int
+		// ShowGo asks the window to open the views of a Go plugin, of
+		// slot ShowGo, each time ShowGos counts up.
+		ShowGo  int
+		ShowGos int
 		// Fallback is the ASIO driver chosen that failed to start, and
 		// FallbackWhy why, while the system's sound plays in its place;
 		// Fallbacks counts the failures, so the window asks of each once.
@@ -151,6 +159,14 @@ type (
 		// Preset the preset it was loaded from or saved as.
 		Chain  []Slot
 		Preset string
+		// OnB says Chain is the track's chain B, not A. Other is the chain
+		// of the other side, kept as a preset keeps one, with OtherPreset
+		// its preset; OtherSet says the other side has been set: until it
+		// is, it is a copy of this one.
+		OnB         bool
+		Other       []keptSlot
+		OtherPreset string
+		OtherSet    bool
 		// Scanned says the file has been read through: its format,
 		// length, waveform and where its sound starts and ends.
 		Scanned    bool
@@ -211,6 +227,12 @@ type (
 	PlayFromStart struct{}
 	// SeekTo moves the track playing.
 	SeekTo struct{ At time.Duration }
+	// PlayAt plays a track from At, picking it where it is another: as
+	// one step, so nothing plays from where picking alone would start.
+	PlayAt struct {
+		ID int
+		At time.Duration
+	}
 	// SetGap sets the silence before every track.
 	SetGap struct{ Gap time.Duration }
 	// SetTarget sets the album's target loudness.
@@ -307,6 +329,31 @@ type (
 	}
 	// ShowEditor opens a plugin's editor.
 	ShowEditor struct{ Track, Slot int }
+	// SwitchChain plays a track's chain B, or A: the one played is kept
+	// as the other side, and the other side's plugins load in its place.
+	SwitchChain struct {
+		Track int
+		B     bool
+	}
+	// CopyChainSide copies the chain played to the other side, A to B
+	// or B to A.
+	CopyChainSide struct{ Track int }
+	// SetGoParam sets a parameter of a Go plugin's, from its views: one
+	// move of the gesture Gesture, which is one step to undo.
+	SetGoParam struct {
+		Track, Slot int
+		ID          uint32
+		Value       float64
+		Gesture     int
+	}
+	// SetGoState sets a Go plugin's own state, from its views: one change
+	// of an edit called Name, which the same edit again soon after joins
+	// as one step to undo.
+	SetGoState struct {
+		Track, Slot int
+		State       []byte
+		Name        string
+	}
 	// CopyChain gives the tracks To a copy of track From's chain, every
 	// plugin as it is set; To empty means every other track.
 	CopyChain struct {
@@ -366,6 +413,12 @@ type keptTrack struct {
 	Chain       []keptSlot `json:",omitempty"`
 	// Preset is the preset its chain was loaded from or saved as.
 	Preset string `json:",omitempty"`
+	// OnB says Chain is its chain B; Other is the other side's, with its
+	// preset, where OtherSet says it has been set.
+	OnB         bool       `json:",omitempty"`
+	Other       []keptSlot `json:",omitempty"`
+	OtherPreset string     `json:",omitempty"`
+	OtherSet    bool       `json:",omitempty"`
 	// At is File whole, as it was last saved, where File is from the
 	// album's folder: the album opens on the computer it was saved on
 	// even where the folders do not move together.
@@ -434,11 +487,18 @@ type app struct {
 	presetsFile string
 	naming      bool
 	lastDeleted *Preset
+	// patches are the Go plugins' patches the user kept, in
+	// patchesFile; namingPatch says the dialog that names one is up.
+	patches     []keptPatch
+	patchesFile string
+	namingPatch bool
 	// scans and measures carry what the background tells; measuring
 	// holds how to stop each track's measuring, and settle when it is
 	// due once its edits have paused.
 	scans    chan scanned
 	measures chan measured
+	// docs are the Go plugins' slots' documents, by slot.
+	docs     map[int]*slotDoc
 	measurer map[int]context.CancelFunc
 	settle   map[int]time.Time
 	// choose shows the system's dialog; chosen carries what was chosen.
@@ -555,7 +615,7 @@ type exported struct {
 func newApp(ctx context.Context, d *deck, file string) *app {
 	ctx, stop := context.WithCancel(ctx)
 	a := &app{ctx: ctx, stop: stop, d: d, file: file,
-		scans: make(chan scanned, 16), measures: make(chan measured, 16),
+		scans: make(chan scanned, 16), measures: make(chan measured, 16), docs: map[int]*slotDoc{},
 		measurer: map[int]context.CancelFunc{}, settle: map[int]time.Time{},
 		checks: make(chan checked, 1), quitNow: make(chan struct{}, 1),
 		chosen: make(chan []string, 1), chosenRefs: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
@@ -633,6 +693,7 @@ func (a *app) restore(k keptTrack, ref bool) int {
 	for _, m := range k.Marks {
 		a.markIDs = max(a.markIDs, m.ID)
 	}
+	t.OnB, t.Other, t.OtherPreset, t.OtherSet = k.OnB, k.Other, k.OtherPreset, k.OtherSet
 	for _, s := range k.Chain {
 		a.slots++
 		t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
@@ -653,7 +714,8 @@ func (a *app) restore(k keptTrack, ref bool) int {
 // folder.
 func (a *app) kept(t *Track) keptTrack {
 	k := keptTrack{Title: t.Title, File: relative(a.file, t.File), At: t.File, Note: t.Note, Silence: t.Silence,
-		Marks: t.Marks, Loop: t.Loop, Edit: t.Edit, Stale: t.Stale, Preset: t.Preset}
+		Marks: t.Marks, Loop: t.Loop, Edit: t.Edit, Stale: t.Stale, Preset: t.Preset,
+		OnB: t.OnB, Other: t.Other, OtherPreset: t.OtherPreset, OtherSet: t.OtherSet}
 	if t.Measured {
 		k.Measure = keep(t.File, t.Measure)
 	}
@@ -862,9 +924,11 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	if a.settingsFile != "" {
 		a.refsFile = filepath.Join(filepath.Dir(a.settingsFile), "references.json")
 		a.presetsFile = filepath.Join(filepath.Dir(a.settingsFile), "presets.json")
+		a.patchesFile = filepath.Join(filepath.Dir(a.settingsFile), "patches.json")
 		a.profileDir = filepath.Join(filepath.Dir(a.settingsFile), "profiles")
 	}
 	a.loadPresets()
+	a.loadPatches()
 	useLAME(findLAME(a.lame))
 	a.scanCache = scanCache{dir: scanCacheDir()}
 	if a.settingsFile != "" {
@@ -1031,6 +1095,8 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		}
 		a.queueNext()
 		a.applyLoop()
+		a.syncDocs()
+		a.showGoSettings()
 		_ = c.Publish(albumTopic, a.Album)
 		if a.settingsOpen {
 			_ = c.Publish(settingsTopic, a.settingsDraft())
@@ -1164,6 +1230,20 @@ func (a *app) play(at, fade time.Duration) {
 	a.applyLevel()
 }
 
+// pick makes track to the one picked, playing it from at where play
+// says so, with a crossfade from the one before too short to hear as
+// one.
+func (a *app) pick(to *Track, at time.Duration, play bool) {
+	a.Current = to.ID
+	a.dirty = true
+	if play {
+		a.play(at, 25*time.Millisecond)
+	} else {
+		a.d.stop()
+	}
+	a.applyLevel()
+}
+
 func (a *app) handle(in gunim.Intent) {
 	// A change of the album's is a step to undo, and not yet saved.
 	if label, track, key, ok := a.change(in); ok {
@@ -1231,17 +1311,17 @@ func (a *app) handle(in gunim.Intent) {
 			return
 		}
 		at, _, _ := a.d.position()
-		at = a.carried(a.track(a.Current), to, at)
-		a.Current = in.ID
-		a.dirty = true
-		if a.Playing {
-			// Where Carry says in the other track, with a crossfade too
-			// short to hear as one.
-			a.play(at, 25*time.Millisecond)
-		} else {
-			a.d.stop()
+		// Where Carry says in the other track.
+		a.pick(to, a.carried(a.track(a.Current), to, at), a.Playing)
+	case PlayAt:
+		to := a.track(in.ID)
+		switch {
+		case to == nil:
+		case in.ID == a.Current:
+			a.handle(SeekTo{At: in.At})
+		default:
+			a.pick(to, in.At, true)
 		}
-		a.applyLevel()
 	case SetEdit:
 		t := a.track(in.ID)
 		if t == nil {
@@ -1441,7 +1521,7 @@ func (a *app) handle(in gunim.Intent) {
 			a.dirty = true
 		}
 	default:
-		if a.handleMarks(in) || a.handleLoop(in) || a.handleAB(in) || a.handlePresets(in) {
+		if a.handleMarks(in) || a.handleLoop(in) || a.handleAB(in) || a.handlePresets(in) || a.handlePatches(in) {
 			return
 		}
 		a.handleChain(in)

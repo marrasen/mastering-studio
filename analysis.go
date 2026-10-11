@@ -165,7 +165,7 @@ func dB(v float64) float64 { return 20 * math.Log10(max(v, 1e-9)) }
 func rendered(src audio.Seeker, rate int, gap time.Duration, e Edit, chain []Slot, states map[int][]byte) (
 	out audio.Seeker, done func(), err error) {
 	r := newRender(src, rate, gap, e)
-	rk, done := &rack{active: true}, func() {}
+	rk, done := newRackOf(nil), func() {}
 	if len(chain) > 0 {
 		if rk, err = offlineRack(chain, states, rate); err != nil {
 			return nil, nil, err

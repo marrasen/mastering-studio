@@ -49,7 +49,7 @@ func (a *app) rackOf(t *Track) *rack {
 	if !a.Playing || a.Current != t.ID {
 		r.setActive(false)
 	}
-	r.match = a.Match
+	r.setMatch(a.Match)
 	a.racks[t.ID] = r
 	return r
 }
@@ -81,6 +81,7 @@ func (a *app) closeRacks() {
 func (a *app) shutdown() {
 	a.stop()
 	a.d.stop()
+	a.closeDocs()
 	stopped := make(chan struct{})
 	go func() {
 		a.work.Wait()
@@ -106,9 +107,7 @@ func (a *app) readRack(id int) bool {
 		return false
 	}
 	r.flush()
-	r.mu.Lock()
-	ps := slices.Clone(r.plugins)
-	r.mu.Unlock()
+	ps := r.list()
 	changed := false
 	for _, lp := range ps {
 		st, err := lp.p.State()
@@ -142,6 +141,66 @@ func (a *app) chainOf(t *Track) (chain []Slot, states map[int][]byte) {
 	return slices.Clone(t.Chain), states
 }
 
+// swapChain gives track id chain, its plugins' states in states, each
+// slot a new one, as giveChain does, but into the chain loaded, where
+// there is one: the plugins in load while the sound plays on through
+// the ones out, and the sound fades from those to these, with no stop.
+// It reports whether there was a chain loaded to swap into.
+func (a *app) swapChain(id int, chain []Slot, states map[int][]byte) bool {
+	t, r := a.track(id), a.racks[id]
+	if t == nil || r == nil {
+		return false
+	}
+	for _, s := range t.Chain {
+		delete(a.states, s.ID)
+	}
+	t.Chain = nil
+	var plugins []*livePlugin
+	for _, s := range chain {
+		a.slots++
+		c := s
+		// Its gain and range were of other sound.
+		c.ID, c.Open, c.Failed, c.Gain, c.Gained, c.LRA, c.Ranged = a.slots, false, "", 0, false, 0, false
+		a.states[c.ID] = bytes.Clone(states[s.ID])
+		lp, err := newPlugin(c, a.states[c.ID], rateOf(t), false)
+		if err != nil {
+			c.Failed = err.Error()
+			a.Note = fmt.Sprintf("%s: %v", c.Name, err)
+		} else {
+			c.Latency = lp.p.Latency()
+			plugins = append(plugins, lp)
+		}
+		t.Chain = append(t.Chain, c)
+	}
+	r.swap(plugins, rateOf(t))
+	a.remeasureChain(id)
+	return true
+}
+
+// keepChain is track t's chain, as a preset keeps one: each plugin
+// with its state.
+func (a *app) keepChain(t *Track) []keptSlot {
+	chain, states := a.chainOf(t)
+	out := make([]keptSlot, 0, len(chain))
+	for _, s := range chain {
+		out = append(out, keptSlot{Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor, Label: s.Label,
+			Bypass: s.Bypass, State: bytes.Clone(states[s.ID])})
+	}
+	return out
+}
+
+// slotsOf is a kept chain as slots, numbered from 1, and their states,
+// for giveChain.
+func slotsOf(kept []keptSlot) (chain []Slot, states map[int][]byte) {
+	states = map[int][]byte{}
+	for k, s := range kept {
+		chain = append(chain, Slot{ID: k + 1, Path: s.Path, Class: s.Class, Name: s.Name, Vendor: s.Vendor,
+			Label: s.Label, Bypass: s.Bypass})
+		states[k+1] = s.State
+	}
+	return chain, states
+}
+
 // pluginSettle is how long a chain rests before it is measured again:
 // longer than an edit's, for a plugin set by hand changes for a while.
 const pluginSettle = 1500 * time.Millisecond
@@ -151,14 +210,17 @@ const pluginSettle = 1500 * time.Millisecond
 // anything changed.
 func (a *app) watchPlugins() bool {
 	changed := false
+	// The plugins a switch between chains took out, let go once the
+	// sound has faded from them.
+	for _, r := range a.racks {
+		r.retire()
+	}
 	for id, r := range a.racks {
 		t := a.track(id)
 		if t == nil {
 			continue
 		}
-		r.mu.Lock()
-		ps := slices.Clone(r.plugins)
-		r.mu.Unlock()
+		ps := r.list()
 		read := false
 		for _, lp := range ps {
 			i := slices.IndexFunc(t.Chain, func(s Slot) bool { return s.ID == lp.slot })
@@ -231,16 +293,31 @@ func (a *app) handleChain(in gunim.Intent) {
 		c := in.Choice
 		a.used(c)
 		s := Slot{ID: a.slots, Path: c.Path, Class: c.Class, Name: c.Name, Vendor: c.Vendor}
+		if s.goPlugin() {
+			// Its settings at their defaults, its views open.
+			a.states[s.ID] = goSettings{}.pack()
+			t.Chain = append(t.Chain, s)
+			if r := a.racks[t.ID]; r != nil {
+				lp, err := newPlugin(s, a.states[s.ID], rateOf(t), false)
+				if err != nil {
+					a.Note = fmt.Sprintf("%s: %v", c.Name, err)
+					t.Chain = t.Chain[:len(t.Chain)-1]
+					return
+				}
+				r.add(lp)
+			}
+			a.dirty = true
+			a.remeasureChain(t.ID)
+			a.ShowGo, a.ShowGos = s.ID, a.ShowGos+1
+			return
+		}
 		if r := a.racks[t.ID]; r != nil {
 			lp, err := newPlugin(s, nil, rateOf(t), false)
 			if err != nil {
 				a.Note = fmt.Sprintf("%s: %v", c.Name, err)
 				return
 			}
-			r.mu.Lock()
-			r.plugins = append(r.plugins, lp)
-			r.gen++
-			r.mu.Unlock()
+			r.add(lp)
 			s.Latency = lp.p.Latency()
 			if st, err := lp.p.State(); err == nil {
 				a.states[s.ID] = st
@@ -259,20 +336,7 @@ func (a *app) handleChain(in gunim.Intent) {
 		t.Chain = slices.Delete(t.Chain, i, i+1)
 		delete(a.states, in.Slot)
 		if r := a.racks[t.ID]; r != nil {
-			r.mu.Lock()
-			var gone *livePlugin
-			r.plugins = slices.DeleteFunc(r.plugins, func(lp *livePlugin) bool {
-				if lp.slot == in.Slot {
-					gone = lp
-					return true
-				}
-				return false
-			})
-			r.gen++
-			r.mu.Unlock()
-			if gone != nil {
-				gone.p.Close()
-			}
+			r.remove(in.Slot)
 		}
 		a.dirty = true
 		a.remeasureChain(t.ID)
@@ -284,14 +348,7 @@ func (a *app) handleChain(in gunim.Intent) {
 		s := t.Chain[in.From]
 		t.Chain = slices.Insert(slices.Delete(t.Chain, in.From, in.From+1), in.To, s)
 		if r := a.racks[t.ID]; r != nil {
-			r.mu.Lock()
-			order := map[int]int{}
-			for k, s := range t.Chain {
-				order[s.ID] = k
-			}
-			slices.SortStableFunc(r.plugins, func(x, y *livePlugin) int { return order[x.slot] - order[y.slot] })
-			r.gen++
-			r.mu.Unlock()
+			r.order(t.Chain)
 		}
 		a.dirty = true
 		a.remeasureChain(t.ID)
@@ -314,18 +371,17 @@ func (a *app) handleChain(in gunim.Intent) {
 		}
 		t.Chain[i].Bypass = in.On
 		if r := a.racks[t.ID]; r != nil {
-			if lp := r.find(in.Slot); lp != nil {
-				r.mu.Lock()
-				lp.setBypass(in.On)
-				r.gen++
-				r.mu.Unlock()
-			}
+			r.setBypass(in.Slot, in.On)
 		}
 		a.dirty = true
 		a.remeasureChain(t.ID)
 	case ShowEditor:
 		t, i := a.slot(in.Track, in.Slot)
 		if i < 0 {
+			return
+		}
+		if t.Chain[i].goPlugin() {
+			a.ShowGo, a.ShowGos = in.Slot, a.ShowGos+1
 			return
 		}
 		lp := a.rackOf(t).find(in.Slot)
@@ -337,6 +393,32 @@ func (a *app) handleChain(in gunim.Intent) {
 			return
 		}
 		t.Chain[i].Open = true
+	case SetGoParam:
+		a.setGoParam(in.Track, in.Slot, in.ID, in.Value)
+	case SetGoState:
+		a.setGoState(in.Track, in.Slot, in.State)
+	case SwitchChain:
+		t := a.track(in.Track)
+		if t == nil || t.OnB == in.B {
+			return
+		}
+		played, preset := a.keepChain(t), t.Preset
+		// The other side never set: a copy of this one.
+		if !t.OtherSet {
+			t.Other, t.OtherPreset = played, preset
+		}
+		chain, states := slotsOf(t.Other)
+		if !a.swapChain(t.ID, chain, states) {
+			a.giveChain(t.ID, chain, states)
+		}
+		t.Preset = t.OtherPreset
+		t.Other, t.OtherPreset, t.OtherSet, t.OnB = played, preset, true, in.B
+		a.dirty = true
+	case CopyChainSide:
+		if t := a.track(in.Track); t != nil {
+			t.Other, t.OtherPreset, t.OtherSet = a.keepChain(t), t.Preset, true
+			a.dirty = true
+		}
 	case CopyChain:
 		from := a.track(in.From)
 		if from == nil {

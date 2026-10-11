@@ -96,3 +96,80 @@ func TestSwitchingSidesAloneKeepsSessionBsTrack(t *testing.T) {
 		t.Fatalf("opened again, B has %d, unsaved %v, want the reference, saved", b.Away.Current, b.Unsaved)
 	}
 }
+
+func TestATracksChainBStartsAsAAndKeepsItsOwn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	a.Tracks = []Track{{ID: 1, Title: "One", Preset: "Loud", Chain: []Slot{{ID: 3, Name: "EQ", Label: "More bass"}}}}
+	a.slots = 3
+	a.states[3] = []byte("a")
+	chain := func() (names []string, states []string) {
+		for _, s := range a.Tracks[0].Chain {
+			names = append(names, s.title())
+			states = append(states, string(a.states[s.ID]))
+		}
+		return names, states
+	}
+	// To B: a copy of A, its own slots.
+	a.handle(SwitchChain{Track: 1, B: true})
+	t1 := a.Tracks[0]
+	if names, states := chain(); !t1.OnB || !slices.Equal(names, []string{"More bass"}) || !slices.Equal(states, []string{"a"}) ||
+		t1.Chain[0].ID == 3 || t1.Preset != "Loud" {
+		t.Fatalf("switched to B, the chain is %v %v, on B %v, preset %q", names, states, t1.OnB, t1.Preset)
+	}
+	if a.UndoLabel != "switching to chain B on One" {
+		t.Errorf("switching is undone as %q", a.UndoLabel)
+	}
+	// B changed: A keeps its own.
+	a.states[t1.Chain[0].ID] = []byte("b")
+	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 99, Name: "Trim"})
+	a.states[99] = []byte("trim")
+	a.Tracks[0].Preset = ""
+	a.handle(SwitchChain{Track: 1, B: false})
+	if names, states := chain(); a.Tracks[0].OnB || !slices.Equal(names, []string{"More bass"}) || !slices.Equal(states, []string{"a"}) ||
+		a.Tracks[0].Preset != "Loud" {
+		t.Fatalf("back on A, the chain is %v %v, preset %q", names, states, a.Tracks[0].Preset)
+	}
+	a.handle(SwitchChain{Track: 1, B: true})
+	if names, states := chain(); !slices.Equal(names, []string{"More bass", "Trim"}) || !slices.Equal(states, []string{"b", "trim"}) {
+		t.Fatalf("on B again, the chain is %v %v", names, states)
+	}
+	// Copied to A: back on A, the same as B.
+	a.handle(CopyChainSide{Track: 1})
+	if a.UndoLabel != "copying chain B to A on One" {
+		t.Errorf("copying is undone as %q", a.UndoLabel)
+	}
+	a.handle(SwitchChain{Track: 1, B: false})
+	if names, states := chain(); !slices.Equal(names, []string{"More bass", "Trim"}) || !slices.Equal(states, []string{"b", "trim"}) {
+		t.Fatalf("B copied to A, A is %v %v", names, states)
+	}
+}
+
+func TestBothChainsAreKeptWithTheAlbum(t *testing.T) {
+	a := savedApp(t)
+	id := a.Tracks[0].ID
+	a.handle(SwitchChain{Track: id, B: true})
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
+	if err := a.saveNow(); err != nil {
+		t.Fatal(err)
+	}
+	b := newApp(a.ctx, newDeck(audio.NewMixer()), a.file)
+	b.load()
+	t1 := b.Tracks[0]
+	if !t1.OnB || !t1.OtherSet || len(t1.Chain) != len(a.Tracks[0].Chain) || len(t1.Other) != len(a.Tracks[0].Other) {
+		t.Fatalf("opened again, on B %v, set %v, B has %d plugins and A %d, want %d and %d", t1.OnB, t1.OtherSet,
+			len(t1.Chain), len(t1.Other), len(a.Tracks[0].Chain), len(a.Tracks[0].Other))
+	}
+}
+
+func TestSwitchingChainsWhilePlayingKeepsTheChainLoaded(t *testing.T) {
+	a := savedApp(t)
+	id := a.Tracks[0].ID
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
+	r := a.rackOf(&a.Tracks[0])
+	a.handle(SwitchChain{Track: id, B: true})
+	if a.racks[id] != r || len(r.list()) != 1 || r.list()[0].slot != a.Tracks[0].Chain[0].ID {
+		t.Fatalf("switched, the track's chain loaded is %p, was %p, with %d plugins", a.racks[id], r, len(r.list()))
+	}
+}

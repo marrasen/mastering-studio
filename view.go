@@ -32,6 +32,7 @@ func registerViews(w *gunim.Window, d *deck) {
 	gunim.RegisterView(w, "help", newHelp, nil)
 	gunim.RegisterView(w, "unsaved", newUnsavedDialog, nil)
 	gunim.RegisterView(w, "preset", newPresetDialog, nil)
+	gunim.RegisterView(w, "patch", newPatchDialog, nil)
 	gunim.RegisterView(w, "export", newExportDialog,
 		func(e *exportDialog, d ExportDraft, u *gunim.UI) { e.show(d, u) })
 	gunim.RegisterView(w, "settings", newSettingsDialog,
@@ -72,7 +73,13 @@ type root struct {
 	head   *trackHead
 	// chainMenu is the chain's menus, around it.
 	chainMenu *widget.ContextMenu
-	size      geom.Size
+	// goViews are the views of the Go plugins of the track picked, by
+	// slot, and pane shows one's over the waveform; gestures counts the
+	// gestures made in them.
+	goViews  map[int]*goView
+	pane     *goPane
+	gestures int
+	size     geom.Size
 }
 
 func newRoot(d *deck) *root {
@@ -115,6 +122,8 @@ func newRoot(d *deck) *root {
 	r.head = newTrackHead(r)
 	r.chainMenu = widget.NewContextMenu(r.chain, nil)
 	r.chain.menu = r.chainMenu
+	r.goViews = map[int]*goView{}
+	r.pane = newGoPane(r)
 	return r
 }
 
@@ -138,6 +147,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 	r.editor.show(was, t)
 	r.tools.show(t)
 	r.chain.show(t, s)
+	r.showGo(t, s, was, u)
 	r.head.show(t, s, u)
 	r.trans.show(s)
 	r.strip.show(s)
@@ -181,7 +191,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 // Children implements [gunim.Composite].
 func (r *root) Children() []gunim.Node {
 	return []gunim.Node{r.headerMenu, r.drop, r.edDrop, r.tools, r.trans, r.strip, r.meters, r.chainMenu, r.head,
-		r.ab, r.refHead, r.refDrop, r.toasts}
+		r.ab, r.refHead, r.refDrop, r.pane, r.toasts}
 }
 
 // Focusable implements [gunim.Focusable]: the window's keys come here.
@@ -193,7 +203,6 @@ const (
 	listW   = 340
 	metersW = 330
 	toolsH  = 64
-	chainH  = 60
 	headH   = 44
 	transH  = 76
 	stripH  = 92
@@ -221,6 +230,9 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	place(6, geom.Rect{Min: geom.Pt(area.Max.X-metersW, top), Max: area.Max})
 	x0, x1 := area.Min.X+listW+gutter, area.Max.X-metersW-gutter
 	bottom := area.Max.Y - gutter
+	// The chain takes a second row where one has no room for it.
+	r.chain.wantRows(x1 - x0)
+	chainH := r.chain.height()
 	place(5, geom.Rc(x0, bottom-stripH, x1-x0, stripH))
 	place(4, geom.Rc(x0, bottom-stripH-gutter-transH, x1-x0, transH))
 	place(7, geom.Rc(x0, bottom-stripH-gutter-transH-gutter-chainH, x1-x0, chainH))
@@ -229,9 +241,11 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	edBottom := bottom - stripH - gutter - transH - gutter - chainH - toolsH
 	place(2, geom.Rc(x0, edTop, x1-x0, max(edBottom-edTop, 80)))
 	place(3, geom.Rc(x0, edBottom, x1-x0, toolsH))
+	// A Go plugin's views, over the waveform and its tools.
+	place(12, geom.Rc(x0, edTop, x1-x0, max(edBottom-edTop, 80)+toolsH))
 	// The toasts, in the window's lower right corner.
-	ts := kids.At(12).Layout(gunim.Constraints{Max: geom.Sz(min(440, size.W-2*gutter), size.H)})
-	kids.At(12).Place(geom.Pt(size.W-ts.W-gutter, size.H-ts.H-gutter))
+	ts := kids.At(13).Layout(gunim.Constraints{Max: geom.Sz(min(440, size.W-2*gutter), size.H)})
+	kids.At(13).Place(geom.Pt(size.W-ts.W-gutter, size.H-ts.H-gutter))
 	return size
 }
 
@@ -251,6 +265,11 @@ func (r *root) Handle(e input.Event, u *gunim.UI) bool {
 	k, ok := e.(input.KeyPress)
 	if !ok {
 		return false
+	}
+	// Escape closes a Go plugin's views.
+	if k.Key == input.KeyEscape && k.Mods == 0 && r.pane.isOpen() {
+		r.pane.shut(u)
+		return true
 	}
 	// Ctrl, or Command, with S saves, with Z undoes, and with a comma
 	// opens the settings.
