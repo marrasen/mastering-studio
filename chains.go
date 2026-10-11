@@ -402,11 +402,9 @@ func (a *app) handleChain(in gunim.Intent) {
 		if t == nil || t.OnB == in.B {
 			return
 		}
+		// The other side is its own: empty, until plugins are added to
+		// it or this side is copied to it.
 		played, preset := a.keepChain(t), t.Preset
-		// The other side never set: a copy of this one.
-		if !t.OtherSet {
-			t.Other, t.OtherPreset = played, preset
-		}
 		chain, states := slotsOf(t.Other)
 		if !a.swapChain(t.ID, chain, states) {
 			a.giveChain(t.ID, chain, states)
