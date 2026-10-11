@@ -250,10 +250,7 @@ func TestAlbumPlayRunsOnIntoTheNextTrackWithoutAGap(t *testing.T) {
 	a.queueNext()
 	// The first track, its second of silence and three of sound, and
 	// half a second into the second.
-	buf := make([]float32, 2*audio.SampleRate/10)
-	for range 45 {
-		mix.Mix(buf)
-	}
+	mixPaced(a.d, mix, make([]float32, 2*audio.SampleRate*45/10))
 	var id int
 	select {
 	case id = <-a.d.turns:

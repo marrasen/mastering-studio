@@ -1,6 +1,7 @@
 package plug
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -59,16 +60,23 @@ func TestRegisterRefusesMistakes(t *testing.T) {
 	}
 }
 
+// listedRuns counts the runs of the listing test, so each registers IDs
+// of its own: the registry is the program's, and a run again, as with
+// -count, would find the last run's there.
+var listedRuns int
+
 func TestRegisteredPluginsAreListedAndFound(t *testing.T) {
+	listedRuns++
+	prefix := fmt.Sprintf("listed%d.", listedRuns)
 	newer := func(Host) Plugin { return nil }
-	Register(Descriptor{ID: "test.b", Name: "Bee", Vendor: "zed", New: newer})
-	Register(Descriptor{ID: "test.a", Name: "Ay", Vendor: "Zed", New: newer})
-	if _, ok := Lookup("test.a"); !ok {
-		t.Fatal("Lookup did not find test.a")
+	Register(Descriptor{ID: prefix + "b", Name: "Bee", Vendor: "zed", New: newer})
+	Register(Descriptor{ID: prefix + "a", Name: "Ay", Vendor: "Zed", New: newer})
+	if _, ok := Lookup(prefix + "a"); !ok {
+		t.Fatalf("Lookup did not find %sa", prefix)
 	}
 	var names []string
 	for _, d := range All() {
-		if strings.HasPrefix(d.ID, "test.") {
+		if strings.HasPrefix(d.ID, prefix) {
 			names = append(names, d.Name)
 		}
 	}
@@ -77,8 +85,8 @@ func TestRegisteredPluginsAreListedAndFound(t *testing.T) {
 	}
 	defer func() {
 		if recover() == nil {
-			t.Error("a second test.a was registered")
+			t.Errorf("a second %sa was registered", prefix)
 		}
 	}()
-	Register(Descriptor{ID: "test.a", Name: "Again", New: newer})
+	Register(Descriptor{ID: prefix + "a", Name: "Again", New: newer})
 }
