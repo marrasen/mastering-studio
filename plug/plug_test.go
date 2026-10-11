@@ -20,6 +20,14 @@ func TestParamValuesStayInRangeAndOnSteps(t *testing.T) {
 	if v := smooth.Plain(smooth.Normal(440)); math.Abs(v-440) > 1e-9 {
 		t.Errorf("Plain(Normal(440)) = %g", v)
 	}
+	// By ratios, halfway is the geometric mean.
+	ratios := Param{Min: 1, Max: 1000, Log: true}
+	if n := ratios.Normal(31.622776601683793); math.Abs(n-0.5) > 1e-9 {
+		t.Errorf("Normal of the geometric mean = %g, want 0.5", n)
+	}
+	if v := ratios.Plain(ratios.Normal(250)); math.Abs(v-250) > 1e-9 {
+		t.Errorf("by ratios, Plain(Normal(250)) = %g", v)
+	}
 	if s := (Param{Unit: "dB"}).Text(-1.5); s != "-1.50 dB" {
 		t.Errorf("Text = %q", s)
 	}

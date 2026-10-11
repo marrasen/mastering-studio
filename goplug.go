@@ -13,8 +13,8 @@ import (
 	"github.com/marrasen/mastering-studio/plug"
 
 	// The Go plugins built in.
+	_ "github.com/marrasen/mastering-studio/plug/dynamics"
 	_ "github.com/marrasen/mastering-studio/plug/eq"
-	_ "github.com/marrasen/mastering-studio/plug/limiter"
 	_ "github.com/marrasen/mastering-studio/plug/trim"
 )
 
@@ -270,6 +270,9 @@ func (soundHost) EndEdit(*gunim.UI)              {}
 
 // Sound implements [plug.Host]: the sound's own copy draws nothing.
 func (soundHost) Sound() (in, out plug.Sound) { return nil, nil }
+
+// Traced implements [plug.Host]: the sound's copy keeps no views.
+func (soundHost) Traced(uint32, int64) (float32, bool) { return 0, false }
 
 // goEngineOf returns slot id's Go plugin, loaded on track t, or nil.
 func (a *app) goEngineOf(t *Track, id int) *goEngine {

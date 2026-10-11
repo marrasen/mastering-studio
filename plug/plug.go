@@ -71,6 +71,10 @@ type Param struct {
 	// Steps is how many steps the value takes from Min to Max: one is
 	// a switch, and zero is a smooth value.
 	Steps int
+	// Log runs the value by ratios rather than steps, as a time or a
+	// frequency: halfway from Min to Max, in Normal, is the geometric
+	// mean of the two. Min must be above zero.
+	Log   bool
 	Flags ParamFlags
 	// Format writes a value to show. Nil writes it with Unit.
 	Format func(v float64) string
@@ -112,6 +116,9 @@ func (p Param) Normal(v float64) float64 {
 		return 0
 	}
 	n := min(max((v-p.Min)/(p.Max-p.Min), 0), 1)
+	if p.Log && p.Min > 0 {
+		n = min(max(math.Log(max(v, p.Min)/p.Min)/math.Log(p.Max/p.Min), 0), 1)
+	}
 	if p.Steps > 0 {
 		n = math.Round(n*float64(p.Steps)) / float64(p.Steps)
 	}
@@ -123,6 +130,9 @@ func (p Param) Plain(n float64) float64 {
 	n = min(max(n, 0), 1)
 	if p.Steps > 0 {
 		n = math.Round(n*float64(p.Steps)) / float64(p.Steps)
+	}
+	if p.Log && p.Min > 0 {
+		return p.Min * math.Pow(p.Max/p.Min, n)
 	}
 	return p.Min + n*(p.Max-p.Min)
 }
@@ -196,6 +206,10 @@ type Host interface {
 	// draw it, as a meter or a spectrum: what is fed into the plugin,
 	// and what comes out. Either is nil where the host keeps none.
 	Sound() (in, out Sound)
+	// Traced returns the value the processor playing keeps for frame f,
+	// as a [Tracer], of the ReadOnly parameter id, and whether there is
+	// one: for a view to draw along the sound it hears.
+	Traced(id uint32, f int64) (v float32, ok bool)
 }
 
 // Sound is a plugin's sound, as the host keeps it while it plays.

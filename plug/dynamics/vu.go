@@ -1,4 +1,4 @@
-package limiter
+package dynamics
 
 import (
 	"image/color"
@@ -17,12 +17,12 @@ import (
 // The VU meter's colours: its face, from top to bottom, its ink, the
 // red of its scale over 0 VU, its needle, and the bezel round it.
 var (
-	VUFace    = theme.Color("limiter.vu.face", color.NRGBA{R: 0xf4, G: 0xe9, B: 0xc8, A: 0xff})
-	VUFaceLow = theme.Color("limiter.vu.face.low", color.NRGBA{R: 0xe0, G: 0xcf, B: 0x9f, A: 0xff})
-	VUInk     = theme.Color("limiter.vu.ink", color.NRGBA{R: 0x24, G: 0x1f, B: 0x18, A: 0xff})
-	VURed     = theme.Color("limiter.vu.red", color.NRGBA{R: 0xc4, G: 0x30, B: 0x25, A: 0xff})
-	VUNeedle  = theme.Color("limiter.vu.needle", color.NRGBA{R: 0x16, G: 0x13, B: 0x10, A: 0xff})
-	VUBezel   = theme.Color("limiter.vu.bezel", color.NRGBA{R: 0x2b, G: 0x2b, B: 0x30, A: 0xff})
+	VUFace    = theme.Color("dynamics.vu.face", color.NRGBA{R: 0xf4, G: 0xe9, B: 0xc8, A: 0xff})
+	VUFaceLow = theme.Color("dynamics.vu.face.low", color.NRGBA{R: 0xe0, G: 0xcf, B: 0x9f, A: 0xff})
+	VUInk     = theme.Color("dynamics.vu.ink", color.NRGBA{R: 0x24, G: 0x1f, B: 0x18, A: 0xff})
+	VURed     = theme.Color("dynamics.vu.red", color.NRGBA{R: 0xc4, G: 0x30, B: 0x25, A: 0xff})
+	VUNeedle  = theme.Color("dynamics.vu.needle", color.NRGBA{R: 0x16, G: 0x13, B: 0x10, A: 0xff})
+	VUBezel   = theme.Color("dynamics.vu.bezel", color.NRGBA{R: 0x2b, G: 0x2b, B: 0x30, A: 0xff})
 )
 
 // vuSpring moves a VU meter's needle as the standard has it: across 99%
@@ -56,8 +56,10 @@ type vu struct {
 	needle *anim.Float
 }
 
-// vuRest is where the needle rests, a little under the scale's end.
-const vuRest = vuLow - 2
+// vuRest is where the needle rests, a little under the scale's end,
+// and vuPin where it stops at the other, a little over: a level past
+// either holds it there, as a meter's pins do.
+const vuRest, vuPin = vuLow - 2, vuHigh + 0.6
 
 func newVU(name string, read func(time.Duration) (float32, bool)) *vu {
 	m := &vu{name: name, read: read, needle: anim.NewFloat(vuAt(vuRest))}
@@ -68,7 +70,7 @@ func newVU(name string, read func(time.Duration) (float32, bool)) *vu {
 // Step implements [gunim.Animator]: the needle swings to the level.
 func (m *vu) Step(dt time.Duration) bool {
 	db, live := m.read(dt)
-	m.needle.Animate(vuAt(max(vuRest, min(db, vuHigh+1))), vuSpring)
+	m.needle.Animate(vuAt(max(vuRest, min(db, vuPin))), vuSpring)
 	return m.Group.Step(dt) || live
 }
 
@@ -128,7 +130,8 @@ func (m *vu) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Child
 	name := audioui.Shaped(m.name, max(8, h*0.075), true, false)
 	name.Paint(p, geom.Pt(pivot.X-name.Advance/2, face.Max.Y-h*0.13), audioui.Faded(ink, 0.7))
 	// The needle, and the shadow it throws on the face.
-	tip := along(m.needle.Value(), radius+3)
+	// The pins stop the needle where its spring would swing it past.
+	tip := along(max(vuAt(vuRest), min(m.needle.Value(), vuAt(vuPin))), radius+3)
 	audioui.Segment(p, geom.Pt(pivot.X+2, pivot.Y+2), geom.Pt(tip.X+2, tip.Y+3), 2, audioui.Faded(ink, 0.18))
 	audioui.Segment(p, pivot, tip, 1.6, VUNeedle.Get(th))
 	// Glass: a sheen over the top half.

@@ -20,6 +20,10 @@ type Listener struct {
 	still time.Duration
 }
 
+// At returns the count of frames heard by the last of the frames Listen
+// returned last: they run from At less their number to At.
+func (l *Listener) At() int64 { return l.at }
+
 // Hear is Listen for a view that steps a frame of the window, dt long,
 // at a time: with the frames heard since, it reports whether the sound
 // plays, as it does through the frames of the window between its

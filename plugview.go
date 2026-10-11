@@ -152,16 +152,32 @@ func (h goHost) Param(id uint32) float64 {
 // reported returns what the slot's plugin playing reports of p, or p's
 // default where none plays.
 func (v *goView) reported(p plug.Param) float64 {
+	if r, ok := v.playing().(plug.Reporter); ok {
+		return r.Report(p.ID)
+	}
+	return p.Default
+}
+
+// playing returns the processor of the slot's plugin playing, or nil.
+func (v *goView) playing() plug.Processor {
 	if got, ok := livePlugins.Load(v.slot); ok {
 		if lp, ok := got.(*livePlugin); ok {
 			if e, ok := lp.p.(*goEngine); ok {
-				if r, ok := e.proc.(plug.Reporter); ok {
-					return r.Report(p.ID)
-				}
+				return e.proc
 			}
 		}
 	}
-	return p.Default
+	return nil
+}
+
+// Traced implements [plug.Host].
+func (h goHost) Traced(id uint32, f int64) (float32, bool) {
+	if t, ok := h.v.playing().(plug.Tracer); ok {
+		if tr := t.Trace(id); tr != nil {
+			return tr.Get(f)
+		}
+	}
+	return 0, false
 }
 
 // Begin implements [plug.Host]: a gesture of its own, to undo.
