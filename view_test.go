@@ -344,6 +344,53 @@ func TestAClickOnACardsLightBypassesItsPluginAndOnItOpensItsEditor(t *testing.T)
 	}
 }
 
+func TestADraggedCardMovesItsPluginTheOthersMakingWay(t *testing.T) {
+	a := chained()
+	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 9, Name: "Trim", Vendor: "Marras"})
+	w, r, run := stage(t, a)
+	run(40)
+	b := boundsOf(t, w, run, r.chain)
+	c := r.chain
+	first, second, last := c.cards[7], c.cards[8], c.cards[9]
+	secondAt := second.x.Value()
+	from := b.Min.Add(c.cardRect(first).Center().Add(geom.Pt(20, 0)))
+	w.Input(input.PointerMove{Pos: from})
+	w.Input(input.PointerDown{Pos: from, Button: input.ButtonPrimary, Clicks: 1})
+	// Along, a step a frame, to past the middle of the last card.
+	to := b.Min.X + c.cardRect(last).Center().X + 30
+	for x := from.X; x < to; x += 20 {
+		w.Input(input.PointerMove{Pos: geom.Pt(x, from.Y)})
+		run(1)
+	}
+	w.Input(input.PointerMove{Pos: geom.Pt(to, from.Y)})
+	run(20)
+	if c.moving != 7 || c.moveTo != 2 {
+		t.Fatalf("dragging, card %d is moving to %d; want the first to the end", c.moving, c.moveTo)
+	}
+	if second.x.Value() >= secondAt {
+		t.Errorf("the second card stays at %.0f, from %.0f: it makes no way", second.x.Value(), secondAt)
+	}
+	if got := b.Min.X + first.x.Value() + c.grab; got != to {
+		t.Errorf("the card dragged is at %.0f, want under the pointer at %.0f", got, to)
+	}
+	w.Input(input.PointerUp{Pos: geom.Pt(to, from.Y), Button: input.ButtonPrimary})
+	run(1)
+	_, sent := edits(w)
+	if len(sent) != 1 || sent[0] != (MovePlugin{Track: 1, From: 0, To: 2}) {
+		t.Fatalf("the drag sent %v, want the move alone", sent)
+	}
+	// A press that hardly moves is a click.
+	at := b.Min.Add(c.cardRect(second).Center().Add(geom.Pt(20, 0)))
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(4, 0))})
+	w.Input(input.PointerUp{Pos: at.Add(geom.Pt(4, 0)), Button: input.ButtonPrimary})
+	run(1)
+	if _, sent := edits(w); len(sent) != 1 || sent[0] != (ShowEditor{Track: 1, Slot: 8}) {
+		t.Fatalf("a click sent %v, want the editor shown", sent)
+	}
+}
+
 func TestTheChainsCardsLeaveRoomForItsButtons(t *testing.T) {
 	a := chained()
 	for i := range 4 {

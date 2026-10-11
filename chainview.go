@@ -19,7 +19,8 @@ import (
 // chainRow is the track's chain: its plugins as cards, in the order the
 // sound runs through them, joined by the sound itself, flowing while it
 // plays. A card's light switches the plugin on and off, a click opens
-// its editor, and its menu renames, moves and removes it. Behind the
+// its editor, a drag moves it along the chain, the others making way,
+// and its menu renames, moves and removes it. Behind the
 // sound's line, a band as tall as the loudness range shows how each
 // plugin widens or narrows it, as last measured. After the cards, a
 // button adds a plugin, found by typing its name; at the end, a menu
@@ -49,8 +50,16 @@ type chainRow struct {
 	stale    bool
 	hover    int
 	press    int
-	picker   widget.Palette
-	choices  []PluginChoice
+	// down is the card pressed, -1 for none, at pressAt; moving is the
+	// card dragged, 0 for none, held grab from its left edge, and moveTo
+	// the place in the chain it would land.
+	down    int
+	pressAt geom.Point
+	moving  int
+	grab    float32
+	moveTo  int
+	picker  widget.Palette
+	choices []PluginChoice
 	// addX is where the add button is.
 	addX float32
 	// chipIn are the Go plugins' chips among the row's children, and
@@ -96,7 +105,7 @@ const (
 )
 
 func newChainRow(r *root) *chainRow {
-	c := &chainRow{r: r, cards: map[int]*chainCard{}, hover: -1, press: -1, inLRA: anim.NewFloat(0),
+	c := &chainRow{r: r, cards: map[int]*chainCard{}, hover: -1, press: -1, down: -1, inLRA: anim.NewFloat(0),
 		chipIn: map[gunim.Node]int{}}
 	c.Add(c.inLRA)
 	c.add = newPill("+ Plugin", c.openPicker)
@@ -313,7 +322,7 @@ func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 	}
 	fit := min(1, (room-float32(len(c.order))*cardGap)/max(want-float32(len(c.order))*cardGap, 1))
 	x := float32(chainLabelW)
-	for _, id := range c.order {
+	for _, id := range c.placing() {
 		k := c.cards[id]
 		w := max(48, cardWidth(k.slot)*fit)
 		move := anim.Spring{Response: 0.3, Damping: 0.85}
@@ -322,7 +331,10 @@ func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 			k.w.Jump(w)
 			k.placed = true
 		}
-		k.x.Animate(x, move)
+		// The card dragged goes where the pointer has it.
+		if id != c.moving {
+			k.x.Animate(x, move)
+		}
 		k.w.Animate(w, move)
 		x += w + cardGap
 	}
@@ -351,6 +363,35 @@ func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Childr
 		kids.At(i).Place(r.Min)
 	}
 	return c.size
+}
+
+// placing is the cards in the order they are placed: as the chain has
+// them, but the one dragged where it would land, the rest making way.
+func (c *chainRow) placing() []int {
+	if c.moving == 0 {
+		return c.order
+	}
+	out := make([]int, 0, len(c.order))
+	for _, id := range c.order {
+		if id != c.moving {
+			out = append(out, id)
+		}
+	}
+	return slices.Insert(out, max(0, min(c.moveTo, len(out))), c.moving)
+}
+
+// landing is where in the chain the card dragged would land: after
+// every other card whose middle it has passed.
+func (c *chainRow) landing() int {
+	k := c.cards[c.moving]
+	mid := k.x.Value() + k.w.Value()/2
+	to := 0
+	for _, id := range c.order {
+		if o := c.cards[id]; id != c.moving && o.x.Target()+o.w.Target()/2 < mid {
+			to++
+		}
+	}
+	return to
 }
 
 // cardRect is where card k is.
@@ -400,8 +441,21 @@ func (c *chainRow) Focusable() bool { return false }
 func (c *chainRow) Handle(e input.Event, u *gunim.UI) bool {
 	switch e := e.(type) {
 	case input.PointerMove:
+		if k := c.cards[c.moving]; k != nil {
+			k.x.Jump(e.Pos.X - c.grab)
+			c.moveTo = c.landing()
+			break
+		}
 		id, _ := c.at(e.Pos)
 		c.setHover(id)
+		// A press that moves far enough along is a drag.
+		if k := c.cards[c.down]; k != nil && !e.Touch && len(c.order) > 1 {
+			if d := e.Pos.X - c.pressAt.X; d*d > 64 {
+				c.moving, c.grab = c.down, c.pressAt.X-k.x.Value()
+				c.moveTo = slices.Index(c.order, c.down)
+				k.x.Jump(e.Pos.X - c.grab)
+			}
+		}
 	case input.PointerLeave:
 		c.setHover(-1)
 	case input.PointerDown:
@@ -416,15 +470,37 @@ func (c *chainRow) Handle(e input.Event, u *gunim.UI) bool {
 		if k == nil {
 			return false
 		}
-		u.Cue(gunim.CueTick, c)
 		if light {
+			u.Cue(gunim.CueTick, c)
 			on := k.slot.Bypass
 			k.on.Animate(onOff(on), anim.Snappy)
 			u.Send(c, SetBypass{Track: c.track, Slot: id, On: !on})
 			break
 		}
+		// A click opens the editor as the button comes up; a drag moves
+		// the card.
+		c.down, c.pressAt = id, e.Pos
+	case input.PointerUp:
+		id, down := c.moving, c.down
+		c.down = -1
+		if id != 0 {
+			c.moving = 0
+			from, to := slices.Index(c.order, id), c.moveTo
+			if from >= 0 && from != to {
+				u.Cue(gunim.CueTick, c)
+				// Where it lands, as the chain will have it.
+				c.order = slices.Insert(slices.Delete(c.order, from, from+1), to, id)
+				u.Send(c, MovePlugin{Track: c.track, From: from, To: to})
+			}
+			break
+		}
+		k := c.cards[down]
+		if at, light := c.at(e.Pos); k == nil || at != down || light {
+			return false
+		}
+		u.Cue(gunim.CueTick, c)
 		k.open.Animate(1, anim.Gentle)
-		u.Send(c, ShowEditor{Track: c.track, Slot: id})
+		u.Send(c, ShowEditor{Track: c.track, Slot: down})
 	default:
 		return false
 	}
@@ -717,7 +793,12 @@ func (c *chainRow) drawOrder() []int {
 			out = append(out, id)
 		}
 	}
-	return append(out, c.order...)
+	out = append(out, c.order...)
+	// The card dragged, over the rest.
+	if i := slices.Index(out, c.moving); i >= 0 {
+		out = append(slices.Delete(out, i, i+1), c.moving)
+	}
+	return out
 }
 
 func (c *chainRow) paintCard(p *paint.Painter, pal palette, k *chainCard) {
@@ -736,6 +817,10 @@ func (c *chainRow) paintCard(p *paint.Painter, pal palette, k *chainCard) {
 	edge := mix(pal.teal, pal.coral, onOff(failed))
 	if open > 0.01 {
 		p.ShadowRRect(r, 10, paint.Solid(pal.raised), paint.Shadow{Blur: 16 * open, Color: faded(edge, 0.35*open)})
+	}
+	if k.slot.ID == c.moving {
+		// Lifted, as it is dragged.
+		p.ShadowRRect(r, 10, paint.Solid(pal.raised), paint.Shadow{Blur: 18, Offset: geom.Pt(0, 6), Color: faded(pal.night, 0.6)})
 	}
 	p.RRect(r, 10, paint.Solid(mix(pal.raised, mix(pal.raised, pal.ink, 0.06), hover)))
 	pal.outline(p, r, 10, 1)
