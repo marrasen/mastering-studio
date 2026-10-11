@@ -15,10 +15,11 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/mastering-studio/plug/xover"
 )
 
 // bands is how many bands the imager splits the sound into.
-const bands = 4
+const bands = xover.Bands
 
 // The parameters' IDs: the crossovers, then each band's width, then its
 // stereoize.
@@ -144,7 +145,7 @@ type processor struct {
 	stTo, st [bands]float64
 	glide    float64
 	fresh    bool
-	mid, sid splitter
+	mid, sid xover.Splitter
 	// late holds each band's middle, a ring of its own, at at.
 	late [bands][]float32
 	at   [bands]int
@@ -189,12 +190,9 @@ func (p *processor) take(c plug.Change) {
 // setCrossovers sets the crossovers at x, kept in order, each at least
 // half an octave over the one under it, and works their filters out.
 func (p *processor) setCrossovers(x [bands - 1]float64) {
-	for i := 1; i < len(x); i++ {
-		x[i] = max(x[i], x[i-1]*math.Sqrt2)
-	}
-	p.x = x
-	p.mid.set(x, p.rate)
-	p.sid.set(x, p.rate)
+	p.x = xover.Order(x)
+	p.mid.Set(p.x, p.rate)
+	p.sid.Set(p.x, p.rate)
 }
 
 // Process implements [plug.Processor].
@@ -216,7 +214,7 @@ func (p *processor) Process(b *plug.Block) {
 		}
 		p.step()
 		l, r := float64(inL[i]), float64(inR[i])
-		ms, ss := p.mid.split((l+r)/2), p.sid.split((l-r)/2)
+		ms, ss := p.mid.Split((l+r)/2), p.sid.Split((l-r)/2)
 		var m, s float64
 		for k := range bands {
 			m += ms[k]
@@ -276,8 +274,8 @@ func (p *processor) Tail() int { return len(p.late[0]) }
 
 // Reset implements [plug.Processor]: what it held, let go.
 func (p *processor) Reset() {
-	p.mid.reset()
-	p.sid.reset()
+	p.mid.Reset()
+	p.sid.Reset()
 	for k := range bands {
 		clear(p.late[k])
 		p.at[k] = 0

@@ -1,11 +1,26 @@
-package imager
-
-import "math"
-
-// The crossovers: Linkwitz-Riley, of the fourth order, each two
+// Package xover splits a sound into four bands at three crossovers, for
+// plugins that work on each band apart, so that the bands add back to
+// the sound shifted in phase alone, and flat.
+//
+// The crossovers are Linkwitz-Riley, of the fourth order, each two
 // Butterworth sections, whose low and high halves add back to the sound
 // shifted in phase alone. The bands under a crossover pass through the
 // same shift, as its halves added, so all four add back alike.
+package xover
+
+import "math"
+
+// Bands is how many bands a splitter splits a sound into.
+const Bands = 4
+
+// Order returns the crossovers x in order, as a splitter works them:
+// each at least half an octave over the one under it.
+func Order(x [Bands - 1]float64) [Bands - 1]float64 {
+	for i := 1; i < len(x); i++ {
+		x[i] = max(x[i], x[i-1]*math.Sqrt2)
+	}
+	return x
+}
 
 // biquad is one second-order section and its state, in transposed direct
 // form II.
@@ -69,17 +84,20 @@ func (a *allpass) reset() {
 	a.hi.reset()
 }
 
-// splitter splits a signal into four bands at three crossovers: each
+// Splitter splits a signal into four bands at three crossovers: each
 // crossover splits what is over the one under it, and each band under a
-// crossover passes through its phase too.
-type splitter struct {
-	lo, hi [bands - 1]lr4
+// crossover passes through its phase too. Its zero value passes nothing
+// until it is set.
+type Splitter struct {
+	lo, hi [Bands - 1]lr4
 	// ap are the phase shifts: the lowest band's at the second and third
 	// crossovers, the second band's at the third.
 	ap [3]allpass
 }
 
-func (s *splitter) set(x [bands - 1]float64, rate float64) {
+// Set sets the crossovers at x, in hertz, at the sample rate rate; what
+// the filters hold stays, so a crossover can glide.
+func (s *Splitter) Set(x [Bands - 1]float64, rate float64) {
 	for i, hz := range x {
 		s.lo[i].set(hz, rate, false)
 		s.hi[i].set(hz, rate, true)
@@ -89,21 +107,22 @@ func (s *splitter) set(x [bands - 1]float64, rate float64) {
 	s.ap[2].set(x[2], rate)
 }
 
-// split returns x's four bands, low to high.
-func (s *splitter) split(x float64) [bands]float64 {
-	var out [bands]float64
+// Split returns x's four bands, low to high.
+func (s *Splitter) Split(x float64) [Bands]float64 {
+	var out [Bands]float64
 	rest := x
-	for i := range bands - 1 {
+	for i := range Bands - 1 {
 		out[i] = s.lo[i].run(rest)
 		rest = s.hi[i].run(rest)
 	}
-	out[bands-1] = rest
+	out[Bands-1] = rest
 	out[0] = s.ap[1].run(s.ap[0].run(out[0]))
 	out[1] = s.ap[2].run(out[1])
 	return out
 }
 
-func (s *splitter) reset() {
+// Reset lets go what the filters hold.
+func (s *Splitter) Reset() {
 	for i := range s.lo {
 		s.lo[i].reset()
 		s.hi[i].reset()

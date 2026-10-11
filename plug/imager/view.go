@@ -18,6 +18,7 @@ import (
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
 	"github.com/marrasen/mastering-studio/plug/plugui"
+	"github.com/marrasen/mastering-studio/plug/xover"
 )
 
 // The imager's colours: the sound's sides, and a band made narrower.
@@ -57,11 +58,8 @@ func (v values) crossovers() [bands - 1]float64 {
 	var x [bands - 1]float64
 	for i := range x {
 		x[i] = v[CrossoverID+uint32(i)]
-		if i > 0 {
-			x[i] = max(x[i], x[i-1]*math.Sqrt2)
-		}
 	}
-	return x
+	return xover.Order(x)
 }
 
 // display is the sound's middle and sides by pitch, and the bands over
