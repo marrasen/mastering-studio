@@ -451,8 +451,35 @@ func (p *goPane) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children)
 	return p.size
 }
 
-// Paint implements [gunim.Node].
-func (p *goPane) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
+// under is how solid the card under the sheets is: while one plugin's
+// sheet gives way to another's, twice as solid as the one more in, so
+// what is under the pane does not show through between them; and
+// none while one sheet comes or goes alone.
+func (p *goPane) under() float32 {
+	shown, most := 0, float32(0)
+	for _, sh := range p.sheets {
+		if v := min(max(sh.in.Value(), 0), 1); v > 0.005 {
+			shown++
+			most = max(most, v)
+		}
+	}
+	if shown < 2 {
+		return 0
+	}
+	return min(2*most, 1)
+}
+
+// Paint implements [gunim.Node]: the card under the sheets, as solid as
+// it is, and the sheets.
+func (p *goPane) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
+	if under := p.under(); under > 0 {
+		pal := colours(f.Theme)
+		r := geom.Rect{Max: box.Point()}
+		end := pt.Layer(paint.LayerOpts{Bounds: r, Opacity: under})
+		pt.RRect(r, 10, paint.Solid(pal.raised))
+		pal.outline(pt, r, 10, 1)
+		end()
+	}
 	for k := range kids.All {
 		k.Paint(pt)
 	}

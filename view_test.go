@@ -1494,3 +1494,51 @@ func TestTheViewSwitchShowsAPluginOpenAndClosesIt(t *testing.T) {
 		t.Errorf("Spectrogram left the plugin open %v, and sent %v", r.pane.isOpen(), rest)
 	}
 }
+
+func TestSwitchingPluginsGlidesTheirNameAndHidesWhatIsUnder(t *testing.T) {
+	a := goAlbum(0)
+	other := trimSlot(10)
+	other.Label = "A much longer name"
+	a.Tracks[0].Chain = append(a.Tracks[0].Chain, other)
+	w, r, run := stage(t, a)
+	sw := r.head.view
+	show := func(slot int) {
+		a.ShowGo, a.ShowGos = slot, a.ShowGos+1
+		if err := w.Client().Publish(albumTopic, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	show(9)
+	run(60)
+	short := sw.partW(partPlugin)
+	show(10)
+	run(4)
+	// Partway: the names crossing, the part between their widths, and
+	// a card under the two sheets as solid as they are in together.
+	mid := sw.partW(partPlugin)
+	if s := sw.swap.Value(); s <= 0.05 || s >= 0.95 || sw.wasName != "Trim" {
+		t.Errorf("partway, the names have swapped %v, from %q", s, sw.wasName)
+	}
+	if mid <= short+1 || mid >= pillWidth(other.Label)+switchClose-1 {
+		t.Errorf("partway, the plugin's part is %v wide, from %v to %v", mid, short, pillWidth(other.Label)+switchClose)
+	}
+	if len(r.pane.sheets) != 2 {
+		t.Errorf("partway, %d sheets", len(r.pane.sheets))
+	}
+	// At every frame of the swap, what is under the pane hardly shows
+	// through the card under the sheets and the sheets over it.
+	for f := range 40 {
+		through := 1 - r.pane.under()
+		for _, sh := range r.pane.sheets {
+			through *= 1 - min(max(sh.in.Value(), 0), 1)
+		}
+		if through > 0.05 {
+			t.Fatalf("%d frames into the swap, %.0f%% of what is under the pane shows through", f+4, 100*through)
+		}
+		run(1)
+	}
+	run(30)
+	if sw.swap.Value() < 0.99 || math.Abs(float64(sw.partW(partPlugin)-(pillWidth(other.Label)+switchClose))) > 0.5 {
+		t.Errorf("after, the names have swapped %v, the part %v wide", sw.swap.Value(), sw.partW(partPlugin))
+	}
+}

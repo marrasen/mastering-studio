@@ -28,11 +28,15 @@ type viewSwitch struct {
 	at, plugIn *anim.Float
 	hot        int
 	onClose    bool
-	// plugName is the plugin's name, kept as its part goes.
-	plugName string
-	tip      widget.PartTip
-	parts    [3]geom.Rect
-	size     geom.Size
+	// plugName is the plugin's name, kept as its part goes; as another
+	// plugin's takes its place, wasName is the name before, swap how far
+	// the one has given way to the other, and plugW how wide the part
+	// is, gliding from the one's width to the other's.
+	plugName, wasName string
+	swap, plugW       *anim.Float
+	tip               widget.PartTip
+	parts             [3]geom.Rect
+	size              geom.Size
 }
 
 // The switch's parts: the waveform, the spectrogram, and the plugin.
@@ -52,8 +56,9 @@ const (
 )
 
 func newViewSwitch(r *root) *viewSwitch {
-	s := &viewSwitch{r: r, at: anim.NewFloat(0), plugIn: anim.NewFloat(0), hot: -1}
-	s.Add(s.at, s.plugIn)
+	s := &viewSwitch{r: r, at: anim.NewFloat(0), plugIn: anim.NewFloat(0), hot: -1, swap: anim.NewFloat(1),
+		plugW: anim.NewFloat(0)}
+	s.Add(s.at, s.plugIn, s.swap, s.plugW)
 	return s
 }
 
@@ -73,10 +78,20 @@ func (s *viewSwitch) shown() int {
 // shown, and the plugin's part comes and goes with its pane.
 func (s *viewSwitch) Step(dt time.Duration) bool {
 	open := s.r.pane.isOpen()
-	if open {
-		s.plugName = s.r.pane.title()
-	}
 	sp := anim.Spring{Response: 0.28, Damping: 0.86}
+	if name := s.r.pane.title(); open && name != s.plugName {
+		// Another plugin's: its name takes the other's place, the part
+		// growing or shrinking to it; the first, it is simply there.
+		if s.plugName != "" && s.plugIn.Value() > 0.01 {
+			s.wasName = s.plugName
+			s.swap.Jump(0)
+			s.swap.Animate(1, sp)
+			s.plugW.Animate(pillWidth(name)+switchClose, sp)
+		} else {
+			s.plugW.Jump(pillWidth(name) + switchClose)
+		}
+		s.plugName = name
+	}
 	if to := float32(s.shown()); s.at.Target() != to {
 		s.at.Animate(to, sp)
 	}
@@ -89,7 +104,7 @@ func (s *viewSwitch) Step(dt time.Duration) bool {
 // partW is how wide each part is, the plugin's as far in as it is.
 func (s *viewSwitch) partW(i int) float32 {
 	if i == partPlugin {
-		return (pillWidth(s.plugName) + switchClose) * min(max(s.plugIn.Value(), 0), 1)
+		return s.plugW.Value() * min(max(s.plugIn.Value(), 0), 1)
 	}
 	return pillWidth(partNames[i])
 }
@@ -142,11 +157,17 @@ func (s *viewSwitch) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gun
 			run.Paint(p, geom.Pt(r.Min.X+(r.Size().W-run.Advance)/2, (box.H-15)/2), ink)
 			continue
 		}
-		// The plugin's name, and its cross, as far in as the part is.
+		// The plugin's name, and its cross, as far in as the part is; the
+		// name before rising away as the new one rises in.
 		in := min(max(s.plugIn.Value(), 0), 1)
 		end := p.Layer(paint.LayerOpts{Bounds: r, Opacity: in, Clip: true, Radius: switchH / 2})
+		swap := min(max(s.swap.Value(), 0), 1)
+		if swap < 0.99 && s.wasName != "" {
+			was := shaped(s.wasName, 12, true)
+			was.Paint(p, geom.Pt(r.Min.X+14, (box.H-15)/2-8*swap), faded(ink, 1-swap))
+		}
 		run := shaped(s.plugName, 12, true)
-		run.Paint(p, geom.Pt(r.Min.X+14, (box.H-15)/2), ink)
+		run.Paint(p, geom.Pt(r.Min.X+14, (box.H-15)/2+8*(1-swap)), faded(ink, swap))
 		cross := s.closeAt()
 		if s.onClose {
 			p.RRect(cross.Inset(geom.Uniform(-3)), cross.Size().W, paint.Solid(faded(pal.night, 0.2)))
