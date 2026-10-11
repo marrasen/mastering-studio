@@ -55,6 +55,9 @@ func NewSelector(title string, names, tips []string) *Selector {
 	return s
 }
 
+// Cell is where option i's lamp stands, as last laid out.
+func (s *Selector) Cell(i int) geom.Rect { return s.cells[i] }
+
 // Selected returns the option chosen.
 func (s *Selector) Selected() int { return s.sel }
 
@@ -83,10 +86,11 @@ func (s *Selector) glide(u *gunim.UI) {
 	u.Invalidate()
 }
 
-// The lamps' rows: how far apart they stand, and where their middle is,
-// as a knob's cap's.
+// The lamps' grid: how far apart their rows and their columns stand, and
+// where their middle is, as a knob's cap's.
 const (
-	lampRow = 12
+	lampRow = 16
+	lampCol = 16
 	lampMid = 4 + 17
 )
 
@@ -113,12 +117,13 @@ func (s *Selector) lampsAt() (top, foot float32) {
 // name under them.
 func (s *Selector) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
 	cols, _ := s.grid()
-	s.size = c.Constrain(geom.Sz(max(float32(cols)*24, 48), SelectorH))
-	cw := s.size.W / float32(cols)
+	s.size = c.Constrain(geom.Sz(max(float32(cols)*lampCol+16, 48), SelectorH))
+	// The columns lampCol apart, about the middle.
+	left := (s.size.W - float32(cols)*lampCol) / 2
 	top, _ := s.lampsAt()
 	s.cells = s.cells[:0]
 	for i := range s.names {
-		s.cells = append(s.cells, geom.Rc(float32(i%cols)*cw, top+float32(i/cols)*lampRow, cw, lampRow))
+		s.cells = append(s.cells, geom.Rc(left+float32(i%cols)*lampCol, top+float32(i/cols)*lampRow, lampCol, lampRow))
 	}
 	return s.size
 }

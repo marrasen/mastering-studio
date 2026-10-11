@@ -1,6 +1,7 @@
 package maximizer
 
 import (
+	"fmt"
 	"math"
 	"slices"
 	"testing"
@@ -88,7 +89,7 @@ func TestTheModesLampsSetTheModeAsAGesture(t *testing.T) {
 	pn := panelOf(t, p, h)
 	w, run := stage(t, geom.Sz(1400, 820), pn)
 	lamps := boundsIn(t, w, run, pn.mode)
-	click(t, w, run, pn.mode, geom.Pt(lamps.Min.X+lamps.Size().W*2.5/3, lamps.Min.Y+8))
+	click(t, w, run, pn.mode, lamps.Min.Add(pn.mode.Cell(Loud).Center()))
 	if h.values[ModeID] != Loud || !slices.Equal(h.log, []string{"begin", "set", "end"}) {
 		t.Errorf("Loud's lamp set the mode to %v, by %v", h.values[ModeID], h.log)
 	}
@@ -102,8 +103,8 @@ func TestLearnSetsTheGainAsOneStep(t *testing.T) {
 	p, h := newMaximizer(t)
 	pn := panelOf(t, p, h)
 	w, run := stage(t, geom.Sz(1400, 820), pn)
-	if !pn.learn.Disabled || pn.learn.Tooltip != "The host gives the maximizer no track to read" {
-		t.Fatalf("with no track, Learn is disabled %v: %q", pn.learn.Disabled, pn.learn.Tooltip)
+	if !pn.learn.Disabled || pn.learn.Tooltip != "The host gives the maximizer no track to read" || pn.learn.Value != "No track" {
+		t.Fatalf("with no track, Learn is disabled %v, says %q: %q", pn.learn.Disabled, pn.learn.Value, pn.learn.Tooltip)
 	}
 	p.SetDocument(memDoc{quietMusic(4, 0.25)})
 	pn.FollowDocument(nil)
@@ -122,6 +123,23 @@ func TestLearnSetsTheGainAsOneStep(t *testing.T) {
 	}
 	if pn.sections[1].Knobs[0].Value() != h.values[GainID] {
 		t.Errorf("the gain's knob shows %v, the host has %v", pn.sections[1].Knobs[0].Value(), h.values[GainID])
+	}
+	// The dial says the gain it set, and glows as it ends.
+	if want := fmt.Sprintf("%+.1f dB", h.values[GainID]); pn.learn.Value != want || pn.learn.Stale || pn.learn.Running() {
+		t.Errorf("learned, the dial says %q, stale %v, running %v; want %q", pn.learn.Value, pn.learn.Stale, pn.learn.Running(), want)
+	}
+	// The target moved: what it learned greys, and comes back as the
+	// target does. A panel opened anew remembers it.
+	pn.Follow(TargetID, -12, nil)
+	if !pn.learn.Stale {
+		t.Error("the target moved, the dial's gain is not greyed")
+	}
+	pn.Follow(TargetID, -10, nil)
+	if pn.learn.Stale {
+		t.Error("the target back, the dial's gain is still greyed")
+	}
+	if again := panelOf(t, p, h); again.learn.Value != pn.learn.Value {
+		t.Errorf("opened anew, the dial says %q, was %q", again.learn.Value, pn.learn.Value)
 	}
 }
 
@@ -148,14 +166,14 @@ func TestLearnStopsAtASecondClick(t *testing.T) {
 	pn.FollowDocument(nil)
 	click(t, w, run, pn.learn)
 	run(5)
-	if !pn.learning || pn.learn.Label != "Stop learning · 0%" {
-		t.Fatalf("learning, the button says %q", pn.learn.Label)
+	if !pn.learning || !pn.learn.Running() || pn.learn.Value != "0%" || pn.learn.Tooltip != "Stop learning" {
+		t.Fatalf("learning, the dial runs %v, says %q: %q", pn.learn.Running(), pn.learn.Value, pn.learn.Tooltip)
 	}
 	click(t, w, run, pn.learn)
 	close(src.gate)
 	run(5)
-	if pn.learning || pn.learn.Label != learnWords || len(h.log) != 0 {
-		t.Errorf("clicked again, it learns on %v, says %q, and sent %v", pn.learning, pn.learn.Label, h.log)
+	if pn.learning || pn.learn.Running() || pn.learn.Value != learnReady || len(h.log) != 0 {
+		t.Errorf("clicked again, it learns on %v, says %q, and sent %v", pn.learning, pn.learn.Value, h.log)
 	}
 	if _, learning, _, _ := p.learnState(); learning {
 		t.Error("clicked again, the maximizer learns on")

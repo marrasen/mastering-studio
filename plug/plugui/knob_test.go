@@ -155,3 +155,29 @@ func TestASectionsPowerLampStandsBeforeItsName(t *testing.T) {
 		t.Errorf("switched off, the parameter is %v and its knob greyed %v", h.values[1], s.Knobs[0].Disabled)
 	}
 }
+
+func TestAnActionDialShowsItsTaskRunAndEnd(t *testing.T) {
+	d := NewActionDial("Learn", nil)
+	clicks := 0
+	d.OnClick = func(*gunim.UI) { clicks++ }
+	if s := d.Layout(gunim.Constraints{Max: geom.Sz(200, 200)}, gunim.Frame{}, gunim.Children{}); s != geom.Sz(KnobW, KnobH) {
+		t.Errorf("a dial stands %v, want as a knob", s)
+	}
+	d.Start(nil)
+	d.SetProgress(0.4, nil)
+	if !d.Running() || d.progress.Value() != 0.4 {
+		t.Errorf("running, it runs %v at %v", d.Running(), d.progress.Value())
+	}
+	d.Finish(true, nil)
+	if d.Running() {
+		t.Error("finished, it still runs")
+	}
+	d.Disabled = true
+	d.click(nil)
+	if clicks != 0 {
+		t.Error("disabled, a click clicked it")
+	}
+	if info := d.Access(); info.Role != access.RoleButton || info.Name != "Learn" || info.State != access.StateDisabled {
+		t.Errorf("it reads as %+v", info)
+	}
+}

@@ -100,8 +100,17 @@ const lookahead = 0.005
 type plugin struct {
 	h    plug.Host
 	proc processor
-	// learner reads the whole track, for Learn.
+	// learner reads the whole track, for Learn, and learnt is what it
+	// last learned, kept as the views come and go.
 	learner learner
+	learnt  learnt
+}
+
+// learnt is what Learn last learned: the gain, for the target, and
+// whether it reached it; ok says it has learned at all.
+type learnt struct {
+	gain, target float64
+	reached, ok  bool
 }
 
 // Processor implements [plug.Plugin].

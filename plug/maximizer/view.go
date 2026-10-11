@@ -12,6 +12,7 @@ import (
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
@@ -141,16 +142,15 @@ type panel struct {
 	readouts *readouts
 	mode     *plugui.Selector
 	sections []*plugui.Section
-	learn    *widget.Button
+	learn    *plugui.ActionDial
 	tuner    *plugui.Tuner
 	// values are the parameters the panel shows, as last set.
 	values map[uint32]float64
-	// learning says Learn reads the track; stopPoll stops it looking how
-	// far, and calm puts the button's words back after it tells how it
-	// went.
-	learning       bool
-	stopPoll, calm func()
-	paneAt         geom.Rect
+	// learning says Learn reads the track, and stopPoll stops it looking
+	// how far.
+	learning bool
+	stopPoll func()
+	paneAt   geom.Rect
 }
 
 func newPanel(pl *plugin, h plug.Host) *panel {
@@ -171,21 +171,20 @@ func newPanel(pl *plugin, h plug.Host) *panel {
 		h.Set(ModeID, float64(i), u)
 		h.End(ModeID, u)
 	}
-	p.learn = widget.NewButton(learnWords)
-	// While it learns, the button stops it.
-	p.learn.OnClick = func(u *gunim.UI) gunim.Intent {
+	p.learn = plugui.NewActionDial("Learn", icon.Target)
+	// While it learns, the dial stops it.
+	p.learn.OnClick = func(u *gunim.UI) {
 		if p.learning {
 			p.halt(u)
 		} else {
 			p.startLearn(u)
 		}
-		return nil
 	}
 	p.learnable()
 	modeSection := &plugui.Section{Name: "MODE"}
-	modeSection.Add(p.mode, 168)
+	modeSection.Add(p.mode, 96)
 	learn := plugui.NewSection(h, &Descriptor, "LOUDNESS", 0, TargetID)
-	learn.Add(p.learn, 180)
+	learn.Add(p.learn, plugui.KnobW)
 	p.sections = []*plugui.Section{
 		modeSection,
 		plugui.NewSection(h, &Descriptor, "LIMITER", 0, GainID, CeilingID, CharacterID, LinkID),
@@ -194,22 +193,35 @@ func newPanel(pl *plugin, h plug.Host) *panel {
 	return p
 }
 
-// The learn button's words, at rest; and its tooltip.
+// Learn's tooltip, and its word at rest before it has learned.
 const (
-	learnWords = "Learn"
-	learnTip   = "Read the whole track as it reaches the maximizer, and set the gain so it comes out as loud as the " +
+	learnTip = "Read the whole track as it reaches the maximizer, and set the gain so it comes out as loud as the " +
 		"target. Undo puts the gain back."
+	learnReady = "Ready"
 )
 
-// learnable greys Learn where there is no track to read.
+// learnable shows Learn at rest: greyed where there is no track to
+// read; else what it last learned, greyed where the target has moved
+// since, or ready to.
 func (p *panel) learnable() {
 	if p.learning {
 		return
 	}
+	l := p.p.learnt
 	p.learn.Disabled = !p.p.canLearn()
-	p.learn.Tooltip = learnTip
-	if p.learn.Disabled {
-		p.learn.Tooltip = "The host gives the maximizer no track to read"
+	p.learn.Stale = l.ok && l.target != p.values[TargetID]
+	p.learn.Value, p.learn.Tooltip = learnReady, learnTip
+	switch {
+	case p.learn.Disabled:
+		p.learn.Value, p.learn.Tooltip = "No track", "The host gives the maximizer no track to read"
+	case l.ok:
+		p.learn.Value = fmt.Sprintf("%+.1f dB", l.gain)
+		switch {
+		case p.learn.Stale:
+			p.learn.Tooltip = fmt.Sprintf("Learned for %.1f LUFS; the target moved since. ", l.target) + learnTip
+		case !l.reached:
+			p.learn.Tooltip = "The target is out of reach: even at the most gain, the track comes out quieter. " + learnTip
+		}
 	}
 }
 
@@ -218,13 +230,10 @@ func (p *panel) startLearn(u *gunim.UI) {
 	if p.learning || !p.p.canLearn() {
 		return
 	}
-	if p.calm != nil {
-		p.calm()
-		p.calm = nil
-	}
 	s := settingsOf(func(id uint32) (float64, bool) { v, ok := p.values[id]; return v, ok })
-	p.learning, p.learn.Active = true, true
-	p.learn.Tooltip = "Stop learning"
+	p.learning = true
+	p.learn.Start(u)
+	p.learn.Stale, p.learn.Value, p.learn.Tooltip = false, "0%", "Stop learning"
 	p.p.startLearning(s, p.values[TargetID])
 	p.watchLearning(u)
 }
@@ -238,15 +247,11 @@ func (p *panel) halt(u *gunim.UI) {
 	if p.stopPoll != nil {
 		p.stopPoll()
 	}
-	p.done(learnWords, u)
+	p.finish(false, u)
 }
 
-// learnPoll is how often Learn looks how far it has got, and tellFor how
-// long the button tells how it went.
-const (
-	learnPoll = 50 * time.Millisecond
-	tellFor   = 3 * time.Second
-)
+// learnPoll is how often Learn looks how far it has got.
+const learnPoll = 50 * time.Millisecond
 
 // watchLearning looks how far Learn has got: while it reads, it shows
 // how far and looks again a moment later; once it is done, it sets the
@@ -258,44 +263,32 @@ func (p *panel) watchLearning(u *gunim.UI) {
 	got, learning, progress, err := p.p.learnState()
 	switch {
 	case learning:
-		p.learn.Label = fmt.Sprintf("Stop learning · %.0f%%", 100*progress)
+		p.learn.Value = fmt.Sprintf("%.0f%%", 100*progress)
+		p.learn.SetProgress(float32(progress), u)
 		p.stopPoll = u.After(learnPoll, p.watchLearning)
-		u.Invalidate()
 		return
 	case err != nil:
-		p.learn.Tooltip = "Could not learn: " + err.Error()
-		p.done("Could not learn", u)
+		p.finish(false, u)
+		p.learn.Value, p.learn.Tooltip = "Failed", "Could not learn: "+err.Error()
 	case got != nil:
 		p.h.Begin(GainID, u)
 		p.h.Set(GainID, got.gain, u)
 		p.h.End(GainID, u)
 		p.values[GainID] = got.gain
 		p.sections[1].Follow(GainID, got.gain, u)
-		words := fmt.Sprintf("%+.1f dB: %.1f LUFS", got.gain, got.loud)
-		if math.Abs(got.loud-p.values[TargetID]) > 0.5 {
-			words = fmt.Sprintf("Only %.1f LUFS", got.loud)
-			p.learn.Tooltip = "The target is out of reach: even at the most gain, the track comes out quieter"
-		}
-		p.done(words, u)
+		target := p.values[TargetID]
+		p.p.learnt = learnt{gain: got.gain, target: target, reached: math.Abs(got.loud-target) <= 0.5, ok: true}
+		p.finish(true, u)
 	default:
-		p.done(learnWords, u)
+		p.finish(false, u)
 	}
 }
 
-// done ends learning, the button saying words a while.
-func (p *panel) done(words string, u *gunim.UI) {
-	p.learning, p.learn.Active = false, false
-	p.learn.Label = words
-	if !strings.HasPrefix(p.learn.Tooltip, "Could not") && !strings.HasPrefix(p.learn.Tooltip, "The target") {
-		p.learn.Tooltip = learnTip
-	}
-	if words != learnWords {
-		p.calm = u.After(tellFor, func(u *gunim.UI) {
-			p.learn.Label, p.calm = learnWords, nil
-			p.learnable()
-			u.Invalidate()
-		})
-	}
+// finish ends learning: done, the dial glowing, or stopped.
+func (p *panel) finish(done bool, u *gunim.UI) {
+	p.learning = false
+	p.learn.Finish(done, u)
+	p.learnable()
 	u.Invalidate()
 }
 
@@ -355,8 +348,12 @@ func (p *panel) Follow(id uint32, v float64, u *gunim.UI) {
 	for _, s := range p.sections {
 		s.Follow(id, v, u)
 	}
-	if id == ModeID {
+	switch id {
+	case ModeID:
 		p.mode.SetSelected(int(math.Round(v)), u)
+	case TargetID:
+		// What Learn learned greys as the target moves from it.
+		p.learnable()
 	}
 	u.Invalidate()
 }

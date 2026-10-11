@@ -15,7 +15,7 @@ func TestASelectorPicksByLampWheelAndKeys(t *testing.T) {
 	var picked []int
 	s.OnPick = func(i int, _ *gunim.UI) { picked = append(picked, i) }
 	s.Layout(gunim.Constraints{Max: geom.Sz(72, 100)}, gunim.Frame{}, gunim.Children{})
-	s.Handle(input.PointerDown{Pos: geom.Pt(60, 8), Button: input.ButtonPrimary, Clicks: 1}, nil)
+	s.Handle(input.PointerDown{Pos: s.cells[2].Center(), Button: input.ButtonPrimary, Clicks: 1}, nil)
 	// The wheel down steps back.
 	s.Handle(input.Scroll{Delta: geom.Pt(0, 1)}, nil)
 	if s.Selected() != 1 {
@@ -79,19 +79,23 @@ func TestFourLampsInTwoColumnsStandTwoByTwo(t *testing.T) {
 	}
 	// Two rows, lampRow apart, about where a knob's cap's middle is.
 	top, foot := s.lampsAt()
-	if foot-top != 24 || (top+foot)/2 != lampMid || lampMid != 4+17 {
-		t.Errorf("the lamps run from %v to %v: want two rows 12 apart about a knob's cap's middle, 21", top, foot)
+	if foot-top != 32 || (top+foot)/2 != lampMid || lampMid != 4+17 {
+		t.Errorf("the lamps run from %v to %v: want two rows 16 apart about a knob's cap's middle, 21", top, foot)
+	}
+	// The columns 16 apart about the middle, 28: lamps at 20 and 36.
+	if c := s.cells; c[0].Center().X != 20 || c[1].Center().X != 36 {
+		t.Errorf("the lamps stand at %v and %v across, want 20 and 36", c[0].Center().X, c[1].Center().X)
 	}
 	// Each lamp where it stands: the top row first, then the second.
-	for i, at := range []geom.Point{{X: 14, Y: lampMid - 6}, {X: 42, Y: lampMid - 6}, {X: 14, Y: lampMid + 6},
-		{X: 42, Y: lampMid + 6}} {
+	for i, at := range []geom.Point{{X: 20, Y: lampMid - 8}, {X: 36, Y: lampMid - 8}, {X: 20, Y: lampMid + 8},
+		{X: 36, Y: lampMid + 8}} {
 		if got := s.at(at); got != i {
 			t.Errorf("at %v is option %d, want %d", at, got, i)
 		}
 	}
 	// Under the lamps, on the title and the name, the lamp of the last
 	// row above.
-	if got := s.at(geom.Pt(42, size.H-4)); got != 3 {
+	if got := s.at(geom.Pt(36, size.H-4)); got != 3 {
 		t.Errorf("under the right column, option %d", got)
 	}
 }
