@@ -107,3 +107,39 @@ func contrast(a, b color.NRGBA) float64 {
 	x, y := lum(a), lum(b)
 	return (max(x, y) + 0.05) / (min(x, y) + 0.05)
 }
+
+// One value colours the studio's own pieces and the audio pieces
+// alike: the theme editor changes them together.
+func TestTheStudioAndTheMetersShareTheirColours(t *testing.T) {
+	red := rgb(0xff, 0, 0)
+	for _, tok := range []theme.Token[color.NRGBA]{audioui.Ground, audioui.Raised, audioui.Sound,
+		audioui.Spread, audioui.Near, audioui.Over} {
+		pal := colours(theme.NewLive(darkTheme().With(theme.Set(tok, red))))
+		if n := countColour(pal, red); n != 1 {
+			t.Errorf("%s red colours %d of the studio's colours, want 1", tok.Key(), n)
+		}
+	}
+}
+
+// countColour counts pal's colours that are c.
+func countColour(pal palette, c color.NRGBA) int {
+	n := 0
+	for _, have := range []color.NRGBA{pal.ink, pal.night, pal.panel, pal.raised, pal.teal, pal.sky, pal.amber,
+		pal.coral, pal.edge} {
+		if have == c {
+			n++
+		}
+	}
+	return n
+}
+
+// Every value the theme editor puts first is a token it can edit.
+func TestTheThemeEditorKnowsEveryValueItPutsFirst(t *testing.T) {
+	for _, s := range themeSections() {
+		for _, f := range s.Fields {
+			if _, ok := theme.Lookup(f.Key); !ok {
+				t.Errorf("%s: %q (%s) is no token", s.Title, f.Key, f.Label)
+			}
+		}
+	}
+}

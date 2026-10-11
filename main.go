@@ -45,6 +45,7 @@ import (
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/install"
+	"github.com/marrasen/gunim/theme"
 )
 
 // version is the studio's version, set as a release is built.
@@ -148,6 +149,8 @@ type options struct {
 	zoom float32
 	// placement says where the window is, to keep as it closes.
 	placement func() (driver.Placement, bool)
+	// registerTheme gives the window a theme, to take at its name.
+	registerTheme func(theme.Theme)
 	// app is the program's gunim app, which opens windows of its own,
 	// as what an update changed.
 	app *gunim.App
@@ -169,6 +172,7 @@ func run(o options) error {
 		}
 		registerViews(w, d)
 		o.placement = w.Placement
+		o.registerTheme = w.RegisterTheme
 		o.app = a
 		c := w.Client()
 		if o.shot != "" {

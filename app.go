@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/driver"
 	"github.com/marrasen/gunim/install"
+	"github.com/marrasen/gunim/theme"
 )
 
 // The vocabulary the two halves share.
@@ -476,6 +478,11 @@ type app struct {
 	// or nil.
 	output Output
 	theme  string
+	// themeEdits are the changes made to each theme in the settings'
+	// theme editor, by the theme's name, and registerTheme gives the
+	// window a theme as edited, to take at its name.
+	themeEdits    map[string]json.RawMessage
+	registerTheme func(theme.Theme)
 	// checking says a look for a newer release is under way, checks
 	// carries what it found, and checked says how the last went.
 	// quitNow asks the studio to close, for the release it updated to.
@@ -849,7 +856,11 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	st := readSettings(a.settingsFile)
 	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
 	a.Background, a.Spectrum, a.Carry, a.Beta = st.Background, st.spectrum(), st.Carry, st.Beta
-	a.output, a.theme = st.Output, themeNamed(st.Theme)
+	a.output, a.theme, a.themeEdits = st.Output, themeNamed(st.Theme), st.ThemeEdits
+	a.registerTheme = o.registerTheme
+	for _, t := range studioThemes {
+		a.registerEdited(t.Name)
+	}
 	a.gunim = o.app
 	if from := install.UpdatedFrom(); from != "" {
 		// The first start of a release put in place by itself.
@@ -1390,8 +1401,8 @@ func (a *app) handle(in gunim.Intent) {
 	case SetCurves:
 		a.Curves = in.Curves
 		a.dirty = true
-	case OpenSettings, SettingsClosed, SetOutput, OpenControlPanel, ChooseTheme, SetUpdates, CheckForUpdates,
-		UseSystemSound:
+	case OpenSettings, SettingsClosed, SetOutput, OpenControlPanel, ChooseTheme, SaveThemeEdits, SetUpdates,
+		CheckForUpdates, UseSystemSound:
 		a.handleSettings(in)
 	case SetBeta:
 		a.Beta = in.On

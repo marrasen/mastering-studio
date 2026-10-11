@@ -18,18 +18,14 @@ import (
 	"github.com/marrasen/gunim/widget"
 )
 
-// The studio's colours, as theme tokens, their defaults the dark
-// theme's: near-black panels, a cool teal for what plays, amber for a
-// reading near its mark and coral for one off it.
+// The studio's own colours, as theme tokens, their defaults the dark
+// theme's. Its other colours are the audio pieces' tokens, so one value
+// colours the studio and the meters alike: audioui.Ground is its night,
+// Raised its raised, Sound its teal, Spread its sky, Near its amber and
+// Over its coral.
 var (
-	studioInk    = theme.Foreground("studio.ink", rgb(0xec, 0xee, 0xf4))
-	studioNight  = theme.Color("studio.night", rgb(0x0c, 0x0e, 0x13))
-	studioPanel  = theme.Color("studio.panel", rgb(0x15, 0x18, 0x20))
-	studioRaised = theme.Color("studio.raised", rgb(0x1d, 0x21, 0x2b))
-	studioTeal   = theme.Color("studio.teal", rgb(0x4f, 0xd6, 0xc0))
-	studioSky    = theme.Color("studio.sky", rgb(0x5c, 0xb8, 0xff))
-	studioAmber  = theme.Color("studio.amber", rgb(0xff, 0xc8, 0x57))
-	studioCoral  = theme.Color("studio.coral", rgb(0xff, 0x6b, 0x5f))
+	studioInk   = theme.Foreground("studio.ink", rgb(0xec, 0xee, 0xf4))
+	studioPanel = theme.Color("studio.panel", rgb(0x15, 0x18, 0x20))
 	// studioEdge is the rule round pills, chips, cards and rows, clear
 	// in a theme that tells them apart by their fills alone.
 	studioEdge = theme.Color("studio.edge", color.NRGBA{})
@@ -55,8 +51,8 @@ type palette struct {
 // theme switch while one runs. A Paint reads it every time it paints.
 func colours(l *theme.Live) palette {
 	return palette{
-		ink: studioInk.Get(l), night: studioNight.Get(l), panel: studioPanel.Get(l), raised: studioRaised.Get(l),
-		teal: studioTeal.Get(l), sky: studioSky.Get(l), amber: studioAmber.Get(l), coral: studioCoral.Get(l),
+		ink: studioInk.Get(l), night: audioui.Ground.Get(l), panel: studioPanel.Get(l), raised: audioui.Raised.Get(l),
+		teal: audioui.Sound.Get(l), sky: audioui.Spread.Get(l), amber: audioui.Near.Get(l), coral: audioui.Over.Get(l),
 		edge: studioEdge.Get(l), lift: studioLift.Get(l),
 	}
 }
@@ -75,20 +71,20 @@ func (pal palette) outline(p *paint.Painter, r geom.Rect, radius, a float32) {
 }
 
 // entries gives pal's colours to the studio's tokens and to the audio
-// pieces' tokens of the same meaning, so the meters, the waveform and
-// the spectrum match the rest of the window.
+// pieces' tokens it shares, so the meters, the waveform and the
+// spectrum match the rest of the window.
 func (pal palette) entries() []theme.Entry {
 	return []theme.Entry{
 		theme.Set(studioInk, pal.ink),
 		// Toasts wide enough for a driver's two buttons side by side.
 		theme.Set(widget.ToastWidth, 400),
-		theme.Set(studioNight, pal.night), theme.Set(audioui.Ground, pal.night),
+		theme.Set(audioui.Ground, pal.night),
 		theme.Set(studioPanel, pal.panel),
-		theme.Set(studioRaised, pal.raised), theme.Set(audioui.Raised, pal.raised),
-		theme.Set(studioTeal, pal.teal), theme.Set(audioui.Sound, pal.teal),
-		theme.Set(studioSky, pal.sky), theme.Set(audioui.Spread, pal.sky),
-		theme.Set(studioAmber, pal.amber), theme.Set(audioui.Near, pal.amber),
-		theme.Set(studioCoral, pal.coral), theme.Set(audioui.Over, pal.coral),
+		theme.Set(audioui.Raised, pal.raised),
+		theme.Set(audioui.Sound, pal.teal),
+		theme.Set(audioui.Spread, pal.sky),
+		theme.Set(audioui.Near, pal.amber),
+		theme.Set(audioui.Over, pal.coral),
 		theme.Set(studioEdge, pal.edge), theme.Set(studioLift, pal.lift),
 	}
 }

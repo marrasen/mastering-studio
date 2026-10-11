@@ -181,7 +181,11 @@ func (d *deck) stop() {
 	d.stopLocked(20 * time.Millisecond)
 }
 
-// setPaused pauses or resumes.
+// pauseFade is how long a pause fades the sound out, and playing on
+// fades it back in.
+const pauseFade = 150 * time.Millisecond
+
+// setPaused pauses or resumes, fading over pauseFade.
 func (d *deck) setPaused(on bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -189,9 +193,9 @@ func (d *deck) setPaused(on bool) {
 		return
 	}
 	if on {
-		d.voice.Pause()
+		d.voice.Pause(pauseFade)
 	} else {
-		d.voice.Resume()
+		d.voice.Resume(pauseFade)
 	}
 }
 

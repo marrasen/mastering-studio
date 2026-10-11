@@ -1,8 +1,11 @@
 package main
 
 import (
+	"log"
+
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/theme"
+	"github.com/marrasen/gunim/themeedit"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -210,4 +213,59 @@ func dimTheme() theme.Theme {
 		theme.Set(widget.ToastSuccessInk, c.teal),
 		theme.Set(widget.ToastWarningInk, c.amber),
 		theme.Set(widget.ToastErrorInk, c.coral))...)
+}
+
+// studioThemeNamed is the theme called name, or the default theme for
+// any other name.
+func studioThemeNamed(name string) studioTheme {
+	for _, t := range studioThemes {
+		if t.Name == name {
+			return t
+		}
+	}
+	return studioThemes[0]
+}
+
+// themeEdits reads the changes made to a theme in the theme editor, as
+// theme.MarshalValues wrote them. Values it cannot read, as of a later
+// version's tokens, are left out.
+func themeEdits(raw []byte) theme.Theme {
+	if len(raw) == 0 {
+		return theme.Make("")
+	}
+	over, err := theme.UnmarshalValues(theme.Make(""), raw)
+	if err != nil {
+		log.Printf("mastering: the theme's changes: %v", err)
+	}
+	return over
+}
+
+// themeSections are the values the theme editor puts first, in the
+// studio's words. Sizes are left to All values: the dialogs are laid
+// out for the dark theme's.
+func themeSections() []themeedit.Section {
+	return []themeedit.Section{
+		{Title: "Studio", Fields: []themeedit.Field{
+			{Key: audioui.Ground.Key(), Label: "Background", Detail: "Behind everything, the meters included."},
+			{Key: studioPanel.Key(), Label: "Panels", Detail: "The surfaces on the background, such as the editor's."},
+			{Key: audioui.Raised.Key(), Label: "Raised", Detail: "Cards, buttons and a fader's cap."},
+			{Key: studioInk.Key(), Label: "Text", Detail: "The studio's own words and faint lines."},
+		}},
+		{Title: "Sound", Fields: []themeedit.Field{
+			{Key: audioui.Sound.Key(), Label: "What plays", Detail: "The waveform, the spectrum, and a reading on its mark."},
+			{Key: audioui.Spread.Key(), Label: "References", Detail: "References, gaps, fades and the loudness range."},
+			{Key: audioui.Near.Key(), Label: "Near the mark", Detail: "A reading near its mark, and notes."},
+			{Key: audioui.Over.Key(), Label: "Off the mark", Detail: "A reading off its mark."},
+			{Key: audioui.Short.Key(), Label: "Short-term loudness", Detail: "The short-term loudness's curve."},
+		}},
+		{Title: "Controls", Fields: []themeedit.Field{
+			{Key: widget.Accent.Key(), Label: "Accent", Detail: "Focus rings, links and what is chosen."},
+			{Key: widget.Selection.Key(), Label: "Selection", Detail: "Behind text selected."},
+		}},
+		{Title: "Motion", Fields: []themeedit.Field{
+			{Key: widget.Quick.Key(), Label: "Quick moves", Detail: "Buttons, switches and highlights as they answer the pointer."},
+			{Key: widget.Settle.Key(), Label: "Settling", Detail: "Panels, tabs and dialogs as they open, close and move."},
+			{Key: theme.Switch.Key(), Label: "Theme change", Detail: "Every colour as the studio takes another theme."},
+		}},
+	}
 }

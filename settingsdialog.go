@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"runtime"
@@ -11,6 +12,8 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/asio"
 	"github.com/marrasen/gunim/install"
+	"github.com/marrasen/gunim/theme"
+	"github.com/marrasen/gunim/themeedit"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -25,8 +28,10 @@ type (
 		Output  Output
 		Drivers []string
 		Now     OutputState
-		// Theme is the theme's name.
+		// Theme is the theme's name, and Edits the changes made to it,
+		// as theme.MarshalValues writes them.
 		Theme string
+		Edits []byte
 		// Installed says the studio is installed, Updates how it takes
 		// newer releases, and Beta that it takes pre-releases too.
 		Installed bool
@@ -44,6 +49,12 @@ type (
 	SettingsClosed struct{}
 	// ChooseTheme paints the studio in the theme named.
 	ChooseTheme struct{ Name string }
+	// SaveThemeEdits keeps the changes made to the theme named, as
+	// theme.MarshalValues writes them: none takes it back to itself.
+	SaveThemeEdits struct {
+		Theme string
+		Edits []byte
+	}
 	// SetUpdates sets how the installed studio takes newer releases, as
 	// install.UpdateMode names it.
 	SetUpdates struct{ Mode string }
@@ -69,6 +80,14 @@ var updateModes = []struct {
 	{install.UpdatesOff, "Look for none"},
 }
 
+// The settings' dialog's width, and its width on the Look tab, which
+// lookTab is.
+const (
+	settingsWidth = 600
+	wideLook      = 1040
+	lookTab       = 1
+)
+
 // settingsDialog is the settings' dialog, a tab for each part.
 type settingsDialog struct {
 	*widget.Dialog
@@ -78,8 +97,11 @@ type settingsDialog struct {
 	dither, auto               *widget.Checkbox
 	panel                      *widget.Button
 	now, path, problem         *widget.Label
-	// The look's, and the updates'.
+	// The look's: editor edits the theme called editing, and the
+	// dialog is wideLook wide on its tab. Then the updates'.
 	look, updates *widget.Dropdown
+	editor        *themeedit.Editor
+	editing       string
 	beta          *widget.Checkbox
 	check         *widget.Button
 	installNote   *widget.Label
@@ -87,7 +109,7 @@ type settingsDialog struct {
 
 func newSettingsDialog(d SettingsDraft) *settingsDialog {
 	dlg := widget.NewDialog("Settings")
-	dlg.Width = 600
+	dlg.Width = settingsWidth
 	s := &settingsDialog{Dialog: dlg, draft: d}
 	set := func() gunim.Intent { return SetOutput{Output: s.output()} }
 
@@ -150,7 +172,20 @@ func newSettingsDialog(d SettingsDraft) *settingsDialog {
 	s.look.Label = "Theme"
 	s.look.SetSelected(max(0, slices.IndexFunc(studioThemes, func(t studioTheme) bool { return t.Name == d.Theme })), nil)
 	s.look.OnChange = func(i int, _ *gunim.UI) gunim.Intent { return ChooseTheme{Name: studioThemes[i].Name} }
-	lookPage := widget.NewForm().Add("Theme", widget.Row(s.look))
+	s.editing = d.Theme
+	s.editor = themeedit.New(themeedit.Options{
+		Base: editorBase(d.Theme), Overrides: themeEdits(d.Edits), Sections: themeSections(),
+		ChosenTitle: "The studio", Preview: newThemePreview(), PreviewTitle: appName,
+		// Each change paints the window at once, and is kept as it ends.
+		OnChange: func(th theme.Theme, u *gunim.UI) gunim.Intent {
+			th.Name = s.editing
+			u.UseTheme(th)
+			return nil
+		},
+		OnCommit: func(over theme.Theme, _ *gunim.UI) gunim.Intent { return s.saveEdits(over) },
+	})
+	lookPage := widget.Column(widget.NewForm().Add("Theme", widget.Row(s.look)), s.editor)
+	lookPage.Cross = widget.CrossStretch
 
 	modes := make([]string, len(updateModes))
 	for i, m := range updateModes {
@@ -169,7 +204,18 @@ func newSettingsDialog(d SettingsDraft) *settingsDialog {
 		Add("", widget.Row(s.check))
 	updatesPage := widget.Column(updates, s.installNote)
 
-	dlg.Body = widget.NewTabs([]string{"Sound", "Look", "Updates"}, soundPage, lookPage, updatesPage)
+	tabs := widget.NewTabs([]string{"Sound", "Look", "Updates"}, soundPage, lookPage, updatesPage)
+	// The theme editor wants room for its controls and its preview side
+	// by side.
+	tabs.OnChange = func(i int, u *gunim.UI) gunim.Intent {
+		dlg.Width = settingsWidth
+		if i == lookTab {
+			dlg.Width = wideLook
+		}
+		u.Invalidate()
+		return nil
+	}
+	dlg.Body = tabs
 	dlg.SetButtons("Done", "")
 	dlg.OnAccept = widget.Sends(SettingsClosed{})
 	dlg.OnDismiss = widget.Sends(SettingsClosed{})
@@ -183,6 +229,12 @@ func (s *settingsDialog) show(d SettingsDraft, u *gunim.UI) {
 		s.buffer.SetItems(widget.Labels(bufferNames(d.Output.rate())...))
 	}
 	s.draft = d
+	if d.Theme != s.editing {
+		// Another theme picked: its changes are edited from now on.
+		s.editing = d.Theme
+		s.editor.SetBase(editorBase(d.Theme), u)
+		s.editor.SetOverrides(themeEdits(d.Edits), u)
+	}
 	if i := slices.Index(d.Drivers, d.Output.Driver) + 1; i != s.driver.Selected() {
 		// The output changed outside the dialog, as from the toast of a
 		// driver that failed.
@@ -220,6 +272,29 @@ func (s *settingsDialog) fill(d SettingsDraft, u *gunim.UI) {
 		s.installNote.Text = "The studio takes newer releases once it is installed."
 	}
 	s.now.Text, s.path.Text, s.problem.Text = soundNow(d.Now), soundPath(d), soundProblem(d)
+}
+
+// saveEdits asks to keep over as the changes to the theme edited.
+func (s *settingsDialog) saveEdits(over theme.Theme) gunim.Intent {
+	in := SaveThemeEdits{Theme: s.editing}
+	if over.Len() > 0 {
+		data, err := theme.MarshalValues(over)
+		if err != nil {
+			log.Printf("mastering: keeping the theme's changes: %v", err)
+			return nil
+		}
+		in.Edits = data
+	}
+	return in
+}
+
+// editorBase is the theme called name, as the theme editor starts from
+// it: named in the words the theme menu uses, for its header.
+func editorBase(name string) theme.Theme {
+	t := studioThemeNamed(name)
+	th := t.Theme
+	th.Name = t.Label
+	return th
 }
 
 // output returns the sound's settings as the dialog shows them.
@@ -348,7 +423,7 @@ func soundProblem(d SettingsDraft) string {
 
 // settingsDraft is the settings' dialog's state.
 func (a *app) settingsDraft() SettingsDraft {
-	return SettingsDraft{Output: a.output, Drivers: a.drivers, Now: a.d.outputState(), Theme: a.theme,
+	return SettingsDraft{Output: a.output, Drivers: a.drivers, Now: a.d.outputState(), Theme: a.theme, Edits: a.themeEdits[a.theme],
 		Installed: a.installed != nil, Updates: a.updatesMode(), Beta: a.Beta, Checking: a.checking, Checked: a.checked}
 }
 
@@ -385,6 +460,34 @@ func (a *app) openSettings(open bool) {
 	if err != nil {
 		log.Print(err)
 	}
+}
+
+// saveThemeEdits keeps the changes made to a theme, and gives the
+// window the theme with them, to take at its name. The window wears
+// them already: the editor put them on as they were made.
+func (a *app) saveThemeEdits(in SaveThemeEdits) {
+	if themeNamed(in.Theme) != in.Theme || (len(in.Edits) > 0 && !json.Valid(in.Edits)) {
+		return
+	}
+	if len(in.Edits) == 0 {
+		delete(a.themeEdits, in.Theme)
+	} else {
+		if a.themeEdits == nil {
+			a.themeEdits = map[string]json.RawMessage{}
+		}
+		a.themeEdits[in.Theme] = in.Edits
+	}
+	a.writeSettings()
+	a.registerEdited(in.Theme)
+}
+
+// registerEdited gives the window the theme called name with the
+// changes made to it, to take at its name.
+func (a *app) registerEdited(name string) {
+	if a.registerTheme == nil {
+		return
+	}
+	a.registerTheme(themeEdits(a.themeEdits[name]).Over(studioThemeNamed(name).Theme))
 }
 
 // tellFallback has the window ask about a driver chosen that failed to
@@ -493,6 +596,8 @@ func (a *app) handleSettings(in gunim.Intent) {
 		if a.c != nil {
 			_ = a.c.SetTheme(a.theme)
 		}
+	case SaveThemeEdits:
+		a.saveThemeEdits(in)
 	case CheckForUpdates:
 		a.checkForUpdates()
 	case UseSystemSound:
