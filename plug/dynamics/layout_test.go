@@ -125,3 +125,18 @@ func TestTheSidechainsControlsWorkThroughTheHost(t *testing.T) {
 		t.Errorf("set to the whole sound elsewhere, the selector shows %d, the frequency greyed %v", pn.side.Selected(), pn.freq.Disabled)
 	}
 }
+
+func TestEachSectionsPowerLampStandsAtTheLeftOfItsHead(t *testing.T) {
+	p, h := newDynamics(t)
+	pn, ok := p.View(plug.Panel, h).(*panel)
+	if !ok {
+		t.Fatal("the panel is of another type")
+	}
+	comp := pn.sections[2]
+	b := boundsOf(t, pn, geom.Sz(1600, 860), comp, comp.Switch, comp.Knobs[0])
+	sec, lamp, knob := b[0], b[1], b[2]
+	if lamp.Size() != geom.Sz(plugui.PowerSize, plugui.PowerSize) || lamp.Min.X > sec.Min.X+plugui.SectionPad ||
+		lamp.Max.Y > knob.Min.Y || lamp.Min.Y < sec.Min.Y {
+		t.Errorf("the compressor's lamp is at %v, in the section at %v over its knob at %v", lamp, sec, knob)
+	}
+}

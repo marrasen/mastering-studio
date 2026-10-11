@@ -1,6 +1,8 @@
 package plugui
 
 import (
+	"strings"
+
 	"math"
 
 	"github.com/marrasen/gunim"
@@ -12,13 +14,13 @@ import (
 )
 
 // Section is a part of a plugin's controls, on a card of glass: its
-// name; a switch, where it can be switched off; its knobs, greyed while
-// it is off; and after them any other controls it has, as a selector or
-// a button.
+// name, after a power lamp where it can be switched off; its knobs,
+// greyed while it is off; and after them any other controls it has, as
+// a selector or a button.
 type Section struct {
 	Name   string
 	On     uint32
-	Switch *widget.Switch
+	Switch *Power
 	Knobs  []*Knob
 	extras []extra
 	size   geom.Size
@@ -50,7 +52,7 @@ func NewSection(h plug.Host, d *plug.Descriptor, name string, on uint32, ids ...
 		s.Knobs = append(s.Knobs, NewKnob(h, p))
 	}
 	if on != 0 {
-		s.Switch = widget.NewSwitch("")
+		s.Switch = NewPower(strings.ToLower(name))
 		s.Switch.SetChecked(h.Param(on) > 0.5, nil)
 		s.Switch.OnChange = func(v bool, u *gunim.UI) gunim.Intent {
 			h.Begin(on, u)
@@ -135,8 +137,8 @@ func (s *Section) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children
 	}
 	if s.Switch != nil {
 		k := kids.At(kids.Len() - 1)
-		sz := k.Layout(gunim.Constraints{Max: geom.Sz(60, 22)})
-		k.Place(geom.Pt(s.size.W-SectionPad-sz.W, (SectionHead-sz.H)/2+2))
+		k.Layout(gunim.Tight(geom.Sz(PowerSize, PowerSize)))
+		k.Place(geom.Pt(SectionPad-3, (SectionHead-PowerSize)/2+2))
 	}
 	return s.size
 }
@@ -147,7 +149,12 @@ func (s *Section) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gun
 	ink := widget.Ink.Get(th)
 	PaintGlass(p, th, geom.Rect{Max: box.Point()}, widget.CardRadius.Get(th))
 	name := audioui.Shaped(s.Name, 10, true, false)
-	name.Paint(p, geom.Pt(SectionPad, (SectionHead-name.Height())/2+2), audioui.Faded(ink, 0.55))
+	x := float32(SectionPad)
+	if s.Switch != nil {
+		// After its power lamp.
+		x += PowerSize
+	}
+	name.Paint(p, geom.Pt(x, (SectionHead-name.Height())/2+2), audioui.Faded(ink, 0.55))
 	for k := range kids.All {
 		k.Paint(p)
 	}

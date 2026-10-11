@@ -120,3 +120,38 @@ func TestATrimPotsSlotTurnsWithItsValue(t *testing.T) {
 		}
 	}
 }
+
+func TestAPowerLampSwitchesAndGlides(t *testing.T) {
+	p := NewPower("gate")
+	var told []bool
+	p.OnChange = func(on bool, _ *gunim.UI) gunim.Intent {
+		told = append(told, on)
+		return nil
+	}
+	if p.Checked() || p.tooltip() != "Switch the gate on" {
+		t.Errorf("new, it is on %v and says %q", p.Checked(), p.tooltip())
+	}
+	p.SetChecked(true, nil)
+	if !p.Checked() || p.on.Value() != 1 || p.tooltip() != "Switch the gate off" {
+		t.Errorf("set on, it is on %v, lit %v, and says %q", p.Checked(), p.on.Value(), p.tooltip())
+	}
+	if s := p.Layout(gunim.Constraints{Max: geom.Sz(100, 100)}, gunim.Frame{}, gunim.Children{}); s != geom.Sz(PowerSize, PowerSize) {
+		t.Errorf("it stands %v", s)
+	}
+	if info := p.Access(); info.Role != access.RoleSwitch || info.State != access.StateChecked || info.Name != "gate" {
+		t.Errorf("it reads as %+v", info)
+	}
+}
+
+func TestASectionsPowerLampStandsBeforeItsName(t *testing.T) {
+	d := &plug.Descriptor{Params: []plug.Param{{ID: 1, Name: "On", Max: 1, Steps: 1}, {ID: 2, Name: "A", Max: 1}}}
+	h := &host{values: map[uint32]float64{1: 1}}
+	s := NewSection(h, d, "COMPRESSOR", 1, 2)
+	if s.Switch == nil || !s.Switch.Checked() || s.Switch.Name != "compressor" {
+		t.Fatalf("a section switched by a parameter on has %+v", s.Switch)
+	}
+	s.Switch.OnChange(false, nil)
+	if h.values[1] != 0 || !s.Knobs[0].Disabled {
+		t.Errorf("switched off, the parameter is %v and its knob greyed %v", h.values[1], s.Knobs[0].Disabled)
+	}
+}

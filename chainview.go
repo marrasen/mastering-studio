@@ -14,6 +14,7 @@ import (
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/widget"
+	"github.com/marrasen/mastering-studio/plug/plugui"
 )
 
 // chainRow is the track's chain: its plugins as cards, in the order the
@@ -1005,15 +1006,9 @@ func (c *chainRow) paintCard(p *paint.Painter, pal palette, k *chainCard) {
 		w := max(open, onOff(failed))
 		p.RRect(geom.Rc(r.Min.X+10, r.Max.Y-2.5, r.Size().W-20, 2.5), 1.25, paint.Solid(faded(edge, w)))
 	}
-	// The light: lit while the plugin runs.
-	at := c.powerAt(k)
-	lit := mix(faded(pal.ink, 0.25), pal.teal, on)
-	if on > 0.01 {
-		p.ShadowRRect(geom.Rc(at.X-6, at.Y-6, 12, 12), 6, paint.Solid(faded(pal.teal, on)),
-			paint.Shadow{Blur: 10 * on, Color: faded(pal.teal, 0.5*on)})
-	}
-	p.RRect(geom.Rc(at.X-7, at.Y-7, 14, 14), 7, paint.Solid(faded(lit, 0.25+0.2*(1-on))))
-	p.RRect(geom.Rc(at.X-4, at.Y-4, 8, 8), 4, paint.Solid(mix(faded(pal.ink, 0.3), pal.night, on)))
+	// The light: lit while the plugin runs, as the plugins' own power
+	// lamps are.
+	plugui.PaintPower(p, c.powerAt(k), on, 0, pal.teal, pal.ink)
 	room := r.Size().W - 44
 	words := mix(pal.quiet(0.45), pal.ink, on)
 	paintFit(p, k.slot.title(), 12, true, geom.Pt(r.Min.X+34, r.Min.Y+8), room, words)
