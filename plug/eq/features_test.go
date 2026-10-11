@@ -646,3 +646,30 @@ func TestTheTunerTurnsTheLookAndResetsIt(t *testing.T) {
 		t.Errorf("clicked again, the tuner is still open")
 	}
 }
+
+func TestTheTopControlsStandOnGlassOverTheGraph(t *testing.T) {
+	p, h := newEQ(t)
+	p.setBands(bell)
+	v, w, run := fullOf(t, p, h)
+	graph, bar := boundsIn(t, w, run, v.panel), boundsIn(t, w, run, v.bar)
+	if graph.Min != (geom.Point{}) || !graph.Contains(bar.Min) || !graph.Contains(bar.Max.Sub(geom.Pt(1, 1))) {
+		t.Fatalf("the graph is %v and the bar %v: the graph not under the bar", graph, bar)
+	}
+	for _, n := range []gunim.Node{v.views, v.match, v.amount} {
+		if b := boundsIn(t, w, run, n); !bar.Contains(b.Min) || !bar.Contains(b.Max.Sub(geom.Pt(1, 1))) {
+			t.Errorf("a control along the top, %v, is off the bar, %v", b, bar)
+		}
+	}
+	// A double-click on the bar, between its controls, adds no band to
+	// the graph under it.
+	at := geom.Pt(v.barAt.Center().X-60, v.barAt.Center().Y)
+	for _, n := range []int{1, 2} {
+		w.Input(input.PointerMove{Pos: at})
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: n})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	}
+	run(2)
+	if len(p.Bands()) != 1 {
+		t.Errorf("a double-click on the bar reached the graph: %d bands", len(p.Bands()))
+	}
+}

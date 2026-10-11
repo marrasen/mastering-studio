@@ -34,8 +34,10 @@ type full struct {
 	row    *bandRow
 	list   *bandList
 	scroll *widget.Scroll
-	// tuner tunes how the graph shows behind the list.
+	// tuner tunes how the graph shows behind the list, and bar is the
+	// pane of glass the controls along the top stand on.
 	tuner *plugui.Tuner
+	bar   *glassPane
 	// listed is how far the list shows, from 0 for the graph to 1, and
 	// stopIn how far the stop button is in.
 	listed, stopIn *anim.Float
@@ -49,9 +51,9 @@ type full struct {
 	stopPoll  func()
 	calm      func()
 	size      geom.Size
-	// matchAt and rowAt are where the match button and the band's row
-	// are.
-	matchAt, rowAt geom.Rect
+	// matchAt, rowAt and barAt are where the match button, the band's
+	// row and the bar along the top are.
+	matchAt, rowAt, barAt geom.Rect
 }
 
 // The match button's words, at rest and once done.
@@ -67,6 +69,7 @@ func newFull(p *plugin, h plug.Host) *full {
 	v := &full{p: p, host: h, panel: pn, g: pn.graph, listed: anim.NewFloat(0), stopIn: anim.NewFloat(0),
 		tuner: plugui.NewTuner("Tune how the graph shows behind the bands")}
 	v.Add(v.listed, v.stopIn)
+	v.bar = &glassPane{radius: 12}
 	v.views = widget.NewSegmented("Graph", "Bands")
 	v.views.Tooltip = "Show the graph, with the band picked under it, or every band with all its knobs"
 	v.views.OnChange = func(i int, u *gunim.UI) gunim.Intent {
@@ -240,14 +243,22 @@ func (v *full) Follow(id uint32, val float64, u *gunim.UI) {
 
 // Children implements [gunim.Composite].
 func (v *full) Children() []gunim.Node {
-	return []gunim.Node{v.panel, v.row, v.scroll, v.views, v.match, v.stop, v.amount, v.tuner.Button, v.tuner.Card}
+	// The bar's glass before what stands on it, which the pointer reaches
+	// first.
+	return []gunim.Node{v.panel, v.row, v.scroll, v.bar, v.views, v.match, v.stop, v.amount, v.tuner.Button,
+		v.tuner.Card}
 }
 
-// barH is how tall the bar along the top is, gap the room between its
-// parts, and rowInset how far the band picked's row stands in from the
-// graph's edges.
+// barH is how tall the things on the bar along the top are, barInset
+// how far in from the view's edges the bar stands, and barPadX and
+// barPadY the room on it round them; gap is the room between parts, and
+// rowInset how far the band picked's row stands in from the graph's
+// edges.
 const (
 	barH     = plugui.CompactH
+	barInset = 12
+	barPadX  = 12
+	barPadY  = 4
 	gap      = 10
 	rowInset = 16
 )
@@ -256,62 +267,66 @@ const (
 func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	v.size = c.Max
 	size := v.size
-	// Along the top: the switch at the left, the knob at the right, and
-	// the match button, and the stop button as far in as it is, before
-	// the knob.
-	sw := kids.At(3).Layout(gunim.Constraints{Max: geom.Sz(220, 32)})
-	kids.At(3).Place(geom.Pt(0, (barH-sw.H)/2))
-	kids.At(6).Layout(gunim.Tight(geom.Sz(plugui.CompactW, plugui.CompactH)))
-	kids.At(6).Place(geom.Pt(size.W-plugui.CompactW, 0))
-	x := size.W - plugui.CompactW - gap
+	// The bar along the top, a pane of glass over the graph, in from its
+	// edges: on it the switch at the left, the knob at the right, and the
+	// match button, and the stop button as far in as it is, before the
+	// knob.
+	v.barAt = geom.Rc(barInset, barInset, max(size.W-2*barInset, 0), barH+2*barPadY)
+	o := v.barAt.Min.Add(geom.Pt(barPadX, barPadY))
+	right := v.barAt.Max.X - barPadX
+	sw := kids.At(4).Layout(gunim.Constraints{Max: geom.Sz(220, 32)})
+	kids.At(4).Place(o.Add(geom.Pt(0, (barH-sw.H)/2)))
+	kids.At(7).Layout(gunim.Tight(geom.Sz(plugui.CompactW, plugui.CompactH)))
+	kids.At(7).Place(geom.Pt(right-plugui.CompactW, o.Y))
+	x := right - plugui.CompactW - gap
 	stopIn := min(max(v.stopIn.Value(), 0), 1)
 	stopW := (32 + 6) * stopIn
 	if stopIn < 0.01 && v.stopIn.Target() == 0 {
-		kids.At(5).Layout(gunim.Tight(geom.Size{}))
+		kids.At(6).Layout(gunim.Tight(geom.Size{}))
 	} else {
-		kids.At(5).Layout(gunim.Tight(geom.Sz(32, 32)))
+		kids.At(6).Layout(gunim.Tight(geom.Sz(32, 32)))
 	}
-	kids.At(5).Place(geom.Pt(x-32, (barH-32)/2))
-	mw := kids.At(4).Layout(gunim.Constraints{Max: geom.Sz(260, 32)})
-	v.matchAt = geom.Rc(x-stopW-mw.W, (barH-mw.H)/2, mw.W, mw.H)
-	kids.At(4).Place(v.matchAt.Min)
-	// The graph and its row, or the list, the one out of sight taking no
-	// room, so the pointer reaches only the one shown.
-	top := float32(barH + gap)
-	body := max(size.H-top, 0)
+	kids.At(6).Place(geom.Pt(x-32, o.Y+(barH-32)/2))
+	mw := kids.At(5).Layout(gunim.Constraints{Max: geom.Sz(260, 32)})
+	v.matchAt = geom.Rc(x-stopW-mw.W, o.Y+(barH-mw.H)/2, mw.W, mw.H)
+	kids.At(5).Place(v.matchAt.Min)
+	// The graph fills the view, under the bar too, the band picked's row
+	// over it, on glass, centred near its foot; the list comes over it,
+	// under the bar, the graph darkening behind it. The one out of sight
+	// takes no room, so the pointer reaches only the one shown.
 	listed := min(max(v.listed.Value(), 0), 1)
 	rowH := float32(plugui.KnobH)
-	// The graph fills the room, the band picked's row over it, on glass,
-	// centred near its foot; the list comes over it all, the graph
-	// darkening behind it.
 	v.g.behind = listed
-	kids.At(0).Layout(gunim.Tight(geom.Sz(size.W, body)))
+	kids.At(0).Layout(gunim.Tight(size))
+	kids.At(0).Place(geom.Point{})
 	rowW := min(size.W-2*rowInset, v.row.shownWidth())
 	if listed > 0.99 && v.listed.Target() == 1 {
 		kids.At(1).Layout(gunim.Tight(geom.Size{}))
 	} else {
 		kids.At(1).Layout(gunim.Tight(geom.Sz(rowW, rowH)))
 	}
-	kids.At(0).Place(geom.Pt(0, top))
-	v.rowAt = geom.Rc((size.W-rowW)/2, top+max(body-rowH-rowInset, 0), rowW, rowH)
+	v.rowAt = geom.Rc((size.W-rowW)/2, max(size.H-rowH-rowInset, 0), rowW, rowH)
 	kids.At(1).Place(v.rowAt.Min)
+	top := v.barAt.Max.Y + gap
 	if listed < 0.01 && v.listed.Target() == 0 {
 		kids.At(2).Layout(gunim.Tight(geom.Size{}))
 	} else {
-		kids.At(2).Layout(gunim.Tight(geom.Sz(size.W, body)))
+		kids.At(2).Layout(gunim.Tight(geom.Sz(size.W, max(size.H-top, 0))))
 	}
 	kids.At(2).Place(geom.Pt(0, top))
 	// The tuner's button, after the switch, as the list shows; its card
-	// under it, as it opens.
+	// under the bar, as it opens.
 	tuneShown := !(listed < 0.01 && v.listed.Target() == 0)
 	if tuneShown {
-		kids.At(7).Layout(gunim.Tight(geom.Sz(32, 32)))
+		kids.At(8).Layout(gunim.Tight(geom.Sz(32, 32)))
 	} else {
-		kids.At(7).Layout(gunim.Tight(geom.Size{}))
+		kids.At(8).Layout(gunim.Tight(geom.Size{}))
 	}
-	kids.At(7).Place(geom.Pt(sw.W+gap, (barH-32)/2))
-	kids.At(8).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
-	kids.At(8).Place(geom.Pt(sw.W+gap, barH-4))
+	kids.At(8).Place(o.Add(geom.Pt(sw.W+gap, (barH-32)/2)))
+	kids.At(9).Layout(gunim.Constraints{Max: geom.Sz(plugui.TunerW, plugui.TunerH)})
+	kids.At(9).Place(geom.Pt(o.X+sw.W+gap, v.barAt.Max.Y+4))
+	kids.At(3).Layout(gunim.Tight(v.barAt.Size()))
+	kids.At(3).Place(v.barAt.Min)
 	return size
 }
 
@@ -348,14 +363,31 @@ func (v *full) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 		paintFit(p, msg, ReadoutSize.Get(th), false, geom.Pt(4, r.Min.Y+(r.Size().H-ReadoutSize.Get(th))/2),
 			box.W-8, audioui.Faded(widget.Ink.Get(th), 0.5*(1-listed)*(1-v.row.in.Value())))
 	}
-	for i := 3; i < 7; i++ {
-		if i == 5 {
-			fade(5, min(max(v.stopIn.Value(), 0), 1), 0)
+	// The bar's glass, then what stands on it.
+	kids.At(3).Paint(p)
+	for i := 4; i < 8; i++ {
+		if i == 6 {
+			fade(6, min(max(v.stopIn.Value(), 0), 1), 0)
 			continue
 		}
 		kids.At(i).Paint(p)
 	}
-	fade(7, listed, 0)
+	fade(8, listed, 0)
 	// The tuner's card, over the rest.
-	kids.At(8).Paint(p)
+	kids.At(9).Paint(p)
+}
+
+// glassPane is a pane of glass over a display, as the bar along the top
+// is: it blurs what is drawn behind it, and a click on it reaches nothing
+// under it.
+type glassPane struct{ radius float32 }
+
+// Layout implements [gunim.Node].
+func (*glassPane) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
+	return c.Max
+}
+
+// Paint implements [gunim.Node].
+func (g *glassPane) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
+	plugui.PaintGlass(p, f.Theme, geom.Rect{Max: box.Point()}, g.radius)
 }
