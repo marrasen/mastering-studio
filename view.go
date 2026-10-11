@@ -203,7 +203,6 @@ const (
 	listW   = 340
 	metersW = 330
 	toolsH  = 64
-	chainH  = 60
 	headH   = 44
 	transH  = 76
 	stripH  = 92
@@ -231,6 +230,9 @@ func (r *root) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	place(6, geom.Rect{Min: geom.Pt(area.Max.X-metersW, top), Max: area.Max})
 	x0, x1 := area.Min.X+listW+gutter, area.Max.X-metersW-gutter
 	bottom := area.Max.Y - gutter
+	// The chain takes a second row where one has no room for it.
+	r.chain.wantRows(x1 - x0)
+	chainH := r.chain.height()
 	place(5, geom.Rc(x0, bottom-stripH, x1-x0, stripH))
 	place(4, geom.Rc(x0, bottom-stripH-gutter-transH, x1-x0, transH))
 	place(7, geom.Rc(x0, bottom-stripH-gutter-transH-gutter-chainH, x1-x0, chainH))

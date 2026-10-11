@@ -392,18 +392,77 @@ func TestADraggedCardMovesItsPluginTheOthersMakingWay(t *testing.T) {
 }
 
 func TestTheChainsCardsLeaveRoomForItsButtons(t *testing.T) {
+	// A plugin more: one row, its cards clear of the buttons.
 	a := chained()
-	for i := range 4 {
-		a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 20 + i, Name: "Another Plugin Of Some Length", Vendor: "Somebody"})
-	}
+	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 20, Name: "Trim", Vendor: "Somebody"})
 	_, r, run := stage(t, a)
 	run(40)
 	c := r.chain
+	menuAt := c.size.W - menuPillWidth(c.more.words)
 	last := c.cards[c.order[len(c.order)-1]]
-	end := c.cardRect(last).Max.X
-	copyAt := c.size.W - pillWidth("Copy to…")
-	if end > copyAt || c.addX+pillWidth("+ Plugin") > copyAt+1 {
-		t.Fatalf("the cards end at %.0f and the add button at %.0f, past the copy button at %.0f", end, c.addX+pillWidth("+ Plugin"), copyAt)
+	if c.rows != 1 || c.cardRect(last).Max.X > menuAt || c.addX+pillWidth("+ Plugin") > menuAt+1 {
+		t.Fatalf("in %d rows, the cards end at %.0f and the add button at %.0f, past the menu at %.0f", c.rows,
+			c.cardRect(last).Max.X, c.addX+pillWidth("+ Plugin"), menuAt)
+	}
+}
+
+func TestAChainTooLongForItsRowTakesTwo(t *testing.T) {
+	a := chained()
+	for i := range 6 {
+		a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 20 + i, Name: "Another Plugin Of Some Length", Vendor: "Somebody"})
+	}
+	_, r, run := stage(t, a)
+	run(60)
+	c := r.chain
+	if c.rows != 2 || math.Abs(float64(c.height()-(chainH+rowStep))) > 0.5 || math.Abs(float64(c.size.H-c.height())) > 0.5 {
+		t.Fatalf("a long chain takes %d rows, %v tall, laid out %v", c.rows, c.height(), c.size.H)
+	}
+	// The first row clear of the menu, the second of the add button,
+	// which ends inside the row; the second row's cards under the first's.
+	menuAt := c.size.W - menuPillWidth(c.more.words)
+	rows := c.splitRows(c.order)
+	for _, id := range rows[0] {
+		if r := c.cardRect(c.cards[id]); r.Max.X > menuAt || math.Abs(float64(r.Center().Y-rowMid(0))) > 0.5 {
+			t.Errorf("a card of the first row is at %v, the menu at %.0f", r, menuAt)
+		}
+	}
+	for _, id := range rows[1] {
+		if r := c.cardRect(c.cards[id]); r.Max.X > c.addX || math.Abs(float64(r.Center().Y-rowMid(1))) > 0.5 {
+			t.Errorf("a card of the second row is at %v, the add button at %.0f", r, c.addX)
+		}
+	}
+	if c.addX+pillWidth("+ Plugin") > c.size.W || c.addY != rowMid(1) {
+		t.Errorf("the add button is at %.0f, %.0f, in a row %.0f wide", c.addX, c.addY, c.size.W)
+	}
+	// The sound runs along both rows, round from the first to the second.
+	path := c.soundPath()
+	if len(path) != 6 || path[0].Y != rowMid(0) || path[len(path)-1].Y != rowMid(1) {
+		t.Errorf("the sound's line runs %v", path)
+	}
+	// A card dragged down onto the second row lands there.
+	first := c.cards[c.order[0]]
+	c.moving, c.grab = c.order[0], 0
+	first.x.Jump(c.cardRect(c.cards[rows[1][0]]).Center().X + 5)
+	first.y.Jump(rowMid(1))
+	if to := c.landing(); to != len(rows[0]) {
+		t.Errorf("dragged onto the second row past its first card, the card would land at %d, want %d", to, len(rows[0]))
+	}
+	c.moving = 0
+}
+
+func TestADoubleClickOnACardRenamesIt(t *testing.T) {
+	w, r, run := stage(t, chained())
+	run(40)
+	b := boundsOf(t, w, run, r.chain)
+	at := b.Min.Add(r.chain.cardRect(r.chain.cards[8]).Center().Add(geom.Pt(20, 0)))
+	w.Input(input.PointerMove{Pos: at})
+	for _, n := range []int{1, 2} {
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: n})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	}
+	run(2)
+	if r.chain.renaming != 8 {
+		t.Errorf("a double-click on the card names slot %d", r.chain.renaming)
 	}
 }
 

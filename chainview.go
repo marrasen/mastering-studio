@@ -60,8 +60,12 @@ type chainRow struct {
 	moveTo  int
 	picker  widget.Palette
 	choices []PluginChoice
-	// addX is where the add button is.
-	addX float32
+	// addX is where the add button is, and addY the middle of its row.
+	addX, addY float32
+	// rows is how many rows the cards take, one or two, as the width
+	// has room for; tall is the row's height, gliding to theirs.
+	rows int
+	tall *anim.Float
 	// chipIn are the Go plugins' chips among the row's children, and
 	// their slots.
 	chipIn map[gunim.Node]int
@@ -91,7 +95,7 @@ type chainCard struct {
 	slot Slot
 	// lra is the loudness range out of the plugin, as drawn.
 	lra         *anim.Float
-	x, w        *anim.Float
+	x, w, y     *anim.Float
 	appear, on  *anim.Float
 	hover, open *anim.Float
 	gone        bool
@@ -102,12 +106,16 @@ const (
 	chainLabelW = 70
 	cardH       = 44
 	cardGap     = 26
+	// rowStep is how far the second row of cards stands under the
+	// first, and chainH how tall the chain is with one.
+	rowStep = cardH + 16
+	chainH  = 60
 )
 
 func newChainRow(r *root) *chainRow {
 	c := &chainRow{r: r, cards: map[int]*chainCard{}, hover: -1, press: -1, down: -1, inLRA: anim.NewFloat(0),
-		chipIn: map[gunim.Node]int{}}
-	c.Add(c.inLRA)
+		chipIn: map[gunim.Node]int{}, rows: 1, tall: anim.NewFloat(chainH)}
+	c.Add(c.inLRA, c.tall)
 	c.add = newPill("+ Plugin", c.openPicker)
 	c.more = newPill("Chain", c.openMore)
 	c.more.menu = true
@@ -167,9 +175,9 @@ func (c *chainRow) finish(text string, u *gunim.UI) {
 func (c *chainRow) card(s Slot) *chainCard {
 	k := c.cards[s.ID]
 	if k == nil {
-		k = &chainCard{x: anim.NewFloat(0), w: anim.NewFloat(0), appear: anim.NewFloat(0), on: anim.NewFloat(1),
-			hover: anim.NewFloat(0), open: anim.NewFloat(0), lra: anim.NewFloat(float32(s.LRA))}
-		c.Add(k.x, k.w, k.appear, k.on, k.hover, k.open, k.lra)
+		k = &chainCard{x: anim.NewFloat(0), w: anim.NewFloat(0), y: anim.NewFloat(chainH / 2), appear: anim.NewFloat(0),
+			on: anim.NewFloat(1), hover: anim.NewFloat(0), open: anim.NewFloat(0), lra: anim.NewFloat(float32(s.LRA))}
+		c.Add(k.x, k.w, k.y, k.appear, k.on, k.hover, k.open, k.lra)
 		c.cards[s.ID] = k
 	}
 	return k
@@ -197,7 +205,7 @@ func (c *chainRow) show(t Track, s Album) {
 		case keep[id]:
 		case switched:
 			// Another track's chain: its cards go at once.
-			c.Remove(k.x, k.w, k.appear, k.on, k.hover, k.open, k.lra)
+			c.Remove(k.x, k.w, k.y, k.appear, k.on, k.hover, k.open, k.lra)
 			delete(c.cards, id)
 		case !k.gone:
 			k.gone = true
@@ -309,47 +317,110 @@ func (c *chainRow) chipRect(k *chainCard) geom.Rect {
 	return geom.Rc(r.Min.X+34, r.Min.Y+23, max(r.Size().W-44, 0), cardH-27)
 }
 
-// Layout implements [gunim.Node]: the cards in a row after the label,
-// sliding to their places, the add button after them, and the copy
-// button at the end.
-func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
-	c.size = cs.Max
-	// The cards narrow to leave room for the buttons.
-	room := c.size.W - chainLabelW - pillWidth("+ Plugin") - menuPillWidth(c.more.words) - 16
+// rowRoom is how much room each row has for its cards: the first
+// beside the chain's menu, and the last before the add button, which
+// in one row are the same row.
+func (c *chainRow) rowRoom(w float32, rows int) (first, last float32) {
+	add, more := pillWidth("+ Plugin"), menuPillWidth(c.more.words)
+	if rows == 1 {
+		r := w - chainLabelW - add - more - 16
+		return r, r
+	}
+	return w - chainLabelW - more - 16, w - chainLabelW - add - 16
+}
+
+// wantRows sets how many rows the cards take in a row w wide: two where
+// they would narrow to under fitLeast of their width in one, and the
+// height they take glides there.
+func (c *chainRow) wantRows(w float32) {
 	var want float32
 	for _, id := range c.order {
-		want += cardWidth(c.cards[id].slot) + cardGap
-	}
-	fit := min(1, (room-float32(len(c.order))*cardGap)/max(want-float32(len(c.order))*cardGap, 1))
-	x := float32(chainLabelW)
-	for _, id := range c.placing() {
-		k := c.cards[id]
-		w := max(48, cardWidth(k.slot)*fit)
-		move := anim.Spring{Response: 0.3, Damping: 0.85}
-		if !k.placed {
-			k.x.Jump(x)
-			k.w.Jump(w)
-			k.placed = true
+		if k := c.cards[id]; k != nil {
+			want += cardWidth(k.slot)
 		}
-		// The card dragged goes where the pointer has it.
-		if id != c.moving {
-			k.x.Animate(x, move)
-		}
-		k.w.Animate(w, move)
-		x += w + cardGap
 	}
-	mid := c.size.H / 2
+	room, _ := c.rowRoom(w, 1)
+	n := float32(len(c.order))
+	rows := 1
+	if len(c.order) > 1 && (room-n*cardGap)/max(want, 1) < fitLeast {
+		rows = 2
+	}
+	c.rows = rows
+	if to := chainH + float32(rows-1)*rowStep; c.tall.Target() != to {
+		c.tall.Animate(to, anim.Spring{Response: 0.3, Damping: 0.9})
+	}
+}
+
+// fitLeast is how far the cards narrow in one row before they take two.
+const fitLeast = 0.8
+
+// height is how tall the chain stands now.
+func (c *chainRow) height() float32 { return c.tall.Value() }
+
+// rowMid is the middle of row i of cards.
+func rowMid(i int) float32 { return chainH/2 + float32(i)*rowStep }
+
+// splitRows returns the cards placed, in the rows they take: the first
+// row the first half, a card more where they are odd.
+func (c *chainRow) splitRows(order []int) [][]int {
+	if c.rows < 2 || len(order) < 2 {
+		return [][]int{order}
+	}
+	half := (len(order) + 1) / 2
+	return [][]int{order[:half], order[half:]}
+}
+
+// Layout implements [gunim.Node]: the cards in a row after the label,
+// or two where the row has no room for them, sliding to their places;
+// the add button after them, and the chain's menu at the end of the
+// first row.
+func (c *chainRow) Layout(cs gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
+	c.size = cs.Max
+	move := anim.Spring{Response: 0.3, Damping: 0.85}
+	x, mid := float32(chainLabelW), rowMid(0)
+	rows := c.splitRows(c.placing())
+	for ri, row := range rows {
+		first, last := c.rowRoom(c.size.W, len(rows))
+		room := first
+		if ri == len(rows)-1 {
+			room = last
+		}
+		// The cards narrow to leave room for the buttons.
+		var want float32
+		for _, id := range row {
+			want += cardWidth(c.cards[id].slot)
+		}
+		fit := min(1, (room-float32(len(row))*cardGap)/max(want, 1))
+		x, mid = float32(chainLabelW), rowMid(ri)
+		for _, id := range row {
+			k := c.cards[id]
+			w := max(48, cardWidth(k.slot)*fit)
+			if !k.placed {
+				k.x.Jump(x)
+				k.w.Jump(w)
+				k.y.Jump(mid)
+				k.placed = true
+			}
+			// The card dragged goes where the pointer has it.
+			if id != c.moving {
+				k.x.Animate(x, move)
+				k.y.Animate(mid, move)
+			}
+			k.w.Animate(w, move)
+			x += w + cardGap
+		}
+	}
 	aw := pillWidth("+ Plugin")
 	kids.At(0).Layout(gunim.Tight(geom.Sz(aw, 32)))
 	kids.At(0).Place(geom.Pt(x, mid-16))
-	c.addX = x
+	c.addX, c.addY = x, mid
 	cw := menuPillWidth(c.more.words)
 	kids.At(1).Layout(gunim.Tight(geom.Sz(cw, 32)))
-	kids.At(1).Place(geom.Pt(c.size.W-cw, mid-16))
+	kids.At(1).Place(geom.Pt(c.size.W-cw, rowMid(0)-16))
 	// The field over the card named.
-	fr := geom.Rc(0, mid-16, 160, 32)
+	fr := geom.Rc(0, rowMid(0)-16, 160, 32)
 	if k := c.cards[c.renaming]; k != nil {
-		fr = geom.Rc(k.x.Target(), mid-16, max(k.w.Target(), 160), 32)
+		fr = geom.Rc(k.x.Target(), k.y.Target()-16, max(k.w.Target(), 160), 32)
 	}
 	kids.At(2).Layout(gunim.Tight(fr.Size()))
 	kids.At(2).Place(fr.Min)
@@ -381,22 +452,36 @@ func (c *chainRow) placing() []int {
 }
 
 // landing is where in the chain the card dragged would land: after
-// every other card whose middle it has passed.
+// every card of a row above the row it is on, and every other card of
+// its row whose middle it has passed.
 func (c *chainRow) landing() int {
 	k := c.cards[c.moving]
 	mid := k.x.Value() + k.w.Value()/2
+	row := c.rowAt(k.y.Value())
 	to := 0
 	for _, id := range c.order {
-		if o := c.cards[id]; id != c.moving && o.x.Target()+o.w.Target()/2 < mid {
+		o := c.cards[id]
+		if id == c.moving {
+			continue
+		}
+		if r := c.rowAt(o.y.Target()); r < row || r == row && o.x.Target()+o.w.Target()/2 < mid {
 			to++
 		}
 	}
 	return to
 }
 
+// rowAt is the row of cards nearest y.
+func (c *chainRow) rowAt(y float32) int {
+	if c.rows < 2 || y < (rowMid(0)+rowMid(1))/2 {
+		return 0
+	}
+	return 1
+}
+
 // cardRect is where card k is.
 func (c *chainRow) cardRect(k *chainCard) geom.Rect {
-	return geom.Rc(k.x.Value(), (c.size.H-cardH)/2, k.w.Value(), cardH)
+	return geom.Rc(k.x.Value(), k.y.Value()-cardH/2, k.w.Value(), cardH)
 }
 
 // powerAt is the centre of card k's light.
@@ -423,7 +508,7 @@ func (c *chainRow) Step(dt time.Duration) bool {
 	moving := c.Group.Step(dt)
 	for id, k := range c.cards {
 		if k.gone && k.appear.Value() < 0.01 && !k.appear.Active() {
-			c.Remove(k.x, k.w, k.appear, k.on, k.hover, k.open, k.lra)
+			c.Remove(k.x, k.w, k.y, k.appear, k.on, k.hover, k.open, k.lra)
 			delete(c.cards, id)
 		}
 	}
@@ -443,6 +528,9 @@ func (c *chainRow) Handle(e input.Event, u *gunim.UI) bool {
 	case input.PointerMove:
 		if k := c.cards[c.moving]; k != nil {
 			k.x.Jump(e.Pos.X - c.grab)
+			if c.rows > 1 {
+				k.y.Jump(min(max(e.Pos.Y, rowMid(0)), rowMid(1)))
+			}
 			c.moveTo = c.landing()
 			break
 		}
@@ -450,7 +538,7 @@ func (c *chainRow) Handle(e input.Event, u *gunim.UI) bool {
 		c.setHover(id)
 		// A press that moves far enough along is a drag.
 		if k := c.cards[c.down]; k != nil && !e.Touch && len(c.order) > 1 {
-			if d := e.Pos.X - c.pressAt.X; d*d > 64 {
+			if d := e.Pos.Sub(c.pressAt); d.X*d.X+d.Y*d.Y > 64 {
 				c.moving, c.grab = c.down, c.pressAt.X-k.x.Value()
 				c.moveTo = slices.Index(c.order, c.down)
 				k.x.Jump(e.Pos.X - c.grab)
@@ -477,8 +565,13 @@ func (c *chainRow) Handle(e input.Event, u *gunim.UI) bool {
 			u.Send(c, SetBypass{Track: c.track, Slot: id, On: !on})
 			break
 		}
-		// A click opens the editor as the button comes up; a drag moves
-		// the card.
+		// A double-click renames it; a click opens the editor as the
+		// button comes up; a drag moves the card.
+		if e.Clicks == 2 {
+			c.down = -1
+			c.rename(id, u)
+			break
+		}
 		c.down, c.pressAt = id, e.Pos
 	case input.PointerUp:
 		id, down := c.moving, c.down
@@ -714,7 +807,7 @@ func (c *chainRow) openPresets(u *gunim.UI, del bool) {
 // cards, and the cards.
 func (c *chainRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
 	pal := colours(f.Theme)
-	mid := box.H / 2
+	mid := rowMid(0)
 	shaped("CHAIN", 9, true).Paint(p, geom.Pt(4, mid-12), faded(pal.teal, 0.85))
 	what := "no plugins"
 	if n := len(c.order); n > 0 {
@@ -722,15 +815,17 @@ func (c *chainRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 	}
 	shaped(what, 9, false).Paint(p, geom.Pt(4, mid+2), pal.quiet(0.45))
 	// The line the sound runs along, from the label to the add button,
-	// dotted with the sound flowing while it plays.
-	addX := c.addX
-	if addX > chainLabelW {
-		c.paintRanges(p, pal, mid, addX-4)
+	// down from the end of the first row to the start of the second
+	// where there are two, dotted with the sound flowing while it plays.
+	if path := c.soundPath(); len(path) > 1 {
+		c.paintRanges(p, pal)
 		line := faded(pal.ink, 0.12)
-		audioui.Segment(p, geom.Pt(chainLabelW-10, mid), geom.Pt(addX-4, mid), 1.5, line)
+		for i := 1; i < len(path); i++ {
+			audioui.Segment(p, path[i-1], path[i], 1.5, line)
+		}
 		if c.r.state.Playing {
-			for x := chainLabelW - 10 + float32(math.Mod(float64(c.flow), 18)); x < addX-4; x += 18 {
-				p.RRect(geom.Rc(x-1.5, mid-1.5, 3, 3), 1.5, paint.Solid(faded(pal.teal, 0.7)))
+			for _, at := range alongPath(path, float32(math.Mod(float64(c.flow), 18)), 18) {
+				p.RRect(geom.Rc(at.X-1.5, at.Y-1.5, 3, 3), 1.5, paint.Solid(faded(pal.teal, 0.7)))
 			}
 		}
 	}
@@ -754,16 +849,57 @@ func (c *chainRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gu
 // unit.
 const lraScale = 2.4
 
+// soundPath is the line the sound runs along: from the label, along
+// the first row, and where there are two, round from its end down to
+// the start of the second, and along it to the add button.
+func (c *chainRow) soundPath() []geom.Point {
+	start := float32(chainLabelW - 10)
+	if c.addX <= chainLabelW {
+		return nil
+	}
+	rows := c.splitRows(c.order)
+	if len(rows) < 2 {
+		return []geom.Point{{X: start, Y: rowMid(0)}, {X: c.addX - 4, Y: rowMid(0)}}
+	}
+	end := start
+	for _, id := range rows[0] {
+		end = max(end, c.cardRect(c.cards[id]).Max.X+cardGap/2)
+	}
+	turn := (rowMid(0) + rowMid(1)) / 2
+	return []geom.Point{{X: start, Y: rowMid(0)}, {X: end, Y: rowMid(0)}, {X: end, Y: turn}, {X: start, Y: turn},
+		{X: start, Y: rowMid(1)}, {X: c.addX - 4, Y: rowMid(1)}}
+}
+
+// alongPath returns the points along path every step, starting from
+// along it.
+func alongPath(path []geom.Point, starting, step float32) []geom.Point {
+	var out []geom.Point
+	at := starting
+	var gone float32
+	for i := 1; i < len(path); i++ {
+		a, b := path[i-1], path[i]
+		d := b.Sub(a)
+		l := float32(math.Hypot(float64(d.X), float64(d.Y)))
+		for ; at <= gone+l; at += step {
+			t := (at - gone) / max(l, 1e-6)
+			out = append(out, geom.Pt(a.X+d.X*t, a.Y+d.Y*t))
+		}
+		gone += l
+	}
+	return out
+}
+
 // paintRanges draws, behind the sound's line, a band as tall as the
 // loudness range: of the sound fed in, from the label to the first
 // card, then of the sound out of each plugin, to the next, and the last
-// to end.
-func (c *chainRow) paintRanges(p *paint.Painter, pal palette, mid, end float32) {
+// to the end of its row; where there are two rows, the second takes up
+// from its start.
+func (c *chainRow) paintRanges(p *paint.Painter, pal palette) {
 	alpha := float32(1)
 	if c.stale {
 		alpha = 0.45
 	}
-	band := func(x0, x1, lra float32) {
+	band := func(x0, x1, mid, lra float32) {
 		h := min(max(lra*lraScale, 0), cardH+12)
 		if x1 <= x0 || h < 1 {
 			return
@@ -775,14 +911,26 @@ func (c *chainRow) paintRanges(p *paint.Painter, pal palette, mid, end float32) 
 	}
 	// Each stretch runs a little under the cards either side, so the
 	// band reads as one.
-	x, lra := float32(chainLabelW-10), c.inLRA.Value()
-	for _, id := range c.order {
-		k := c.cards[id]
-		r := c.cardRect(k)
-		band(x, r.Min.X+8, lra)
-		x, lra = r.Max.X-8, k.lra.Value()
+	start := float32(chainLabelW - 10)
+	x, lra := start, c.inLRA.Value()
+	rows := c.splitRows(c.order)
+	for ri, row := range rows {
+		mid := rowMid(ri)
+		if ri > 0 {
+			x = start
+		}
+		for _, id := range row {
+			k := c.cards[id]
+			r := c.cardRect(k)
+			band(x, r.Min.X+8, mid, lra)
+			x, lra = r.Max.X-8, k.lra.Value()
+		}
+		end := c.addX - 4
+		if ri < len(rows)-1 {
+			end = x + 8 + cardGap/2
+		}
+		band(x, end, mid, lra)
 	}
-	band(x, end, lra)
 }
 
 // drawOrder is the cards, those leaving first, under the rest.
