@@ -38,15 +38,15 @@ func abApp(t *testing.T) (*app, *audio.Mixer) {
 }
 
 // seconds mixes d of sound.
-func seconds(mix *audio.Mixer, d time.Duration) {
-	mix.Mix(make([]float32, 2*int(d.Seconds()*audio.SampleRate)))
+func seconds(dk *deck, mix *audio.Mixer, d time.Duration) {
+	mixPaced(dk, mix, make([]float32, 2*int(d.Seconds()*audio.SampleRate)))
 }
 
 func TestEachSideKeepsItsTrackAndPlace(t *testing.T) {
 	a, mix := abApp(t)
 	one, ref := a.Tracks[0].ID, a.References[0].ID
 	a.handle(TogglePlay{})
-	seconds(mix, time.Second)
+	seconds(a.d, mix, time.Second)
 	a.handle(SwitchSide{})
 	if a.Side != SideB || a.Current != ref || a.Playing {
 		t.Fatalf("B took up track %d, playing %v, want the reference, %d, paused", a.Current, a.Playing, ref)
@@ -55,7 +55,7 @@ func TestEachSideKeepsItsTrackAndPlace(t *testing.T) {
 		t.Fatalf("A was left as %+v, want track %d playing a second in", a.Away, one)
 	}
 	a.handle(TogglePlay{})
-	seconds(mix, 500*time.Millisecond)
+	seconds(a.d, mix, 500*time.Millisecond)
 	a.handle(SwitchSide{})
 	at, _, id := a.d.position()
 	if a.Side != SideA || id != one || !a.Playing || (at-time.Second).Abs() > 50*time.Millisecond {
@@ -176,7 +176,7 @@ func TestAutoplayTakesUpTheNextTracksMatchedLevelOnTheTurn(t *testing.T) {
 	// The level heard over a stretch, from now.
 	rms := func(d time.Duration) float64 {
 		buf := make([]float32, 2*int(d.Seconds()*audio.SampleRate))
-		mix.Mix(buf)
+		mixPaced(a.d, mix, buf)
 		var ss float64
 		for _, v := range buf {
 			ss += float64(v * v)
@@ -186,9 +186,9 @@ func TestAutoplayTakesUpTheNextTracksMatchedLevelOnTheTurn(t *testing.T) {
 	// Into the first track's sound, a second and a half after its
 	// second of silence; then on, the application not yet told of the
 	// turn, into the second's.
-	seconds(mix, 2500*time.Millisecond)
+	seconds(a.d, mix, 2500*time.Millisecond)
 	first := rms(time.Second)
-	seconds(mix, 2300*time.Millisecond)
+	seconds(a.d, mix, 2300*time.Millisecond)
 	second := rms(time.Second)
 	// The deck hears of the turn on its next look, every 10 ms.
 	deadline := time.Now().Add(time.Second)
@@ -227,7 +227,7 @@ func TestFromTheLoopsOutTheSoundPlaysOnPastIt(t *testing.T) {
 	a.applyLoop()
 	// The out, as rendered: the second of silence before, then 2 s in.
 	a.handle(SeekTo{At: 3 * time.Second})
-	seconds(mix, 500*time.Millisecond)
+	seconds(a.d, mix, 500*time.Millisecond)
 	if at, _, _ := a.d.position(); at < 3200*time.Millisecond {
 		t.Fatalf("played on from the loop's out, the track is at %v, want past it", at)
 	}
