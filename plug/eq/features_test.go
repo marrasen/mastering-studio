@@ -139,55 +139,221 @@ func TestProcessingDynamicBandsAllocatesNothing(t *testing.T) {
 	}
 }
 
-func TestTheStripMakesABandDynamicAndMovesItsDynamics(t *testing.T) {
-	p, h := newEQ(t)
-	p.setBands(bell)
+// withUI runs fn on w's window goroutine, with a UI.
+func withUI(t *testing.T, w *gunim.Window, run func(int), fn func(u *gunim.UI)) {
+	t.Helper()
+	gunim.RegisterPatch(w, "eq", func(_ gunim.Node, _ struct{}, u *gunim.UI) { fn(u) })
+	if err := w.Client().Patch("eq", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+}
+
+// boundsIn returns where n is in w.
+func boundsIn(t *testing.T, w *gunim.Window, run func(int), n gunim.Node) geom.Rect {
+	t.Helper()
+	var b geom.Rect
+	withUI(t, w, run, func(u *gunim.UI) { b, _ = u.Bounds(n) })
+	return b
+}
+
+// dragUp drags the middle of n up by dy.
+func dragUp(t *testing.T, w *gunim.Window, run func(int), n gunim.Node, dy float32) {
+	t.Helper()
+	at := boundsIn(t, w, run, n).Center()
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(0, -dy/2))})
+	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(0, -dy))})
+	w.Input(input.PointerUp{Pos: at.Add(geom.Pt(0, -dy)), Button: input.ButtonPrimary})
+	run(1)
+}
+
+// fullOf returns p's full view, staged.
+func fullOf(t *testing.T, p *plugin, h *host) (*full, *gunim.Window, func(int)) {
+	t.Helper()
 	v, ok := p.View(plug.Full, h).(*full)
 	if !ok {
 		t.Fatal("the full view is of another type")
 	}
-	w, run := stage(t, geom.Sz(1200, 600), v)
-	g, s := v.panel.graph, v.strip
-	g.sel = 1
-	run(2)
-	stripAt := func(slot int) geom.Point {
-		var b geom.Rect
-		for _, r := range []geom.Rect{s.slotOf[slot]} {
-			b = r
-		}
-		return b.Center().Add(geom.Pt(0, g.size.H+16))
+	w, run := stage(t, geom.Sz(1200, 700), v)
+	return v, w, run
+}
+
+func TestTheBandsRowPicksItsKindAndMakesItDynamic(t *testing.T) {
+	p, h := newEQ(t)
+	p.setBands(bell)
+	v, w, run := fullOf(t, p, h)
+	withUI(t, w, run, func(u *gunim.UI) { v.g.sel = 1; v.changed(u) })
+	run(30)
+	if v.row.id != 1 || v.row.in.Value() < 0.99 {
+		t.Fatalf("the band picked shows in a row %d, in %v", v.row.id, v.row.in.Value())
 	}
-	before := s.height(800, nil)
-	at := stripAt(slotDynamic)
+	// The dynamics button: the band dynamic, its dynamics in.
+	h.log = nil
+	clickOn(t, w, run, v.row.dyn)
+	run(30)
+	if b := p.Bands()[0]; b.Dynamic != dynDefaults || v.row.dynIn.Value() < 0.99 || !v.row.dyn.Active {
+		t.Fatalf("made dynamic, the band's dynamics are %+v, in %v", b.Dynamic, v.row.dynIn.Value())
+	}
+	// The threshold's knob turned up, as one gesture.
+	h.log = nil
+	dragUp(t, w, run, v.row.knobs[3], 45)
+	if got := p.Bands()[0].Dynamic.Threshold; got <= dynDefaults.Threshold {
+		t.Errorf("turned up, the threshold is %v, from %v", got, dynDefaults.Threshold)
+	}
+	if len(h.log) < 4 || h.log[0] != "edit Band 1 dynamics" || h.log[len(h.log)-1] != "end edit" {
+		t.Errorf("the turn sent %v, want one gesture", h.log)
+	}
+	// The low cut's lamp: a cut, its Q a slope, its gain locked, and no
+	// dynamics.
+	lamps := boundsIn(t, w, run, v.row.kind)
+	at := geom.Pt(lamps.Min.X+lamps.Size().W*3.5/6, lamps.Min.Y+8)
 	w.Input(input.PointerMove{Pos: at})
 	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
 	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
-	run(2)
-	if b := p.Bands()[0]; b.Dynamic != dynDefaults {
-		t.Fatalf("the dynamics button left the band's dynamics %+v", b.Dynamic)
+	run(30)
+	if b := p.Bands()[0]; b.Kind != audio.LowCut {
+		t.Fatalf("the low cut's lamp made the band a %v", b.Kind)
 	}
-	if s.height(800, nil) <= before {
-		t.Error("made dynamic, the strip shows no row more")
+	if v.row.knobs[2].Param().Name != "Slope" || !v.row.knobs[1].Locked || !v.row.dyn.Disabled || v.row.dynIn.Target() != 0 {
+		t.Errorf("as a cut, the row turns %q, its gain locked %v, dynamics %v", v.row.knobs[2].Param().Name,
+			v.row.knobs[1].Locked, v.row.dynIn.Target())
 	}
-	// The threshold, dragged up 40 pixels: 5 dB up, as one gesture.
-	h.log = nil
-	at = stripAt(slotThreshold)
+	// Nothing picked: the row goes.
+	withUI(t, w, run, func(u *gunim.UI) { v.g.sel = 0; v.changed(u) })
+	run(30)
+	if v.row.in.Value() > 0.01 {
+		t.Errorf("with no band picked, the row stays in at %v", v.row.in.Value())
+	}
+}
+
+func TestTheListShowsEveryBandWithAllItsKnobs(t *testing.T) {
+	p, h := newEQ(t)
+	two := bell[0]
+	two.ID, two.Freq = 2, 4000
+	p.setBands([]audio.Band{bell[0], two})
+	v, w, run := fullOf(t, p, h)
+	sw := boundsIn(t, w, run, v.views)
+	at := geom.Pt(sw.Min.X+sw.Size().W*0.75, sw.Center().Y)
 	w.Input(input.PointerMove{Pos: at})
 	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
-	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(0, -20))})
-	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(0, -40))})
-	w.Input(input.PointerUp{Pos: at.Add(geom.Pt(0, -40)), Button: input.ButtonPrimary})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(60)
+	if v.listed.Value() < 0.99 {
+		t.Fatalf("switched to the bands, the list is in %v", v.listed.Value())
+	}
+	rowOf := func(id int) *bandRow {
+		for _, r := range v.list.rows {
+			if r.id == id {
+				return r
+			}
+		}
+		t.Fatalf("band %d has no row", id)
+		return nil
+	}
+	// The second band's dynamics, from its row, picked or not.
+	second := rowOf(2)
+	clickOn(t, w, run, second.dyn)
+	run(30)
+	dragUp(t, w, run, second.knobs[7], 40)
+	if b := p.Bands()[1]; !b.Dynamic.On || b.Dynamic.Range <= dynDefaults.Range {
+		t.Fatalf("from its row, the second band's dynamics are %+v", b.Dynamic)
+	}
+	// A band added comes in a row of its own, under the rest.
+	clickOn(t, w, run, v.list.add)
+	run(60)
+	if len(p.Bands()) != 3 || rowOf(3).in.Value() < 0.99 {
+		t.Fatalf("added, the bands are %v", p.Bands())
+	}
+	if f := p.Bands()[2].Freq; f == 1000 || f == 4000 {
+		t.Errorf("added where the bands leave room, the band is at %v Hz, on another", f)
+	}
+	// The first removed: its row leaves, and the rows under it glide up.
+	first := rowOf(1)
+	third := rowOf(3)
+	clickOn(t, w, run, first.del)
+	run(60)
+	if first.in.Value() > 0.01 || first.id != 0 {
+		t.Errorf("its band removed, the row stays at %v, of band %d", first.in.Value(), first.id)
+	}
+	if third.place != 1 {
+		t.Errorf("the third band's row is now at %d, want 1", third.place)
+	}
+}
+
+func TestMatchingToPinkNoiseReadsShowsHowFarAndStops(t *testing.T) {
+	p, h := newEQ(t)
+	p.setBands(bell)
+	v, w, run := fullOf(t, p, h)
+	withUI(t, w, run, func(u *gunim.UI) { v.changed(u) })
+	if !v.match.Disabled || v.match.Tooltip != "The host gives the EQ no track to read" {
+		t.Fatalf("with no track, the match button is disabled %v: %q", v.match.Disabled, v.match.Tooltip)
+	}
+	// A track that holds its reading back, so it can be stopped.
+	src := noise(4, 1)
+	src.gate = make(chan struct{})
+	p.SetDocument(memDoc{src})
+	withUI(t, w, run, func(u *gunim.UI) { v.changed(u) })
+	clickOn(t, w, run, v.match)
+	run(60)
+	if !v.listening || v.stopIn.Value() < 0.99 || v.match.Label != "Reading the track… 0%" {
+		t.Fatalf("reading, the button says %q, the stop button is in %v", v.match.Label, v.stopIn.Value())
+	}
+	clickOn(t, w, run, v.stop)
+	close(src.gate)
+	run(30)
+	if v.listening || v.stopIn.Value() > 0.01 || v.match.Label != matchWords {
+		t.Fatalf("stopped, the button reads on %v, says %q, the stop button in %v", v.listening, v.match.Label, v.stopIn.Value())
+	}
+	// Long enough for the reading to have run through, had it not
+	// stopped.
+	time.Sleep(200 * time.Millisecond)
+	if levels, reading, _, _ := p.readState(); reading || levels != nil {
+		t.Error("stopped, the EQ read on")
+	}
+	// Read through: matched, as one step, the button telling so a while.
+	src.gate = nil
+	h.log = nil
+	clickOn(t, w, run, v.match)
+	for range 600 {
+		run(1)
+		if !v.listening {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if v.match.Label != matchedWords || len(p.Bands()) != len(autoShape) {
+		t.Fatalf("read through, the button says %q, and the bands are %v", v.match.Label, p.Bands())
+	}
+	if want := []string{"edit Auto EQ", "changed", "end edit"}; !slices.Equal(h.log, want) {
+		t.Errorf("matching sent %v, want one step", h.log)
+	}
+	run(int(tellFor/(time.Second/60)) + 5)
+	if v.match.Label != matchWords {
+		t.Errorf("a while after, the button still says %q", v.match.Label)
+	}
+}
+
+func TestTheReadoutBesideAPointFadesInAndOut(t *testing.T) {
+	p, h := newEQ(t)
+	p.setBands(bell)
+	v, w, run := fullOf(t, p, h)
+	g := v.g
+	at := boundsIn(t, w, run, v.panel).Min.Add(g.dotAt(g.dots[1]))
+	w.Input(input.PointerMove{Pos: at})
 	run(2)
-	if got := p.Bands()[0].Dynamic.Threshold; got != dynDefaults.Threshold+5 {
-		t.Errorf("dragged up 40 pixels, the threshold is %v, want %v", got, dynDefaults.Threshold+5)
+	if mid := g.tipIn.Value(); mid <= 0 || mid >= 1 {
+		t.Errorf("2 frames after the pointer came, the readout is in %v: not fading in", mid)
 	}
-	if want := []string{"edit Band 1 dynamics", "changed", "changed", "end edit"}; !slices.Equal(h.log, want) {
-		t.Errorf("the drag sent %v, want %v", h.log, want)
+	run(30)
+	if g.tipIn.Value() < 0.99 || g.tipBand != 1 {
+		t.Fatalf("over the point, the readout is in %v, of band %d", g.tipIn.Value(), g.tipBand)
 	}
-	// Static again, it keeps its dynamics for the next time.
-	g.toggleDynamic(1, nil)
-	if b := p.Bands()[0]; b.Dynamic.On || b.Dynamic.Threshold != dynDefaults.Threshold+5 {
-		t.Errorf("made static, the band's dynamics are %+v", b.Dynamic)
+	w.Input(input.PointerMove{Pos: at.Add(geom.Pt(300, 200))})
+	run(2)
+	if mid := g.tipIn.Value(); mid <= 0 || mid >= 1 {
+		t.Errorf("2 frames after the pointer left, the readout is in %v: not fading out", mid)
 	}
 }
 
@@ -321,7 +487,8 @@ func TestAutoReadsTheTrackAndShapesTheBands(t *testing.T) {
 	}
 	w, run := stage(t, geom.Sz(1200, 600), v)
 	h.log = nil
-	clickOn(t, w, run, v.auto)
+	withUI(t, w, run, func(u *gunim.UI) { v.changed(u) })
+	clickOn(t, w, run, v.match)
 	for range 600 {
 		run(1)
 		if !v.listening {
@@ -329,8 +496,8 @@ func TestAutoReadsTheTrackAndShapesTheBands(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if v.listening || v.note.Text != "Matched to pink noise" {
-		t.Fatalf("Auto still reads %v, and says %q", v.listening, v.note.Text)
+	if v.listening || v.match.Label != matchedWords {
+		t.Fatalf("Auto still reads %v, and says %q", v.listening, v.match.Label)
 	}
 	if low, high := audio.Response(p.Bands(), 100), audio.Response(p.Bands(), 8000); high > low-6 {
 		t.Errorf("for white noise, Auto sets 100 Hz to %+.1f dB and 8 kHz to %+.1f dB: not darker", low, high)

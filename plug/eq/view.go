@@ -30,12 +30,6 @@ var (
 	ReadoutSize = theme.Length("eq.readout.size", 12)
 	// CurveWidth is how wide the graph draws the curve.
 	CurveWidth = theme.Length("eq.curve.width", 2.2)
-	// StripHeight is the height of one row of the strip under the
-	// graph, PillWidth the width of a kind's pill in it, and ValueWidth
-	// of a value.
-	StripHeight = theme.Length("eq.strip.height", 76)
-	PillWidth   = theme.Length("eq.pill.width", 74)
-	ValueWidth  = theme.Length("eq.value.width", 84)
 )
 
 // kindNames names the kinds of band, in their order.

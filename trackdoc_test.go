@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
 	"github.com/marrasen/mastering-studio/plug/trim"
 )
@@ -24,10 +26,30 @@ func init() {
 type trackReader struct {
 	keeper
 	docs []plug.Document
+	pane *readerPane
 }
 
 func (r *trackReader) SetDocument(d plug.Document) { r.docs = append(r.docs, d) }
 func (r *trackReader) Analysed() float64           { return 0 }
+
+// View implements [plug.Viewer]: a pane that counts what it is told.
+func (r *trackReader) View(s plug.Size, _ plug.Host) gunim.Node {
+	if s != plug.Panel {
+		return nil
+	}
+	r.pane = &readerPane{Label: widget.NewLabel("Reader")}
+	return r.pane
+}
+
+// readerPane is the reader's pane: it counts the states and documents
+// it is told of.
+type readerPane struct {
+	*widget.Label
+	states, docs int
+}
+
+func (p *readerPane) FollowState(*gunim.UI)    { p.states++ }
+func (p *readerPane) FollowDocument(*gunim.UI) { p.docs++ }
 
 // writeNoise writes seconds of white noise at amp, at 44.1 kHz.
 func writeNoise(t *testing.T, seconds int, amp float64) string {
@@ -167,6 +189,24 @@ func TestTheViewsOfAPluginThatReadsTracksAreGivenItsDocumentOnce(t *testing.T) {
 	run(2)
 	if len(rd.docs) != 1 {
 		t.Errorf("the same document was given %d times", len(rd.docs))
+	}
+	// The pane, as it opens, is told the state once; a new document, it
+	// is told of.
+	al.ShowGo, al.ShowGos = 12, 1
+	if err := w.Client().Publish(albumTopic, al); err != nil {
+		t.Fatal(err)
+	}
+	run(2)
+	if rd.pane == nil || rd.pane.states != 1 {
+		t.Fatalf("opened, the reader's pane was told the state %v times", rd.pane)
+	}
+	trackDocs.Store(12, &trackDoc{src: &renderedSource{version: 2}})
+	if err := w.Client().Publish(albumTopic, al); err != nil {
+		t.Fatal(err)
+	}
+	run(2)
+	if len(rd.docs) != 2 || rd.pane.docs != 1 {
+		t.Errorf("a new document was given %d times all told, and the pane told of %d", len(rd.docs), rd.pane.docs)
 	}
 }
 

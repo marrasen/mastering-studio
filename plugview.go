@@ -287,8 +287,8 @@ func (s heardSound) Heard(dst []float32) (frames int, at int64, rate int) {
 }
 
 // takeDoc gives a plugin that reads whole tracks the document of its
-// slot, where the app made a new one.
-func (v *goView) takeDoc() {
+// slot, where the app made a new one, and tells its views.
+func (v *goView) takeDoc(u *gunim.UI) {
 	tp, ok := v.p.(plug.TrackPlugin)
 	if !ok {
 		return
@@ -300,6 +300,11 @@ func (v *goView) takeDoc() {
 	if doc, ok := got.(plug.Document); ok && doc != v.doc {
 		v.doc = doc
 		tp.SetDocument(doc)
+		for _, n := range v.views() {
+			if f, ok := n.(plug.DocumentFollower); ok {
+				f.FollowDocument(u)
+			}
+		}
 	}
 }
 
@@ -320,7 +325,7 @@ func (r *root) showGo(t Track, s, was Album, u *gunim.UI) {
 			r.goViews[sl.ID] = v
 		}
 		v.take(sl, u)
-		v.takeDoc()
+		v.takeDoc(u)
 	}
 	gone := map[int]*goView{}
 	for id, v := range r.goViews {
@@ -373,6 +378,10 @@ func (p *goPane) open(v *goView, chain []Slot, u *gunim.UI) {
 	if sh == nil {
 		sh = newGoSheet(p, v)
 		p.sheets[v] = sh
+		// The view starts from the state as it is.
+		if f, ok := v.paneView().(plug.StateFollower); ok {
+			f.FollowState(u)
+		}
 	}
 	sh.title.Text = v.d.Name
 	for _, s := range chain {

@@ -20,7 +20,6 @@ import (
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
-	"github.com/marrasen/mastering-studio/plug/plugui"
 )
 
 // dot is a band as the graph shows it: its settings gliding, how far
@@ -105,6 +104,14 @@ type graph struct {
 	// laid says the graph has been laid out once: before, springs jump.
 	laid bool
 	spec spectrum
+	// onChange, where set, hears that the bands, or the band picked,
+	// may have changed.
+	onChange func(u *gunim.UI)
+	// tipBand is the band the readout beside a point shows, and tipIn how
+	// far it is in: it fades and rises in as the pointer comes over a
+	// point, and away as it leaves.
+	tipBand int
+	tipIn   *anim.Float
 }
 
 // The spectrum behind the bands: specPoints frequencies across, the
@@ -214,8 +221,8 @@ func (s *spectrum) step(dt time.Duration) bool {
 
 func newGraph(p *plugin, h plug.Host) *graph {
 	g := &graph{p: p, host: h, dots: map[int]*dot{}, bypassAmt: anim.NewFloat(0), ring: anim.NewFloat(0),
-		amount: anim.NewFloat(float32(h.Param(AmountID) / 100)), spec: newSpectrum(h)}
-	g.Add(g.bypassAmt, g.ring, g.amount)
+		amount: anim.NewFloat(float32(h.Param(AmountID) / 100)), spec: newSpectrum(h), tipIn: anim.NewFloat(0)}
+	g.Add(g.bypassAmt, g.ring, g.amount, g.tipIn)
 	g.bands = p.Bands()
 	g.bypass = h.Param(BypassID) > 0.5
 	if g.bypass {
@@ -355,6 +362,15 @@ func (g *graph) glide(springy bool, u *gunim.UI) {
 	if b, _ := g.band(g.sel); b == nil {
 		g.sel = 0
 	}
+	g.told(u)
+}
+
+// told tells the views round the graph that the bands, or the band
+// picked, may have changed.
+func (g *graph) told(u *gunim.UI) {
+	if g.onChange != nil {
+		g.onChange(u)
+	}
 }
 
 // FollowState implements [plug.StateFollower]: the graph reads the
@@ -422,6 +438,16 @@ func (g *graph) add(p geom.Point, u *gunim.UI) {
 	case hz > 15000:
 		b.Kind, b.Gain, b.Q, b.Slope = audio.HighCut, 0, 0.707, 24
 	}
+	g.addBand(b, u)
+}
+
+// addBand adds b, numbered after the others, and picks it.
+func (g *graph) addBand(b audio.Band, u *gunim.UI) {
+	if len(g.bands) >= maxBands {
+		u.Cue(gunim.CueError, g)
+		return
+	}
+	b.ID = 0
 	for _, o := range g.bands {
 		b.ID = max(b.ID, o.ID)
 	}
@@ -432,6 +458,25 @@ func (g *graph) add(p geom.Point, u *gunim.UI) {
 		g.sel = b.ID
 		return true
 	})
+}
+
+// freeFreq is a frequency for a band added without a place: the middle,
+// in octaves, of the widest stretch the bands leave free between 40 Hz
+// and 12 kHz.
+func (g *graph) freeFreq() float32 {
+	at := make([]float64, 0, 2+len(g.bands))
+	at = append(at, math.Log2(40), math.Log2(12000))
+	for _, b := range g.bands {
+		at = append(at, math.Log2(float64(b.Freq)))
+	}
+	slices.Sort(at)
+	best, wide := 1000.0, 0.0
+	for i := 1; i < len(at); i++ {
+		if w := at[i] - at[i-1]; w > wide && at[i] <= math.Log2(12000) {
+			best, wide = math.Exp2((at[i]+at[i-1])/2), w
+		}
+	}
+	return float32(math.Round(best))
 }
 
 // remove takes band id away.
@@ -580,6 +625,8 @@ func (g *graph) Focusable() bool { return true }
 
 // Handle implements [gunim.Handler].
 func (g *graph) Handle(e input.Event, u *gunim.UI) bool {
+	// What the pointer or the keys did may have picked another band.
+	defer g.told(u)
 	th := u.Theme()
 	switch e := e.(type) {
 	case input.PointerMove:
@@ -812,6 +859,7 @@ func (g *graph) Step(dt time.Duration) bool {
 		moving = true
 	}
 	g.followDown()
+	g.followTip()
 	for id, d := range g.dots {
 		if d.gone && d.in.Value() < 0.01 && !d.in.Active() {
 			g.Remove(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot, d.down)
@@ -819,6 +867,27 @@ func (g *graph) Step(dt time.Duration) bool {
 		}
 	}
 	return moving
+}
+
+// followTip has the readout follow the band dragged, or under the
+// pointer: in as there is one, away as there is none, keeping the band
+// it showed as it fades.
+func (g *graph) followTip() {
+	id := g.dragging
+	if id == 0 {
+		id = g.hot
+	}
+	to := float32(0)
+	if b, _ := g.band(id); b != nil {
+		g.tipBand, to = id, 1
+	}
+	if g.tipIn.Target() != to {
+		sp := anim.Spring{Response: 0.18, Damping: 0.9}
+		if to == 0 {
+			sp = anim.Spring{Response: 0.25, Damping: 1}
+		}
+		g.tipIn.Animate(to, sp)
+	}
 }
 
 // followDown glides each dynamic band's dot to how far the band turns
@@ -1077,14 +1146,17 @@ func (g *graph) paintDot(p *paint.Painter, th *theme.Live, d *dot, i int, picked
 // paintReadout draws the settings of the band dragged, or under the
 // pointer, beside its point.
 func (g *graph) paintReadout(p *paint.Painter, th *theme.Live, box geom.Size) {
-	id := g.dragging
-	if id == 0 {
-		id = g.hot
-	}
+	// The band it shows: the one dragged, or under the pointer, or, as it
+	// fades away, the one it showed last.
+	id := g.tipBand
 	b, i := g.band(id)
-	if b == nil {
+	tip := min(max(g.tipIn.Value(), 0), 1)
+	if b == nil || g.dots[id] == nil || tip < 0.01 {
 		return
 	}
+	defer p.Push(paint.Translate(geom.Pt(0, (1-tip)*8)))()
+	end := p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Opacity: tip})
+	defer end()
 	text := bandText(*b)
 	if !b.On {
 		text += "  ·  off"
@@ -1120,129 +1192,3 @@ func (v *panel) FollowState(u *gunim.UI) { v.graph.FollowState(u) }
 
 // Follow implements [plug.Follower].
 func (v *panel) Follow(id uint32, val float64, u *gunim.UI) { v.graph.Follow(id, val, u) }
-
-// full is the graph, and under it the strip of the band picked, and
-// beside the strip the Auto button, with what it last did, and the
-// amount's knob.
-type full struct {
-	panel  *panel
-	strip  *strip
-	auto   *widget.Button
-	note   *widget.Label
-	amount *plugui.Knob
-	host   plug.Host
-	// listening says Auto waits for the track to be read, and stopPoll
-	// stops it looking how far the reading has got.
-	listening bool
-	stopPoll  func()
-}
-
-func newFull(p *plugin, h plug.Host) *full {
-	pn := newPanel(p, h)
-	v := &full{panel: pn, strip: newStrip(pn.graph), auto: widget.NewButton("Auto"), note: widget.NewLabel(""),
-		amount: plugui.NewKnob(h, Descriptor.Params[1]), host: h}
-	v.auto.Tooltip = "Shape the bands so the whole track sounds as even as pink noise"
-	v.auto.OnClick = func(u *gunim.UI) gunim.Intent {
-		v.listen(u)
-		return nil
-	}
-	v.note.MaxLines, v.note.NoWrap = 1, true
-	return v
-}
-
-// listen starts reading the track, for Auto, and follows it.
-func (v *full) listen(u *gunim.UI) {
-	if v.listening {
-		return
-	}
-	v.listening = true
-	v.auto.Disabled, v.note.Text = true, "Reading the track…"
-	v.panel.graph.p.startReading()
-	v.watchReading(u)
-}
-
-// readPoll is how often Auto looks how far the reading has got.
-const readPoll = 50 * time.Millisecond
-
-// watchReading looks how far the reading has got: while it reads, it shows
-// how far and looks again a moment later; once the track is read, it
-// shapes the bands to bring it to pink, as one step to undo.
-func (v *full) watchReading(u *gunim.UI) {
-	if !v.listening {
-		return
-	}
-	levels, reading, progress, err := v.panel.graph.p.readState()
-	switch {
-	case reading:
-		v.note.Text = fmt.Sprintf("Reading the track… %.0f%%", 100*progress)
-		v.stopPoll = u.After(readPoll, v.watchReading)
-		u.Invalidate()
-		return
-	case err != nil:
-		v.note.Text = "Could not read the track: " + err.Error()
-	case len(levels) == len(autoFreqs):
-		g := v.panel.graph
-		bands := autoBands(levels)
-		g.edit("Auto EQ", true, u, func() bool {
-			g.bands, g.sel = bands, 0
-			return true
-		})
-		v.note.Text = "Matched to pink noise"
-	default:
-		v.note.Text = ""
-	}
-	v.listening, v.auto.Disabled = false, false
-	u.Invalidate()
-}
-
-// sideW is how wide the room beside the strip is, for Auto and the
-// amount.
-const sideW = 190
-
-// FollowState implements [plug.StateFollower].
-func (v *full) FollowState(u *gunim.UI) { v.panel.FollowState(u) }
-
-// Follow implements [plug.Follower].
-func (v *full) Follow(id uint32, val float64, u *gunim.UI) {
-	v.panel.Follow(id, val, u)
-	if id == AmountID {
-		v.amount.Follow(val, u)
-	}
-}
-
-// Children implements [gunim.Composite].
-func (v *full) Children() []gunim.Node {
-	return []gunim.Node{v.panel, v.strip, v.auto, v.note, v.amount}
-}
-
-// Layout implements [gunim.Node]: the strip takes one row at the
-// bottom where it fits, and two where not, and a row more for the
-// dynamics of a dynamic band; Auto and the amount stand beside it, and
-// the graph takes the rest.
-func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
-	size := c.Max
-	gap := widget.Gap.Get(f.Theme)
-	stripW := max(size.W-sideW-gap, 0)
-	stripH := max(v.strip.height(stripW, f.Theme), plugui.KnobH)
-	graphH := max(size.H-stripH-gap, 0)
-	kids.At(0).Layout(gunim.Tight(geom.Sz(size.W, graphH)))
-	kids.At(0).Place(geom.Point{})
-	kids.At(1).Layout(gunim.Tight(geom.Sz(stripW, stripH)))
-	kids.At(1).Place(geom.Pt(0, graphH+gap))
-	side := geom.Pt(size.W-sideW, graphH+gap)
-	bw := float32(sideW - plugui.KnobW - 12)
-	kids.At(2).Layout(gunim.Constraints{Min: geom.Sz(bw, 0), Max: geom.Sz(bw, 40)})
-	kids.At(2).Place(side.Add(geom.Pt(0, 8)))
-	kids.At(3).Layout(gunim.Constraints{Max: geom.Sz(bw, 20)})
-	kids.At(3).Place(side.Add(geom.Pt(0, 52)))
-	kids.At(4).Layout(gunim.Tight(geom.Sz(plugui.KnobW, plugui.KnobH)))
-	kids.At(4).Place(geom.Pt(size.W-plugui.KnobW, graphH+gap))
-	return size
-}
-
-// Paint implements [gunim.Node].
-func (v *full) Paint(p *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
-	for k := range kids.All {
-		k.Paint(p)
-	}
-}

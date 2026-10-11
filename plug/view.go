@@ -42,8 +42,18 @@ type Follower interface {
 
 // StateFollower is a view that follows the plugin's state as it is set
 // by other ways than its own, as an undo or a preset: the host calls
-// FollowState on the window's goroutine, after [Plugin.SetState].
+// FollowState on the window's goroutine, after [Plugin.SetState]; and
+// once as the view first shows, so it starts from the state as it is.
 type StateFollower interface {
 	gunim.Node
 	FollowState(u *gunim.UI)
+}
+
+// DocumentFollower is a view of a [TrackPlugin] that follows the
+// plugin's document: the host calls FollowDocument on the window's
+// goroutine after it gives the plugin a new one, with
+// [TrackPlugin.SetDocument].
+type DocumentFollower interface {
+	gunim.Node
+	FollowDocument(u *gunim.UI)
 }
