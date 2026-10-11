@@ -146,10 +146,13 @@ type livePlugin struct {
 	slot int
 	p    engine
 	// bypassID is the plugin's own bypass, where hasBypass says it has
-	// one; without, a bypassed plugin is passed by, its latency with it.
+	// one; without, the rack fades the plugin out for its own sound, as
+	// fade keeps it, the plugin running on, so its latency stays.
 	bypassID  uint32
 	hasBypass bool
 	bypass    bool
+	fade      *bypassFade
+	rate      int
 	// gain is the plugin's gain, as a ratio, played in its place while
 	// it is bypassed and the rack matches.
 	gain float32
@@ -184,6 +187,9 @@ func (lp *livePlugin) forget() { livePlugins.CompareAndDelete(lp.slot, lp) }
 // one loaded to play is among livePlugins.
 func newPlugin(s Slot, state []byte, rate int, offline bool) (*livePlugin, error) {
 	lp, err := loadPlugin(s, state, rate, offline)
+	if err == nil {
+		lp.rate = rate
+	}
 	if err == nil && !offline {
 		livePlugins.Store(s.ID, lp)
 	}
@@ -235,8 +241,72 @@ func (lp *livePlugin) setBypass(on bool) {
 	}
 }
 
-// passed says the plugin is passed by, not run.
-func (lp *livePlugin) passed() bool { return lp.bypass && !lp.hasBypass }
+// bypassFade fades a plugin without a bypass of its own out, for the
+// sound it was fed, and back in: the sound fed is kept in ring, so it
+// comes out as late as the plugin's own, lat frames, and the two are
+// mixed by wet, gliding a frame at a time. dryGain is the gain on the
+// sound fed, the plugin's gain while the rack matches levels, gliding
+// too. Only the sound touches it, but for ring and lat, which the
+// application makes anew as the plugin's latency changes.
+type bypassFade struct {
+	ring         []float32
+	lat, w       int
+	wet, dryGain float32
+	step         float32
+}
+
+// bypassFadeMS is how long a plugin takes to fade out or in.
+const bypassFadeMS = 20
+
+// fadeFor returns the plugin's fade, made anew for its latency, lat,
+// where that changed, faded out already where the plugin is bypassed.
+func (lp *livePlugin) fadeFor(lat int) *bypassFade {
+	if f := lp.fade; f != nil && f.lat == lat {
+		return f
+	}
+	f := &bypassFade{ring: make([]float32, 2*(lat+stageChunk)), lat: lat, wet: 1, dryGain: 1,
+		step: 1 / (bypassFadeMS / 1000.0 * float32(max(lp.rate, 1)))}
+	if lp.bypass {
+		f.wet = 0
+	}
+	lp.fade = f
+	return f
+}
+
+// run runs frames through the plugin p, mixed with the sound fed, faded
+// to wet as bypassed says, the sound fed at dryGain.
+func (f *bypassFade) run(p engine, frames []float32, bypassed bool, dryGain float32) {
+	size := len(f.ring) / 2
+	n := len(frames) / 2
+	for i := range n {
+		f.ring[2*f.w], f.ring[2*f.w+1] = frames[2*i], frames[2*i+1]
+		f.w = (f.w + 1) % size
+	}
+	p.Process(frames)
+	wet := float32(1)
+	if bypassed {
+		wet = 0
+	}
+	if f.wet == wet && wet == 1 && f.dryGain == dryGain {
+		return
+	}
+	for i := range n {
+		if f.wet < wet {
+			f.wet = min(f.wet+f.step, wet)
+		} else if f.wet > wet {
+			f.wet = max(f.wet-f.step, wet)
+		}
+		f.dryGain += (dryGain - f.dryGain) * f.step
+		if math.Abs(float64(dryGain-f.dryGain)) < 1e-4 {
+			f.dryGain = dryGain
+		}
+		j := ((f.w-n+i-f.lat)%size + size) % size
+		for ch := range 2 {
+			d := f.ring[2*j+ch] * f.dryGain
+			frames[2*i+ch] = d + f.wet*(frames[2*i+ch]-d)
+		}
+	}
+}
 
 // rack holds a chain's plugins, loaded: a track's, which play, or a
 // copy's, offline, for a track measured or exported.
@@ -256,7 +326,11 @@ type rack struct {
 	// match plays each plugin bypassed as its gain, so the sound is as
 	// loud as with it on.
 	match bool
-	gen   int
+	// gen counts the changes to which plugins run, and in what order;
+	// reshaped says a change made one. A bypass, a match or a gain
+	// changes none.
+	gen      int
+	reshaped bool
 	// run is what the sound plays; entered and left count the reads
 	// started and finished, and holding has the reads play silence
 	// while the application works the plugins as they must not
@@ -276,7 +350,8 @@ type rack struct {
 // rackRun is a rack's plugins as the sound plays them: made by a
 // change, and never changed after.
 type rackRun struct {
-	// gen counts the changes, so a stage realigns to the latency.
+	// gen counts the changes to which plugins run, so a stage realigns
+	// to them; a bypass changes none.
 	gen     int
 	plugins []runPlugin
 	active  bool
@@ -288,17 +363,19 @@ type rackRun struct {
 // runPlugin is a plugin as a run plays it.
 type runPlugin struct {
 	lp *livePlugin
-	// passed says it is passed by, not run; bypassed that it is, and
-	// gain what it plays in its place as the run matches.
-	passed, bypassed bool
-	gain             float32
+	// bypassed says it is bypassed, and gain what it plays in its place
+	// as the run matches; fade, for a plugin without a bypass of its
+	// own, fades it.
+	bypassed bool
+	gain     float32
+	fade     *bypassFade
 }
 
 // ranFrom is when the ran times count from.
 var ranFrom = time.Now()
 
 func newRackOf(plugins []*livePlugin) *rack {
-	r := &rack{plugins: plugins, active: true}
+	r := &rack{plugins: plugins, active: true, reshaped: true}
 	r.publishLocked()
 	return r
 }
@@ -308,13 +385,18 @@ func newRackOf(plugins []*livePlugin) *rack {
 // latency is asked here, on the application's side, as a VST3 plugin
 // may answer it only on its own thread.
 func (r *rack) publishLocked() {
-	r.gen++
+	if r.reshaped {
+		r.gen++
+		r.reshaped = false
+	}
 	run := &rackRun{gen: r.gen, active: r.active, match: r.match, plugins: make([]runPlugin, len(r.plugins))}
 	for i, lp := range r.plugins {
-		run.plugins[i] = runPlugin{lp: lp, passed: lp.passed(), bypassed: lp.bypass, gain: lp.gain}
-		if !lp.passed() {
-			run.latency += lp.p.Latency()
+		lat := lp.p.Latency()
+		run.plugins[i] = runPlugin{lp: lp, bypassed: lp.bypass, gain: lp.gain}
+		if !lp.hasBypass {
+			run.plugins[i].fade = lp.fadeFor(lat)
 		}
+		run.latency += lat
 	}
 	r.run.Store(run)
 }
@@ -397,7 +479,7 @@ func (r *rack) list() []*livePlugin {
 
 // add puts lp at the end of the chain.
 func (r *rack) add(lp *livePlugin) {
-	r.change(func() { r.plugins = append(r.plugins, lp) })
+	r.change(func() { r.plugins, r.reshaped = append(r.plugins, lp), true })
 }
 
 // remove takes slot id's plugin out of the chain and lets it go, once
@@ -405,6 +487,7 @@ func (r *rack) add(lp *livePlugin) {
 func (r *rack) remove(id int) {
 	var gone *livePlugin
 	r.change(func() {
+		r.reshaped = true
 		r.plugins = slices.DeleteFunc(r.plugins, func(lp *livePlugin) bool {
 			if lp.slot == id {
 				gone = lp
@@ -423,6 +506,7 @@ func (r *rack) remove(id int) {
 // order puts the plugins in the order of the slots in chain.
 func (r *rack) order(chain []Slot) {
 	r.change(func() {
+		r.reshaped = true
 		at := map[int]int{}
 		for k, s := range chain {
 			at[s.ID] = k
@@ -464,10 +548,16 @@ func (r *rack) process(run *rackRun, frames []float32, at int64) {
 		if taps != nil {
 			taps.in.write(at, frames)
 		}
-		if !rp.passed {
+		if rp.fade != nil {
+			dryGain := float32(1)
+			if run.match {
+				dryGain = rp.gain
+			}
+			rp.fade.run(rp.lp.p, frames, rp.bypassed, dryGain)
+		} else {
 			rp.lp.p.Process(frames)
 		}
-		if rp.bypassed && run.match && rp.gain != 1 {
+		if rp.fade == nil && rp.bypassed && run.match && rp.gain != 1 {
 			for k := range frames {
 				frames[k] *= rp.gain
 			}
@@ -550,7 +640,7 @@ func (r *rack) setActive(on bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active != on {
-		r.active = on
+		r.active, r.reshaped = on, true
 		r.publishLocked()
 	}
 }

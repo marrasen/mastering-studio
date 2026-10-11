@@ -1,10 +1,12 @@
 package main
 
 import (
+	"math"
 	"sync/atomic"
 	"testing"
 
 	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/mastering-studio/plug/maximizer"
 	"github.com/marrasen/mastering-studio/plug/trim"
 )
 
@@ -158,5 +160,95 @@ func TestTheChainMakesNothingAsItPlays(t *testing.T) {
 	})
 	if made != 0 {
 		t.Fatalf("the chain made %d things over 200 reads", made)
+	}
+}
+
+// sineSource is a quiet sine, endless, read from where it is sought.
+type sineSource struct{ at int64 }
+
+const sineHz, sineA = 440, 0.05
+
+func sineAt(i int64) float32 { return float32(sineA * math.Sin(2*math.Pi*sineHz*float64(i)/48000)) }
+
+func (s *sineSource) Len() int64 { return -1 }
+func (s *sineSource) SeekFrame(f int64) error {
+	s.at = f
+	return nil
+}
+
+func (s *sineSource) Read(dst []float32) (int, error) {
+	n := len(dst) / 2
+	for i := range n {
+		dst[2*i], dst[2*i+1] = sineAt(s.at+int64(i)), sineAt(s.at+int64(i))
+	}
+	s.at += int64(n)
+	return n, nil
+}
+
+func TestBypassFadesAPluginWithoutItsOwnAndKeepsItsLatency(t *testing.T) {
+	up, err := newPlugin(trimSlot(1), goSettings{Params: map[uint32]float64{trim.GainID: 6}}.pack(), 48000, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	late, err := newPlugin(Slot{ID: 2, Path: goPath, Class: maximizer.Descriptor.ID, Name: "Maximizer"}, nil, 48000, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newRackOf([]*livePlugin{up, late})
+	defer r.close()
+	lat := r.latency()
+	if lat == 0 {
+		t.Fatal("the maximizer is not late, so the test shows nothing")
+	}
+	// The quiet sine, which the maximizer leaves as it is, through a
+	// stage, as the track plays; and how far it moves at most from a
+	// frame to the next, made louder by the trim.
+	st := newStage(&sineSource{}, r, 0)
+	most := float32(2 * sineA * 2 * math.Pi * sineHz / 48000)
+	out := make([]float32, 0, 60*512)
+	aligned := 0
+	dst := make([]float32, 2*512)
+	for b := range 60 {
+		switch b {
+		case 20:
+			r.setBypass(1, true)
+			r.setBypass(2, true)
+		case 40:
+			r.setBypass(1, false)
+			r.setBypass(2, false)
+		}
+		if r.latency() != lat {
+			t.Fatalf("bypassed, the chain's latency is %d, was %d", r.latency(), lat)
+		}
+		n, err := st.Read(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range n {
+			out = append(out, dst[2*i])
+		}
+		// The stage stays aligned: running the plugins over their
+		// latency again would feed them what they already heard.
+		if b == 0 {
+			aligned = st.gen
+		} else if st.gen != aligned {
+			t.Fatalf("after block %d the stage aligned again", b)
+		}
+	}
+	if len(out) < 40*512 {
+		t.Fatalf("the stage played %d frames", len(out))
+	}
+	// Written so a NaN fails too.
+	for i := 1; i < len(out); i++ {
+		if d := out[i] - out[i-1]; !(d <= 1.2*most && d >= -1.2*most) {
+			t.Fatalf("at frame %d the sound jumps %.4f, where a sine moves %.4f at most: a click", i, d, most)
+		}
+	}
+	// Faded out, the sound as fed, in time with the chain: the stage
+	// plays its sound as late as it is, so in time with the sine.
+	for i := 35 * 512; i < 40*512; i++ {
+		if d := out[i] - sineAt(int64(i)); !(d <= 1e-3 && d >= -1e-3) {
+			t.Fatalf("bypassed, frame %d comes out %.4f, want %.4f", i, out[i], sineAt(int64(i)))
+		}
 	}
 }
