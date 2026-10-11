@@ -341,6 +341,11 @@ type rack struct {
 	// ran is when the plugins last processed sound, in nanoseconds
 	// since ranFrom.
 	ran atomic.Int64
+	// fadeFrom are the plugins a swap took out, which the sound fades
+	// from to the rack's own as fade runs, and which are let go once it
+	// has.
+	fadeFrom []*livePlugin
+	fade     *chainFade
 	// meters, where set, measure the sound fed into the chain, then out
 	// of each plugin in turn, for how much louder each makes it. They
 	// are set before the sound runs, offline.
@@ -358,6 +363,28 @@ type rackRun struct {
 	match   bool
 	// latency is how late the run's sound comes, in frames.
 	latency int
+	// old are the plugins a swap took out, which the sound fades from
+	// as fade runs.
+	old  []runPlugin
+	fade *chainFade
+}
+
+// chainFade fades the sound from one chain to another, a swap's: buf
+// holds the sound fed, for the chain faded from, left is how many frames
+// it has yet to run of total, and done says it is through. Only the
+// sound touches it, but for done.
+type chainFade struct {
+	buf         []float32
+	left, total int
+	done        atomic.Bool
+}
+
+// swapFadeMS is how long a swap fades from one chain to the other.
+const swapFadeMS = 30
+
+func newChainFade(rate int) *chainFade {
+	n := max(1, rate*swapFadeMS/1000)
+	return &chainFade{buf: make([]float32, 2*stageChunk), left: n, total: n}
 }
 
 // runPlugin is a plugin as a run plays it.
@@ -397,6 +424,16 @@ func (r *rack) publishLocked() {
 			run.plugins[i].fade = lp.fadeFor(lat)
 		}
 		run.latency += lat
+	}
+	if r.fade != nil {
+		run.fade = r.fade
+		for _, lp := range r.fadeFrom {
+			rp := runPlugin{lp: lp, bypassed: lp.bypass, gain: lp.gain}
+			if !lp.hasBypass {
+				rp.fade = lp.fadeFor(lp.p.Latency())
+			}
+			run.old = append(run.old, rp)
+		}
 	}
 	r.run.Store(run)
 }
@@ -543,31 +580,106 @@ func (r *rack) process(run *rackRun, frames []float32, at int64) {
 	if r.meters != nil {
 		r.meters[0].Write(frames)
 	}
+	// A swap's chain fading out hears the sound fed too.
+	f := run.fade
+	fading := f != nil && f.left > 0 && len(frames) <= len(f.buf)
+	if fading {
+		copy(f.buf, frames)
+		for _, rp := range run.old {
+			rp.process(f.buf[:len(frames)], run.match)
+		}
+	}
 	for i, rp := range run.plugins {
 		taps := rp.lp.taps.Load()
 		if taps != nil {
 			taps.in.write(at, frames)
 		}
-		if rp.fade != nil {
-			dryGain := float32(1)
-			if run.match {
-				dryGain = rp.gain
-			}
-			rp.fade.run(rp.lp.p, frames, rp.bypassed, dryGain)
-		} else {
-			rp.lp.p.Process(frames)
-		}
-		if rp.fade == nil && rp.bypassed && run.match && rp.gain != 1 {
-			for k := range frames {
-				frames[k] *= rp.gain
-			}
-		}
+		rp.process(frames, run.match)
 		if taps != nil {
 			taps.out.write(at, frames)
 		}
 		if r.meters != nil {
 			r.meters[i+1].Write(frames)
 		}
+	}
+	if fading {
+		// From the chain swapped out to the chain in, a frame at a time.
+		n := len(frames) / 2
+		for i := range n {
+			t := float32(f.total-f.left+i) / float32(f.total)
+			t = min(max(t, 0), 1)
+			for ch := range 2 {
+				k := 2*i + ch
+				frames[k] = f.buf[k] + (frames[k]-f.buf[k])*t
+			}
+		}
+		if f.left -= n; f.left <= 0 {
+			f.left = 0
+			f.done.Store(true)
+		}
+	}
+}
+
+// process runs frames through the plugin: faded for a bypass where it
+// has none of its own, and played as its gain bypassed where the run
+// matches levels.
+func (rp runPlugin) process(frames []float32, match bool) {
+	if rp.fade != nil {
+		dryGain := float32(1)
+		if match {
+			dryGain = rp.gain
+		}
+		rp.fade.run(rp.lp.p, frames, rp.bypassed, dryGain)
+		return
+	}
+	rp.lp.p.Process(frames)
+	if rp.bypassed && match && rp.gain != 1 {
+		for k := range frames {
+			frames[k] *= rp.gain
+		}
+	}
+}
+
+// swap puts plugins in the place of the rack's own, at rate. As the
+// sound plays, it fades from the ones out to the ones in, and retire
+// lets the ones out go once it has; where it does not play, they go at
+// once. A swap still fading lets its own go first.
+func (r *rack) swap(plugins []*livePlugin, rate int) {
+	r.letGoFaded(true)
+	var old []*livePlugin
+	r.change(func() {
+		old, r.plugins, r.reshaped = r.plugins, plugins, true
+		if r.active && len(old) > 0 {
+			r.fadeFrom, r.fade = old, newChainFade(rate)
+			old = nil
+		}
+	})
+	r.settle()
+	for _, lp := range old {
+		lp.forget()
+		lp.p.Close()
+	}
+}
+
+// retire lets go the plugins a swap took out, once the sound has faded
+// from them, or at once where it no longer plays.
+func (r *rack) retire() { r.letGoFaded(false) }
+
+// letGoFaded lets go the plugins a swap took out: once faded from, or,
+// now, at once.
+func (r *rack) letGoFaded(now bool) {
+	r.mu.Lock()
+	f, active := r.fade, r.active
+	r.mu.Unlock()
+	if f == nil || !now && active && !f.done.Load() {
+		return
+	}
+	var old []*livePlugin
+	r.change(func() { old, r.fadeFrom, r.fade = r.fadeFrom, nil, nil })
+	r.settle()
+	for _, lp := range old {
+		lp.forget()
+		lp.p.Close()
 	}
 }
 
@@ -671,6 +783,7 @@ func (r *rack) changed() { r.change(func() {}) }
 
 // close lets the plugins go, once the sound has.
 func (r *rack) close() {
+	r.letGoFaded(true)
 	var ps []*livePlugin
 	r.change(func() { ps, r.plugins = r.plugins, nil })
 	r.settle()

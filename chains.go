@@ -141,6 +141,42 @@ func (a *app) chainOf(t *Track) (chain []Slot, states map[int][]byte) {
 	return slices.Clone(t.Chain), states
 }
 
+// swapChain gives track id chain, its plugins' states in states, each
+// slot a new one, as giveChain does, but into the chain loaded, where
+// there is one: the plugins in load while the sound plays on through
+// the ones out, and the sound fades from those to these, with no stop.
+// It reports whether there was a chain loaded to swap into.
+func (a *app) swapChain(id int, chain []Slot, states map[int][]byte) bool {
+	t, r := a.track(id), a.racks[id]
+	if t == nil || r == nil {
+		return false
+	}
+	for _, s := range t.Chain {
+		delete(a.states, s.ID)
+	}
+	t.Chain = nil
+	var plugins []*livePlugin
+	for _, s := range chain {
+		a.slots++
+		c := s
+		// Its gain and range were of other sound.
+		c.ID, c.Open, c.Failed, c.Gain, c.Gained, c.LRA, c.Ranged = a.slots, false, "", 0, false, 0, false
+		a.states[c.ID] = bytes.Clone(states[s.ID])
+		lp, err := newPlugin(c, a.states[c.ID], rateOf(t), false)
+		if err != nil {
+			c.Failed = err.Error()
+			a.Note = fmt.Sprintf("%s: %v", c.Name, err)
+		} else {
+			c.Latency = lp.p.Latency()
+			plugins = append(plugins, lp)
+		}
+		t.Chain = append(t.Chain, c)
+	}
+	r.swap(plugins, rateOf(t))
+	a.remeasureChain(id)
+	return true
+}
+
 // keepChain is track t's chain, as a preset keeps one: each plugin
 // with its state.
 func (a *app) keepChain(t *Track) []keptSlot {
@@ -174,6 +210,11 @@ const pluginSettle = 1500 * time.Millisecond
 // anything changed.
 func (a *app) watchPlugins() bool {
 	changed := false
+	// The plugins a switch between chains took out, let go once the
+	// sound has faded from them.
+	for _, r := range a.racks {
+		r.retire()
+	}
 	for id, r := range a.racks {
 		t := a.track(id)
 		if t == nil {
@@ -367,7 +408,9 @@ func (a *app) handleChain(in gunim.Intent) {
 			t.Other, t.OtherPreset = played, preset
 		}
 		chain, states := slotsOf(t.Other)
-		a.giveChain(t.ID, chain, states)
+		if !a.swapChain(t.ID, chain, states) {
+			a.giveChain(t.ID, chain, states)
+		}
 		t.Preset = t.OtherPreset
 		t.Other, t.OtherPreset, t.OtherSet, t.OnB = played, preset, true, in.B
 		a.dirty = true

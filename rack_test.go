@@ -252,3 +252,70 @@ func TestBypassFadesAPluginWithoutItsOwnAndKeepsItsLatency(t *testing.T) {
 		}
 	}
 }
+
+func TestASwapFadesFromOneChainToTheOtherAndLetsTheOldGo(t *testing.T) {
+	trimAt := func(id int, db float64) *livePlugin {
+		t.Helper()
+		lp, err := newPlugin(trimSlot(id), goSettings{Params: map[uint32]float64{trim.GainID: db}}.pack(), 48000, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return lp
+	}
+	up := trimAt(101, 6)
+	r := newRackOf([]*livePlugin{up})
+	defer r.close()
+	st := newStage(&sineSource{}, r, 0)
+	most := float32(2 * sineA * 2 * math.Pi * sineHz / 48000)
+	out := make([]float32, 0, 40*512)
+	dst := make([]float32, 2*512)
+	for b := range 40 {
+		if b == 10 {
+			r.swap([]*livePlugin{trimAt(102, -6)}, 48000)
+		}
+		if b == 30 {
+			r.retire()
+		}
+		n, err := st.Read(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range n {
+			out = append(out, dst[2*i])
+		}
+	}
+	// Written so a NaN fails too.
+	for i := 1; i < len(out); i++ {
+		if d := out[i] - out[i-1]; !(d <= 1.2*most && d >= -1.2*most) {
+			t.Fatalf("at frame %d the sound jumps %.4f, where a sine moves %.4f at most: a stutter", i, d, most)
+		}
+	}
+	// After the fade, the chain swapped in: the sine 6 dB down.
+	for i := 25 * 512; i < 30*512; i++ {
+		want := sineAt(int64(i)) * float32(math.Pow(10, -6.0/20))
+		if d := out[i] - want; !(d <= 1e-3 && d >= -1e-3) {
+			t.Fatalf("after the swap, frame %d comes out %.4f, want %.4f", i, out[i], want)
+		}
+	}
+	if _, ok := livePlugins.Load(101); ok || r.fade != nil || len(r.fadeFrom) != 0 {
+		t.Errorf("faded from, the old plugin is still held: live %v, fading %v", ok, len(r.fadeFrom))
+	}
+}
+
+func TestASwapWhereTheSoundDoesNotPlayLetsTheOldGoAtOnce(t *testing.T) {
+	lp, err := newPlugin(trimSlot(111), nil, 48000, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newRackOf([]*livePlugin{lp})
+	defer r.close()
+	r.setActive(false)
+	in, err := newPlugin(trimSlot(112), nil, 48000, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.swap([]*livePlugin{in}, 48000)
+	if _, ok := livePlugins.Load(111); ok || r.fade != nil || len(r.list()) != 1 || r.list()[0] != in {
+		t.Errorf("swapped while still, the old plugin is held %v, fading %v", ok, r.fade != nil)
+	}
+}

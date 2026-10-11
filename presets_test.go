@@ -162,3 +162,14 @@ func TestBothChainsAreKeptWithTheAlbum(t *testing.T) {
 			len(t1.Chain), len(t1.Other), len(a.Tracks[0].Chain), len(a.Tracks[0].Other))
 	}
 }
+
+func TestSwitchingChainsWhilePlayingKeepsTheChainLoaded(t *testing.T) {
+	a := savedApp(t)
+	id := a.Tracks[0].ID
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
+	r := a.rackOf(&a.Tracks[0])
+	a.handle(SwitchChain{Track: id, B: true})
+	if a.racks[id] != r || len(r.list()) != 1 || r.list()[0].slot != a.Tracks[0].Chain[0].ID {
+		t.Fatalf("switched, the track's chain loaded is %p, was %p, with %d plugins", a.racks[id], r, len(r.list()))
+	}
+}
