@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -8,8 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/speaker"
+	"github.com/marrasen/gunim/audioui"
+	"github.com/marrasen/gunim/geom"
+	"github.com/marrasen/gunim/theme"
 )
 
 func TestTheSoundAndThemeAreKeptInTheSettings(t *testing.T) {
@@ -177,4 +182,148 @@ func TestUsingTheSystemsSoundLetsTheDriverGo(t *testing.T) {
 	if a.Fallback != "" {
 		t.Errorf("the toast of %q still asks", a.Fallback)
 	}
+}
+
+// The theme editor's changes are kept by the theme's name, and the
+// window takes the theme with them at its name, then and at the next
+// start. Taking every change back forgets them.
+func TestThemeEditsAreKeptAndGivenToTheWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	registered := map[string]theme.Theme{}
+	register := func(th theme.Theme) { registered[th.Name] = th }
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	a.settingsFile, a.registerTheme = path, register
+	red := rgb(0xff, 0, 0)
+	edits, err := theme.MarshalValues(theme.Make("", theme.Set(audioui.Sound, red)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.handle(ChooseTheme{Name: "dim"})
+	a.handle(SaveThemeEdits{Theme: "dim", Edits: edits})
+	// Neither a theme unknown nor values unreadable are kept.
+	a.handle(SaveThemeEdits{Theme: "neon", Edits: edits})
+	a.handle(SaveThemeEdits{Theme: "light", Edits: []byte("{not json")})
+	st := readSettings(path)
+	if len(st.ThemeEdits) != 1 || st.ThemeEdits["dim"] == nil {
+		t.Fatalf("kept the changes to %v, want dim's alone", st.ThemeEdits)
+	}
+	if d := a.settingsDraft(); !bytes.Equal(d.Edits, edits) {
+		t.Errorf("the dialog is told of %q, want %q", d.Edits, edits)
+	}
+	wear := func(name string) palette {
+		t.Helper()
+		th, ok := registered[name]
+		if !ok {
+			t.Fatalf("no theme registered as %q", name)
+		}
+		return colours(theme.NewLive(th))
+	}
+	if pal := wear("dim"); pal.teal != red || pal.panel != dimColours.panel {
+		t.Errorf("the window's dim theme has teal %v and panel %v, want red and dim's %v", pal.teal, pal.panel, dimColours.panel)
+	}
+
+	// The next start gives the window the theme as edited.
+	next := newApp(ctx, newDeck(audio.NewMixer()), "")
+	next.themeEdits, next.registerTheme = readSettings(path).ThemeEdits, register
+	clear(registered)
+	next.registerEdited("dim")
+	if pal := wear("dim"); pal.teal != red {
+		t.Errorf("at the next start the dim theme's teal is %v, want red", pal.teal)
+	}
+
+	a.handle(SaveThemeEdits{Theme: "dim"})
+	if st := readSettings(path); len(st.ThemeEdits) != 0 {
+		t.Errorf("with every change taken back, kept %v", st.ThemeEdits)
+	}
+	if pal := wear("dim"); pal != dimColours {
+		t.Errorf("with every change taken back, the dim theme is %+v, want %+v", pal, dimColours)
+	}
+}
+
+// The theme editor on the Look tab edits the theme picked: each change
+// paints the window at once and asks to be kept, and picking another
+// theme edits that one's changes.
+func TestTheThemeEditorPaintsTheWindowAndKeepsEachChange(t *testing.T) {
+	red := rgb(0xff, 0, 0)
+	edits, err := theme.MarshalValues(theme.Make("", theme.Set(audioui.Near, red)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := gunim.NewOffscreen(geom.Sz(1440, 900), nil)
+	for _, th := range studioThemes {
+		w.RegisterTheme(th.Theme)
+	}
+	var s *settingsDialog
+	gunim.RegisterView(w, "settings", func(d SettingsDraft) *settingsDialog { s = newSettingsDialog(d); return s },
+		func(s *settingsDialog, d SettingsDraft, u *gunim.UI) { s.show(d, u) })
+	var worn theme.Theme
+	set := func(key string, v any) {
+		t.Helper()
+		gunim.RegisterPatch(w, "settings", func(s *settingsDialog, _ struct{}, u *gunim.UI) {
+			if err := s.editor.Set(key, v, true, u); err != nil {
+				t.Error(err)
+			}
+			worn = u.Theme().Active()
+		})
+		if err := w.Client().Patch("settings", struct{}{}); err != nil {
+			t.Fatal(err)
+		}
+		w.Frame(time.Second / 60)
+	}
+	c := w.Client()
+	if err := c.Mount(gunim.Root, "settings", "settings", SettingsDraft{Theme: "contrast"}, settingsTopic); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetTheme("contrast")
+	for range 10 {
+		w.Frame(time.Second / 60)
+	}
+	if got := s.editor.Base(); got.Name != "High contrast" {
+		t.Errorf("the editor starts from %q, want High contrast", got.Name)
+	}
+
+	set(audioui.Sound.Key(), red)
+	if pal := colours(theme.NewLive(worn)); worn.Name != "contrast" || pal.teal != red || pal.panel != contrastColours.panel {
+		t.Errorf("the window wears %q with teal %v and panel %v, want contrast's with red", worn.Name, pal.teal, pal.panel)
+	}
+	saved := keptEdits(t, w)
+	if saved.Theme != "contrast" || !strings.Contains(string(saved.Edits), audioui.Sound.Key()) {
+		t.Errorf("asked to keep %q for %q", saved.Edits, saved.Theme)
+	}
+
+	// Another theme picked, with changes of its own.
+	if err := c.Publish(settingsTopic, SettingsDraft{Theme: "light", Edits: edits}); err != nil {
+		t.Fatal(err)
+	}
+	w.Frame(time.Second / 60)
+	if got := s.editor.Base(); got.Name != "Light" {
+		t.Errorf("after Light is picked, the editor edits %q", got.Name)
+	}
+	if v, ok := s.editor.Overrides().Value(audioui.Near.Key()); !ok || v != red || s.editor.Overrides().Len() != 1 {
+		t.Errorf("after Light is picked, the editor has changes %v", s.editor.Overrides().Keys())
+	}
+	set(audioui.Sound.Key(), red)
+	saved = keptEdits(t, w)
+	if saved.Theme != "light" || !strings.Contains(string(saved.Edits), audioui.Near.Key()) ||
+		!strings.Contains(string(saved.Edits), audioui.Sound.Key()) {
+		t.Errorf("asked to keep %q for %q", saved.Edits, saved.Theme)
+	}
+}
+
+// keptEdits returns the last of the changes to a theme the window asked
+// to keep.
+func keptEdits(t *testing.T, w *gunim.Window) SaveThemeEdits {
+	t.Helper()
+	var last *SaveThemeEdits
+	for len(w.Client().Intents()) > 0 {
+		if in, ok := (<-w.Client().Intents()).Intent.(SaveThemeEdits); ok {
+			last = &in
+		}
+	}
+	if last == nil {
+		t.Fatal("the window asked to keep no changes")
+	}
+	return *last
 }
