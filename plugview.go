@@ -42,6 +42,8 @@ type goView struct {
 	edit    string
 	chip    gunim.Node
 	pane    gunim.Node
+	// spectra are the spectra asked for and not yet come, by ticket.
+	spectra map[int]spectrumDone
 }
 
 // newGoView returns the views of slot s, on track, or nil where its

@@ -18,8 +18,11 @@ import (
 // strip is the band picked on the graph, under it: its kind, as a pill
 // for each to click; its frequency, gain and Q, or slope, as values to
 // drag up or right, or step with the wheel, and a double-click sets one
-// back; and buttons to turn it off and to delete it. Its every action
-// has a key on the graph, which keeps the keyboard.
+// back; and buttons to turn it off, to delete it, and, for a bell or a
+// shelf, to make it dynamic, which shows a row of its dynamics' values
+// under the rest: its threshold, ratio, attack, release and range. Its
+// every action but the dynamics has a key on the graph, which keeps
+// the keyboard.
 type strip struct {
 	graph *graph
 	// slotOf is where each of the strip's parts is, by its slot.
@@ -40,7 +43,28 @@ const (
 	slotQ
 	slotOn
 	slotDelete
+	slotDynamic
+	slotThreshold
+	slotRatio
+	slotAttack
+	slotRelease
+	slotRange
 )
+
+// The values among the slots: the band's, and its dynamics'.
+var (
+	bandValues    = []int{slotFreq, slotGain, slotQ}
+	dynamicValues = []int{slotThreshold, slotRatio, slotAttack, slotRelease, slotRange}
+)
+
+// isValue says slot is a value to drag.
+func isValue(slot int) bool {
+	return slot >= slotFreq && slot <= slotQ || slot >= slotThreshold && slot <= slotRange
+}
+
+// dynamic says band b's dynamics show: it is a bell or a shelf, made
+// dynamic.
+func dynamic(b *audio.Band) bool { return b != nil && hasGain(b.Kind) && b.Dynamic.On }
 
 func newStrip(g *graph) *strip {
 	return &strip{graph: g, slotOf: map[int]geom.Rect{}, held: -1, hot: -1}
@@ -52,17 +76,22 @@ func (s *strip) picked() (b *audio.Band, place int) { return s.graph.band(s.grap
 // oneRow is how wide the strip is on one row.
 func oneRow(th *theme.Live) float32 {
 	return float32(len(kindNames))*(PillWidth.Get(th)+4) + 16 + 3*(ValueWidth.Get(th)+6) +
-		2*(widget.ButtonHeight.Get(th)+12)
+		3*(widget.ButtonHeight.Get(th)+12)
 }
 
 // height returns how tall the strip is at width w: one row where it
-// fits, and two where not.
+// fits, and two where not, and a row more for the dynamics of the band
+// picked, where it is dynamic.
 func (s *strip) height(w float32, th *theme.Live) float32 {
 	h := StripHeight.Get(th)
+	rows := h
 	if w < oneRow(th) {
-		return 2*h - 16
+		rows = 2*h - 16
 	}
-	return h
+	if b, _ := s.picked(); dynamic(b) {
+		rows += h - 16
+	}
+	return rows
 }
 
 // Focusable implements [gunim.Focusable]: the graph keeps the keyboard
@@ -71,7 +100,7 @@ func (s *strip) Focusable() bool { return false }
 
 // DragsTouch implements [gunim.TouchDragger]: a finger on a value
 // drags it.
-func (s *strip) DragsTouch() bool { return s.held >= slotFreq && s.held <= slotQ }
+func (s *strip) DragsTouch() bool { return isValue(s.held) }
 
 // Layout implements [gunim.Node]: the kinds in a row, then the values
 // and the buttons, on one line where there is room and two where not.
@@ -97,12 +126,19 @@ func (s *strip) Layout(c gunim.Constraints, f gunim.Frame, _ gunim.Children) geo
 		x += 16
 		y = (StripHeight.Get(th) - valueH) / 2
 	}
-	for _, slot := range []int{slotFreq, slotGain, slotQ} {
+	for _, slot := range bandValues {
 		s.slotOf[slot] = geom.Rc(x, y, valueW, valueH)
 		x += valueW + 6
 	}
 	s.slotOf[slotOn] = geom.Rc(x+6, y+5, button, button)
 	s.slotOf[slotDelete] = geom.Rc(x+button+18, y+5, button, button)
+	s.slotOf[slotDynamic] = geom.Rc(x+2*button+30, y+5, button, button)
+	// The dynamics, a row under the rest.
+	x, y = 0, y+StripHeight.Get(th)-16
+	for _, slot := range dynamicValues {
+		s.slotOf[slot] = geom.Rc(x, y, valueW, valueH)
+		x += valueW + 6
+	}
 	return s.size
 }
 
@@ -122,11 +158,14 @@ func (s *strip) Handle(e input.Event, u *gunim.UI) bool {
 	b, i := s.picked()
 	switch e := e.(type) {
 	case input.PointerMove:
-		if s.held >= slotFreq && s.held <= slotQ && b != nil {
+		if isValue(s.held) && b != nil {
 			s.slide(b, e.Pos, u)
 			break
 		}
 		s.hot = s.slotAt(e.Pos)
+		if !s.shows(b, s.hot) {
+			s.hot = -1
+		}
 	case input.PointerLeave:
 		s.hot = -1
 	case input.PointerDown:
@@ -134,6 +173,9 @@ func (s *strip) Handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		slot := s.slotAt(e.Pos)
+		if !s.shows(b, slot) {
+			return false
+		}
 		switch {
 		case slot >= 0 && slot < len(kindNames):
 			u.Cue(gunim.CueSelect, s)
@@ -142,14 +184,19 @@ func (s *strip) Handle(e input.Event, u *gunim.UI) bool {
 			g.toggle(b.ID, u)
 		case slot == slotDelete:
 			g.remove(b.ID, u)
-		case slot >= slotFreq && slot <= slotQ && e.Clicks == 2:
+		case slot == slotDynamic:
+			g.toggleDynamic(b.ID, u)
+		case isValue(slot) && e.Clicks == 2:
 			s.reset(b, i, slot, u)
-		case slot >= slotFreq && slot <= slotQ:
+		case isValue(slot):
 			s.release(u)
 			s.held, s.heldFrom, s.heldBand = slot, e.Pos, *b
 			name := fmt.Sprintf("Move band %d", i+1)
-			if slot == slotQ {
+			switch {
+			case slot == slotQ:
 				name = widthName(b, i)
+			case slot >= slotThreshold:
+				name = fmt.Sprintf("Band %d dynamics", i+1)
 			}
 			g.host.BeginEdit(name, u)
 		default:
@@ -159,7 +206,7 @@ func (s *strip) Handle(e input.Event, u *gunim.UI) bool {
 		s.release(u)
 	case input.Scroll:
 		slot := s.slotAt(e.Pos)
-		if b == nil || slot < slotFreq || slot > slotQ {
+		if b == nil || !isValue(slot) || !s.shows(b, slot) {
 			return false
 		}
 		n := e.Notches.Y
@@ -171,8 +218,15 @@ func (s *strip) Handle(e input.Event, u *gunim.UI) bool {
 			g.nudge(b.ID, float64(n)/12, 0, 0, u)
 		case slotGain:
 			g.nudge(b.ID, 0, n*0.5, 0, u)
-		default:
+		case slotQ:
 			g.nudge(b.ID, 0, 0, n, u)
+		default:
+			// A notch of the wheel is as far as 8 pixels' drag.
+			g.edit(fmt.Sprintf("Band %d dynamics", i+1), false, u, func() bool {
+				was := *b
+				*b = moveDynamic(*b, *b, slot, n*8)
+				return *b != was
+			})
 		}
 	default:
 		return false
@@ -210,9 +264,56 @@ func (s *strip) reset(b *audio.Band, i, slot int, u *gunim.UI) {
 			}
 		case slotFreq:
 			b.Freq = 1000
+		case slotThreshold:
+			b.Dynamic.Threshold = dynDefaults.Threshold
+		case slotRatio:
+			b.Dynamic.Ratio = dynDefaults.Ratio
+		case slotAttack:
+			b.Dynamic.Attack = dynDefaults.Attack
+		case slotRelease:
+			b.Dynamic.Release = dynDefaults.Release
+		case slotRange:
+			b.Dynamic.Range = dynDefaults.Range
 		}
 		return *b != was
 	})
+}
+
+// shows says slot shows for band b: the dynamics' button for a bell
+// or a shelf, and their values where it is dynamic.
+func (s *strip) shows(b *audio.Band, slot int) bool {
+	switch {
+	case b == nil:
+		return false
+	case slot == slotDynamic:
+		return hasGain(b.Kind)
+	case slot >= slotThreshold:
+		return dynamic(b)
+	}
+	return true
+}
+
+// moveDynamic returns b with its dynamics' value in slot moved d
+// pixels' drag from where it was in from: the threshold and range a
+// decibel each 8 pixels, the ratio, attack and release by ratios.
+func moveDynamic(b, from audio.Band, slot int, d float32) audio.Band {
+	ratio := func(v, lo, hi, per float32) float32 {
+		return max(lo, min(float32(float64(v)*math.Exp2(float64(d/per))), hi))
+	}
+	f, n := from.Dynamic, &b.Dynamic
+	switch slot {
+	case slotThreshold:
+		n.Threshold = max(dynLowThreshold, min(f.Threshold+d/8, dynHighThreshold))
+	case slotRatio:
+		n.Ratio = float32(math.Round(float64(ratio(f.Ratio, 1, dynMaxRatio, 80))*10) / 10)
+	case slotAttack:
+		n.Attack = ratio(f.Attack, dynLowAttack, dynHighAttack, 60)
+	case slotRelease:
+		n.Release = ratio(f.Release, dynLowRelease, dynHighRelease, 60)
+	case slotRange:
+		n.Range = max(0, min(f.Range+d/8, dynMaxRange))
+	}
+	return b
 }
 
 // slide moves the value held as the pointer goes up, or right, from
@@ -233,6 +334,8 @@ func (s *strip) slide(b *audio.Band, p geom.Point, u *gunim.UI) {
 		} else {
 			b.Q = clampQ(float64(from.Q) * math.Exp2(float64(d)/80))
 		}
+	default:
+		*b = moveDynamic(*b, from, s.held, d)
 	}
 	if *b != was {
 		s.graph.commit(false, u)
@@ -281,8 +384,19 @@ func (s *strip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	if isCut(b.Kind) {
 		values[slotQ] = [2]string{"SLOPE", fmt.Sprintf("%d dB/oct", max(b.Slope, 12))}
 	}
+	if dynamic(b) {
+		d := b.Dynamic
+		values[slotThreshold] = [2]string{"THRESHOLD", fmt.Sprintf("%.1f dB", d.Threshold)}
+		values[slotRatio] = [2]string{"RATIO", fmt.Sprintf("%.1f:1", d.Ratio)}
+		values[slotAttack] = [2]string{"ATTACK", msText(d.Attack)}
+		values[slotRelease] = [2]string{"RELEASE", msText(d.Release)}
+		values[slotRange] = [2]string{"RANGE", fmt.Sprintf("%.1f dB", d.Range)}
+	}
 	radius := widget.CardRadius.Get(th)
-	for _, slot := range []int{slotFreq, slotGain, slotQ} {
+	for _, slot := range append(bandValues, dynamicValues...) {
+		if _, ok := values[slot]; !ok {
+			continue
+		}
 		r := s.slotOf[slot]
 		fill := audioui.Faded(ink, 0.06)
 		if s.held == slot {
@@ -305,4 +419,21 @@ func (s *strip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	del := s.slotOf[slotDelete]
 	p.RRect(del, del.Size().W/2, paint.Solid(audioui.Faded(ink, 0.06)))
 	widget.PaintIcon(p, th, icon.Trash2, del.Inset(geom.Uniform(del.Size().W/4)), audioui.Faded(ink, 0.7))
+	if s.shows(b, slotDynamic) {
+		dyn := s.slotOf[slotDynamic]
+		fill, mark := audioui.Faded(ink, 0.06), audioui.Faded(ink, 0.55)
+		if b.Dynamic.On {
+			fill, mark = audioui.Faded(c, 0.25), c
+		}
+		p.RRect(dyn, dyn.Size().W/2, paint.Solid(fill))
+		widget.PaintIcon(p, th, icon.Gauge, dyn.Inset(geom.Uniform(dyn.Size().W/4)), mark)
+	}
+}
+
+// msText writes a time in milliseconds, to a tenth under 10.
+func msText(ms float32) string {
+	if ms < 10 {
+		return fmt.Sprintf("%.1f ms", ms)
+	}
+	return fmt.Sprintf("%.0f ms", ms)
 }

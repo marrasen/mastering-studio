@@ -20,22 +20,46 @@ import (
 type host struct {
 	values map[uint32]float64
 	log    []string
-	// in and out are the sound the views hear, or nil.
+	// in and out are the sound the views hear, or nil; proc, where set,
+	// is the processor whose traces the views read.
 	in, out plug.Sound
+	proc    *processor
+	// asked are the frequencies of the spectrum asked for last, and
+	// answer answers it.
+	asked  []float64
+	answer func([]float64, error, *gunim.UI)
 }
 
-func (h *host) Param(id uint32) float64 { return h.values[id] }
+func (h *host) Param(id uint32) float64 {
+	if v, ok := h.values[id]; ok {
+		return v
+	}
+	// As a host does, a parameter not set is at its default.
+	p, _ := Descriptor.Param(id)
+	return p.Default
+}
 func (h *host) Begin(uint32, *gunim.UI) { h.log = append(h.log, "begin") }
 func (h *host) Set(id uint32, v float64, _ *gunim.UI) {
 	h.values[id] = v
 	h.log = append(h.log, "set")
 }
-func (h *host) End(uint32, *gunim.UI)                { h.log = append(h.log, "end") }
-func (h *host) BeginEdit(name string, _ *gunim.UI)   { h.log = append(h.log, "edit "+name) }
-func (h *host) Changed(*gunim.UI)                    { h.log = append(h.log, "changed") }
-func (h *host) EndEdit(*gunim.UI)                    { h.log = append(h.log, "end edit") }
-func (h *host) Sound() (in, out plug.Sound)          { return h.in, h.out }
-func (h *host) Traced(uint32, int64) (float32, bool) { return 0, false }
+func (h *host) End(uint32, *gunim.UI)              { h.log = append(h.log, "end") }
+func (h *host) BeginEdit(name string, _ *gunim.UI) { h.log = append(h.log, "edit "+name) }
+func (h *host) Changed(*gunim.UI)                  { h.log = append(h.log, "changed") }
+func (h *host) EndEdit(*gunim.UI)                  { h.log = append(h.log, "end edit") }
+func (h *host) Sound() (in, out plug.Sound)        { return h.in, h.out }
+func (h *host) Traced(id uint32, f int64) (float32, bool) {
+	if h.proc == nil {
+		return 0, false
+	}
+	if t := h.proc.Trace(id); t != nil {
+		return t.Get(f)
+	}
+	return 0, false
+}
+func (h *host) Spectrum(freqs []float64, done func([]float64, error, *gunim.UI), _ *gunim.UI) {
+	h.asked, h.answer = freqs, done
+}
 
 func newEQ(t *testing.T) (*plugin, *host) {
 	t.Helper()
@@ -307,8 +331,8 @@ func TestEachOtherChangeIsAGestureOfItsOwn(t *testing.T) {
 	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 2})
 	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
 	run(30)
-	// By the keyboard: Right moves the band picked, the new one.
-	w.Input(input.KeyPress{Key: input.KeyTab})
+	// By the keyboard, the graph keeping it from the click: Right moves
+	// the band picked, the new one.
 	w.Input(input.KeyPress{Key: input.KeyRight})
 	run(1)
 	g.setKind(1, audio.LowCut, nil)

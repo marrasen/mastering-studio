@@ -274,6 +274,9 @@ func (soundHost) Sound() (in, out plug.Sound) { return nil, nil }
 // Traced implements [plug.Host]: the sound's copy keeps no views.
 func (soundHost) Traced(uint32, int64) (float32, bool) { return 0, false }
 
+// Spectrum implements [plug.Host]: the sound's copy measures nothing.
+func (soundHost) Spectrum([]float64, func([]float64, error, *gunim.UI), *gunim.UI) {}
+
 // goEngineOf returns slot id's Go plugin, loaded on track t, or nil.
 func (a *app) goEngineOf(t *Track, id int) *goEngine {
 	r := a.racks[t.ID]

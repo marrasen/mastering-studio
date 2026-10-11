@@ -331,6 +331,8 @@ func (a *app) handleChain(in gunim.Intent) {
 		a.setGoParam(in.Track, in.Slot, in.ID, in.Value)
 	case SetGoState:
 		a.setGoState(in.Track, in.Slot, in.State)
+	case MeasureSpectrum:
+		a.measureSpectrum(in)
 	case CopyChain:
 		from := a.track(in.From)
 		if from == nil {

@@ -20,6 +20,7 @@ import (
 	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/mastering-studio/plug/plugui"
 )
 
 // dot is a band as the graph shows it: its settings gliding, how far
@@ -31,6 +32,9 @@ type dot struct {
 	in, on, hot       *anim.Float
 	gone              bool
 	band              audio.Band
+	// down is how far a dynamic band turns itself down as it plays, in
+	// decibels, below zero, gliding to what the plugin playing says.
+	down *anim.Float
 }
 
 // value returns the band as it shows now, mid-glide.
@@ -40,6 +44,16 @@ func (d *dot) value() audio.Band {
 	b.Gain = d.gain.Value()
 	b.Q = float32(math.Exp2(float64(d.logQ.Value())))
 	b.On = true
+	return b
+}
+
+// playing returns the band as it plays now: its gain scaled by amount,
+// and turned down as far as it turns itself down.
+func (d *dot) playing(amount float32) audio.Band {
+	b := d.value()
+	if hasGain(b.Kind) {
+		b.Gain = b.Gain*amount + d.down.Value()
+	}
 	return b
 }
 
@@ -85,9 +99,9 @@ type graph struct {
 	menu     *widget.ContextMenu
 	picks    []func(*gunim.UI)
 	curve    []float32
-	// bypassAmt dims the curve while the EQ is bypassed, and ring is
-	// the focus ring's strength.
-	bypassAmt, ring *anim.Float
+	// bypassAmt dims the curve while the EQ is bypassed, ring is the
+	// focus ring's strength, and amount the amount, as a ratio.
+	bypassAmt, ring, amount *anim.Float
 	// laid says the graph has been laid out once: before, springs jump.
 	laid bool
 	spec spectrum
@@ -113,8 +127,9 @@ type spectrum struct {
 	in, out plug.Sound
 	at      int64
 	// still is how long the sound has brought nothing new, up to
-	// plug.StillAfter.
+	// plug.StillAfter, and playing says the sound plays.
 	still     time.Duration
+	playing   bool
 	meter     *audioui.Spectrometer
 	frames    []float32
 	freqs     []float32
@@ -171,6 +186,7 @@ func (s *spectrum) measure(dt time.Duration) (measured, playing bool) {
 func (s *spectrum) step(dt time.Duration) bool {
 	// Between chunks, the levels ease on toward those last measured.
 	measured, playing := s.measure(dt)
+	s.playing = playing
 	if !playing {
 		for i := range s.heard {
 			s.heard[i], s.before[i] = specBottom-20, specBottom-20
@@ -198,8 +214,8 @@ func (s *spectrum) step(dt time.Duration) bool {
 
 func newGraph(p *plugin, h plug.Host) *graph {
 	g := &graph{p: p, host: h, dots: map[int]*dot{}, bypassAmt: anim.NewFloat(0), ring: anim.NewFloat(0),
-		spec: newSpectrum(h)}
-	g.Add(g.bypassAmt, g.ring)
+		amount: anim.NewFloat(float32(h.Param(AmountID) / 100)), spec: newSpectrum(h)}
+	g.Add(g.bypassAmt, g.ring, g.amount)
 	g.bands = p.Bands()
 	g.bypass = h.Param(BypassID) > 0.5
 	if g.bypass {
@@ -288,7 +304,7 @@ func (g *graph) dot(b audio.Band, u *gunim.UI) *dot {
 		d = &dot{
 			logHz: anim.NewFloat(float32(math.Log2(float64(b.Freq)))), gain: anim.NewFloat(b.Gain),
 			logQ: anim.NewFloat(float32(math.Log2(float64(max(b.Q, 0.025))))),
-			in:   anim.NewFloat(1), on: anim.NewFloat(1), hot: anim.NewFloat(0),
+			in:   anim.NewFloat(1), on: anim.NewFloat(1), hot: anim.NewFloat(0), down: anim.NewFloat(0),
 		}
 		if !b.On {
 			d.on.Jump(0)
@@ -298,7 +314,7 @@ func (g *graph) dot(b audio.Band, u *gunim.UI) *dot {
 			d.in.Animate(1, widget.Bounce.Get(u.Theme()))
 		}
 		g.dots[b.ID] = d
-		g.Add(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot)
+		g.Add(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot, d.down)
 	}
 	if d.gone {
 		// A band back again, as an undo brings it, before its point
@@ -354,8 +370,13 @@ func (g *graph) FollowState(u *gunim.UI) {
 }
 
 // Follow implements [plug.Follower]: the curve dims while the EQ is
-// bypassed.
+// bypassed, and scales with the amount.
 func (g *graph) Follow(id uint32, v float64, u *gunim.UI) {
+	if id == AmountID {
+		g.spring(g.amount, float32(v/100), widget.Settle, u)
+		u.Invalidate()
+		return
+	}
 	if id != BypassID {
 		return
 	}
@@ -439,6 +460,31 @@ func (g *graph) toggle(id int, u *gunim.UI) {
 	u.Cue(cue, g)
 	g.edit(fmt.Sprintf(name, i+1), false, u, func() bool {
 		b.On = !b.On
+		return true
+	})
+}
+
+// toggleDynamic makes band id dynamic, as its dynamics were or as they
+// start, or static again.
+func (g *graph) toggleDynamic(id int, u *gunim.UI) {
+	b, i := g.band(id)
+	if b == nil || !hasGain(b.Kind) {
+		return
+	}
+	name, cue := "Band %d dynamic", gunim.CueToggleOn
+	if b.Dynamic.On {
+		name, cue = "Band %d static", gunim.CueToggleOff
+	}
+	u.Cue(cue, g)
+	g.edit(fmt.Sprintf(name, i+1), false, u, func() bool {
+		switch {
+		case b.Dynamic.On:
+			b.Dynamic.On = false
+		case b.Dynamic == (audio.Dynamics{}):
+			b.Dynamic = dynDefaults
+		default:
+			b.Dynamic.On = true
+		}
 		return true
 	})
 }
@@ -765,13 +811,31 @@ func (g *graph) Step(dt time.Duration) bool {
 	if g.spec.step(dt) {
 		moving = true
 	}
+	g.followDown()
 	for id, d := range g.dots {
 		if d.gone && d.in.Value() < 0.01 && !d.in.Active() {
-			g.Remove(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot)
+			g.Remove(d.logHz, d.gain, d.logQ, d.in, d.on, d.hot, d.down)
 			delete(g.dots, id)
 		}
 	}
 	return moving
+}
+
+// followDown glides each dynamic band's dot to how far the band turns
+// itself down at the frame heard, as the plugin playing kept it, and
+// back up once the sound stops.
+func (g *graph) followDown() {
+	for id, d := range g.dots {
+		to := float32(0)
+		if g.spec.playing && d.band.Dynamic.On {
+			if v, ok := g.host.Traced(bandTrace+uint32(id), g.spec.at-1); ok {
+				to = v
+			}
+		}
+		if d.down.Target() != to {
+			d.down.Animate(to, anim.Snappy)
+		}
+	}
 }
 
 // Access implements [gunim.Accessible]: a group, named EQ, whose value
@@ -917,7 +981,7 @@ func (g *graph) paintCurve(p *paint.Painter, th *theme.Live, box geom.Size, bypa
 			if w <= 0.001 {
 				continue
 			}
-			r := float32(d.value().Response(hz)) * w
+			r := float32(d.playing(g.amount.Value()).Response(hz)) * w
 			db += r
 			if d == focused && own != nil {
 				own[i] = r
@@ -987,6 +1051,13 @@ func (g *graph) paintDot(p *paint.Painter, th *theme.Live, d *dot, i int, picked
 	at := g.dotAt(d)
 	base := DotRadius.Get(th)
 	r := (base + base/3*d.hot.Value()) * grow
+	if down := d.down.Value(); down < -0.1 && grow > 0.5 {
+		// A dynamic band turning itself down: a line from its point to
+		// where it plays now, and a mark there.
+		y := g.yOf(d.gain.Value()*g.amount.Value() + down)
+		audioui.Segment(p, geom.Pt(at.X, at.Y+r), geom.Pt(at.X, y), 1.5, audioui.Faded(c, 0.7))
+		p.RRect(geom.Rc(at.X-4, y-1, 8, 2), 1, paint.Solid(c))
+	}
 	if picked {
 		ring := geom.Rc(at.X-r-5, at.Y-r-5, 2*r+10, 2*r+10)
 		p.RRectStroke(ring, r+5, paint.Fill{}, paint.Stroke{Width: 2, Color: audioui.Faded(c, 0.6)})
@@ -1050,37 +1121,108 @@ func (v *panel) FollowState(u *gunim.UI) { v.graph.FollowState(u) }
 // Follow implements [plug.Follower].
 func (v *panel) Follow(id uint32, val float64, u *gunim.UI) { v.graph.Follow(id, val, u) }
 
-// full is the graph, and under it the strip of the band picked.
+// full is the graph, and under it the strip of the band picked, and
+// beside the strip the Auto button, with what it last did, and the
+// amount's knob.
 type full struct {
-	panel *panel
-	strip *strip
+	panel  *panel
+	strip  *strip
+	auto   *widget.Button
+	note   *widget.Label
+	amount *plugui.Knob
+	host   plug.Host
+	// listening says Auto waits for the track to be measured.
+	listening bool
 }
 
 func newFull(p *plugin, h plug.Host) *full {
 	pn := newPanel(p, h)
-	return &full{panel: pn, strip: newStrip(pn.graph)}
+	v := &full{panel: pn, strip: newStrip(pn.graph), auto: widget.NewButton("Auto"), note: widget.NewLabel(""),
+		amount: plugui.NewKnob(h, Descriptor.Params[1]), host: h}
+	v.auto.Tooltip = "Shape the bands so the whole track sounds as even as pink noise"
+	v.auto.OnClick = func(u *gunim.UI) gunim.Intent {
+		v.listen(u)
+		return nil
+	}
+	v.note.MaxLines, v.note.NoWrap = 1, true
+	return v
 }
+
+// listen has the host measure the track, for Auto.
+func (v *full) listen(u *gunim.UI) {
+	if v.listening {
+		return
+	}
+	v.listening = true
+	v.auto.Disabled, v.note.Text = true, "Listening…"
+	u.Invalidate()
+	v.host.Spectrum(autoFreqs, v.heard, u)
+}
+
+// heard takes the track's spectrum, measured, and shapes the bands to
+// bring it to pink, as one step to undo.
+func (v *full) heard(levels []float64, err error, u *gunim.UI) {
+	v.listening, v.auto.Disabled = false, false
+	u.Invalidate()
+	if err != nil {
+		v.note.Text = "Could not listen: " + err.Error()
+		return
+	}
+	if len(levels) != len(autoFreqs) {
+		v.note.Text = "Could not listen to the track"
+		return
+	}
+	g := v.panel.graph
+	bands := autoBands(levels)
+	g.edit("Auto EQ", true, u, func() bool {
+		g.bands, g.sel = bands, 0
+		return true
+	})
+	v.note.Text = "Matched to pink noise"
+}
+
+// sideW is how wide the room beside the strip is, for Auto and the
+// amount.
+const sideW = 190
 
 // FollowState implements [plug.StateFollower].
 func (v *full) FollowState(u *gunim.UI) { v.panel.FollowState(u) }
 
 // Follow implements [plug.Follower].
-func (v *full) Follow(id uint32, val float64, u *gunim.UI) { v.panel.Follow(id, val, u) }
+func (v *full) Follow(id uint32, val float64, u *gunim.UI) {
+	v.panel.Follow(id, val, u)
+	if id == AmountID {
+		v.amount.Follow(val, u)
+	}
+}
 
 // Children implements [gunim.Composite].
-func (v *full) Children() []gunim.Node { return []gunim.Node{v.panel, v.strip} }
+func (v *full) Children() []gunim.Node {
+	return []gunim.Node{v.panel, v.strip, v.auto, v.note, v.amount}
+}
 
 // Layout implements [gunim.Node]: the strip takes one row at the
-// bottom where it fits, and two where not, and the graph the rest.
+// bottom where it fits, and two where not, and a row more for the
+// dynamics of a dynamic band; Auto and the amount stand beside it, and
+// the graph takes the rest.
 func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	size := c.Max
 	gap := widget.Gap.Get(f.Theme)
-	stripH := v.strip.height(size.W, f.Theme)
+	stripW := max(size.W-sideW-gap, 0)
+	stripH := max(v.strip.height(stripW, f.Theme), plugui.KnobH)
 	graphH := max(size.H-stripH-gap, 0)
 	kids.At(0).Layout(gunim.Tight(geom.Sz(size.W, graphH)))
 	kids.At(0).Place(geom.Point{})
-	kids.At(1).Layout(gunim.Tight(geom.Sz(size.W, stripH)))
+	kids.At(1).Layout(gunim.Tight(geom.Sz(stripW, stripH)))
 	kids.At(1).Place(geom.Pt(0, graphH+gap))
+	side := geom.Pt(size.W-sideW, graphH+gap)
+	bw := float32(sideW - plugui.KnobW - 12)
+	kids.At(2).Layout(gunim.Constraints{Min: geom.Sz(bw, 0), Max: geom.Sz(bw, 40)})
+	kids.At(2).Place(side.Add(geom.Pt(0, 8)))
+	kids.At(3).Layout(gunim.Constraints{Max: geom.Sz(bw, 20)})
+	kids.At(3).Place(side.Add(geom.Pt(0, 52)))
+	kids.At(4).Layout(gunim.Tight(geom.Sz(plugui.KnobW, plugui.KnobH)))
+	kids.At(4).Place(geom.Pt(size.W-plugui.KnobW, graphH+gap))
 	return size
 }
 

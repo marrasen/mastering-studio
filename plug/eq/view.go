@@ -111,13 +111,15 @@ const chipPoints = 64
 type chip struct {
 	p      *plugin
 	bypass bool
+	// amount scales the gains, as a ratio.
+	amount float64
 	// curve is the bands' response at chipPoints frequencies, from
 	// eqLow to eqHigh, worked out as the bands change.
 	curve [chipPoints]float32
 }
 
 func newChip(p *plugin, h plug.Host) *chip {
-	c := &chip{p: p, bypass: h.Param(BypassID) > 0.5}
+	c := &chip{p: p, bypass: h.Param(BypassID) > 0.5, amount: h.Param(AmountID) / 100}
 	c.read()
 	return c
 }
@@ -125,6 +127,9 @@ func newChip(p *plugin, h plug.Host) *chip {
 // read works the curve out again from the plugin's bands.
 func (c *chip) read() {
 	bands := c.p.Bands()
+	for i := range bands {
+		bands[i].Gain *= float32(c.amount)
+	}
 	for i := range c.curve {
 		hz := eqLow * math.Pow(eqHigh/eqLow, float64(i)/(chipPoints-1))
 		c.curve[i] = float32(audio.Response(bands, hz))
@@ -132,12 +137,18 @@ func (c *chip) read() {
 }
 
 // Follow implements [plug.Follower]: the curve flattens while the EQ
-// is bypassed.
+// is bypassed, and scales with the amount.
 func (c *chip) Follow(id uint32, v float64, u *gunim.UI) {
-	if id == BypassID {
+	switch id {
+	case BypassID:
 		c.bypass = v > 0.5
-		u.Invalidate()
+	case AmountID:
+		c.amount = v / 100
+		c.read()
+	default:
+		return
 	}
+	u.Invalidate()
 }
 
 // FollowState implements [plug.StateFollower].

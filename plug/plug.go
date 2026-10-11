@@ -211,6 +211,14 @@ type Host interface {
 	// as a [Tracer], of the ReadOnly parameter id, and whether there is
 	// one: for a view to draw along the sound it hears.
 	Traced(id uint32, f int64) (v float32, ok bool)
+	// Spectrum measures the whole of the track the plugin is on, as it
+	// reaches the plugin, through the plugins before it, in the
+	// background: the power about each of freqs, ascending, from halfway
+	// to the frequency below to halfway to the one above, over the
+	// track's sound, in decibels. Pink noise reads level. done runs on
+	// the window's goroutine with the levels, or what kept the host from
+	// measuring them.
+	Spectrum(freqs []float64, done func(levels []float64, err error, u *gunim.UI), u *gunim.UI)
 }
 
 // Sound is a plugin's sound, as the host keeps it while it plays.

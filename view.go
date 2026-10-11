@@ -45,9 +45,11 @@ func registerViews(w *gunim.Window, d *deck) {
 // laid out end to end.
 type root struct {
 	anim.Group
-	d      *deck
-	state  Album
-	header *header
+	d     *deck
+	state Album
+	// tickets counts the spectra the plugins' views asked for.
+	tickets int
+	header  *header
 	// headerMenu is the album's menu, around the header.
 	headerMenu *widget.ContextMenu
 	list       *trackList
@@ -148,6 +150,7 @@ func (r *root) show(s Album, u *gunim.UI) {
 	r.tools.show(t)
 	r.chain.show(t, s)
 	r.showGo(t, s, was, u)
+	r.takeSpectra(s, u)
 	r.head.show(t, s, u)
 	r.trans.show(s)
 	r.strip.show(s)

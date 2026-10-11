@@ -1,6 +1,9 @@
 // Package eq is a parametric EQ in the [plug] format: up to eight
 // bands, each a bell, a shelf, a cut or a notch, kept as the plugin's
-// state, and a graph to drag them about on.
+// state, and a graph to drag them about on. A bell or a shelf can be
+// dynamic, turning itself down as its band of the sound grows loud;
+// Amount scales every gain; and Auto shapes the bands so the whole
+// track, as it reaches the EQ, sounds as even as pink noise.
 package eq
 
 import (
@@ -9,6 +12,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
@@ -16,8 +20,18 @@ import (
 )
 
 // BypassID is the ID of the bypass parameter: over 0.5 passes the
-// sound by the EQ.
-const BypassID uint32 = 1
+// sound by the EQ. AmountID is the amount's, in percent: how far the
+// bells and shelves lift and lower, and the dynamic bands turn down,
+// from none at 0 to twice as set at 200.
+const (
+	BypassID uint32 = 1
+	AmountID uint32 = 2
+)
+
+// bandTrace is where the IDs of the bands' traces start: band n's
+// reduction, as the views read it with [plug.Host.Traced], is traced
+// as bandTrace+n.
+const bandTrace = 1000
 
 // Descriptor is the plugin, as it is registered.
 var Descriptor = plug.Descriptor{
@@ -30,6 +44,11 @@ var Descriptor = plug.Descriptor{
 		ID: BypassID, Name: "Bypass",
 		Min: 0, Max: 1, Default: 0, Steps: 1,
 		Flags: plug.Bypass | plug.Hidden,
+	}, {
+		ID: AmountID, Name: "Amount", Unit: "%",
+		Min: 0, Max: 200, Default: 100,
+		Flags:  plug.Automatable,
+		Format: func(v float64) string { return fmt.Sprintf("%.0f%%", v) },
 	}},
 	Patches: patches,
 	New:     func(h plug.Host) plug.Plugin { return newPlugin(h) },
@@ -46,6 +65,19 @@ const (
 	minQ, maxQ    = 0.1, 18
 )
 
+// A dynamic band's bounds: its threshold, ratio, attack and release,
+// and its range.
+const (
+	dynLowThreshold, dynHighThreshold = -60, 0
+	dynMaxRatio                       = 20
+	dynLowAttack, dynHighAttack       = 0.1, 200
+	dynLowRelease, dynHighRelease     = 5, 2000
+	dynMaxRange                       = 24
+)
+
+// dynDefaults are a band's dynamics as they first turn on.
+var dynDefaults = audio.Dynamics{On: true, Threshold: -24, Ratio: 3, Attack: 10, Release: 120, Range: 6}
+
 // version is the version of the state's format that State writes.
 const version = 1
 
@@ -55,14 +87,17 @@ type plugin struct {
 	eq   *audio.EQ
 	proc processor
 	// mu guards bands, which State and SetState reach from the app's
-	// goroutine and the views from the window's.
+	// goroutine and the views from the window's; ids are their IDs, for
+	// the processor, which takes no lock.
 	mu    sync.Mutex
 	bands []audio.Band
+	ids   atomic.Pointer[[]int]
 }
 
 func newPlugin(h plug.Host) *plugin {
 	p := &plugin{host: h, eq: audio.NewEQ()}
-	p.proc.eq = p.eq
+	p.proc.eq, p.proc.ids = p.eq, &p.ids
+	p.ids.Store(&[]int{})
 	return p
 }
 
@@ -108,6 +143,11 @@ func (p *plugin) setBands(bands []audio.Band) {
 	p.mu.Lock()
 	p.bands = slices.Clone(bands)
 	p.mu.Unlock()
+	ids := make([]int, len(bands))
+	for i, b := range bands {
+		ids[i] = b.ID
+	}
+	p.ids.Store(&ids)
 	p.eq.Set(bands)
 }
 
@@ -143,6 +183,18 @@ type savedBand struct {
 	Q     float32 `json:"q"`
 	Slope int     `json:"slope,omitempty"`
 	On    bool    `json:"on"`
+	// Dynamic is the band's dynamics, where it has them.
+	Dynamic *savedDynamics `json:"dynamic,omitempty"`
+}
+
+// savedDynamics are a band's dynamics as they are saved.
+type savedDynamics struct {
+	On        bool    `json:"on"`
+	Threshold float32 `json:"threshold"`
+	Ratio     float32 `json:"ratio"`
+	Attack    float32 `json:"attack"`
+	Release   float32 `json:"release"`
+	Range     float32 `json:"range"`
 }
 
 // kindKeys name the kinds of band in the saved state, in their order.
@@ -153,6 +205,10 @@ func stateOf(bands []audio.Band) state {
 	s := state{Version: version, Bands: make([]savedBand, len(bands))}
 	for i, b := range bands {
 		s.Bands[i] = savedBand{ID: b.ID, Kind: kindKeys[b.Kind], Freq: b.Freq, Gain: b.Gain, Q: b.Q, Slope: b.Slope, On: b.On}
+		if d := b.Dynamic; d != (audio.Dynamics{}) {
+			s.Bands[i].Dynamic = &savedDynamics{On: d.On, Threshold: d.Threshold, Ratio: d.Ratio, Attack: d.Attack,
+				Release: d.Release, Range: d.Range}
+		}
 	}
 	return s
 }
@@ -177,6 +233,10 @@ func parseState(b []byte) ([]audio.Band, error) {
 			return nil, fmt.Errorf("eq: band %d is of an unknown kind, %q", i+1, sb.Kind)
 		}
 		b := audio.Band{ID: sb.ID, Kind: audio.FilterKind(kind), Freq: sb.Freq, Gain: sb.Gain, Q: sb.Q, Slope: sb.Slope, On: sb.On}
+		if d := sb.Dynamic; d != nil {
+			b.Dynamic = audio.Dynamics{On: d.On, Threshold: d.Threshold, Ratio: d.Ratio, Attack: d.Attack, Release: d.Release,
+				Range: d.Range}
+		}
 		if err := checkBand(b); err != nil {
 			return nil, fmt.Errorf("eq: band %d %w", i+1, err)
 		}
@@ -205,6 +265,19 @@ func checkBand(b audio.Band) error {
 	case b.Slope != 0 && (b.Slope%12 != 0 || !inside(float32(b.Slope), 12, 48)):
 		return fmt.Errorf("has a slope of %d dB an octave, not 12, 24, 36 or 48", b.Slope)
 	}
+	if d := b.Dynamic; d != (audio.Dynamics{}) {
+		switch {
+		case !inside(d.Threshold, dynLowThreshold, dynHighThreshold):
+			return fmt.Errorf("turns down from %g dB, outside %d dB to %d dB", d.Threshold, dynLowThreshold, dynHighThreshold)
+		case !inside(d.Ratio, 1, dynMaxRatio):
+			return fmt.Errorf("turns down at %g:1, outside 1:1 to %d:1", d.Ratio, dynMaxRatio)
+		case !inside(d.Attack, dynLowAttack, dynHighAttack) || !inside(d.Release, dynLowRelease, dynHighRelease):
+			return fmt.Errorf("turns down over %g ms and back over %g ms, outside %g to %d ms and %d to %d ms",
+				d.Attack, d.Release, dynLowAttack, dynHighAttack, dynLowRelease, dynHighRelease)
+		case !inside(d.Range, 0, dynMaxRange):
+			return fmt.Errorf("turns down as far as %g dB, outside 0 to %d dB", d.Range, dynMaxRange)
+		}
+	}
 	return nil
 }
 
@@ -217,17 +290,37 @@ const piece = 128
 type processor struct {
 	eq     *audio.EQ
 	insert audio.Insert
-	rate   float64
+	// reducer is the insert, telling how far each band turns itself
+	// down; ids the bands' IDs, as the plugin sets them.
+	reducer reducer
+	ids     *atomic.Pointer[[]int]
+	rate    float64
 	// scratch holds a chunk of the block as interleaved stereo frames.
 	scratch []float32
 	// bypass is the bypass the EQ was last told.
 	bypass bool
+	// traces keep how far each band turned itself down, by frame, for
+	// the views: a trace a band, the band's ID with it.
+	traces [maxBands]bandTraced
+}
+
+// reducer is an EQ's insert, as it tells how far a band turns itself
+// down.
+type reducer interface {
+	Reduction(id int) (float64, bool)
+}
+
+// bandTraced is a band's trace: the band's ID, 0 for none, and how far
+// it turned itself down.
+type bandTraced struct {
+	id    atomic.Int64
+	trace plug.Trace
 }
 
 // Prepare implements [plug.Processor].
 func (p *processor) Prepare(s plug.Setup) {
 	p.rate = s.Rate
-	p.insert = p.eq.InsertAt(int(s.Rate))
+	p.setInsert(p.eq.InsertAt(int(s.Rate)))
 	p.scratch = make([]float32, 2*max(s.MaxBlock, 0))
 }
 
@@ -245,6 +338,7 @@ func (p *processor) Process(b *plug.Block) {
 		return
 	}
 	next := 0
+	p.claimTraces()
 	for at := 0; at < b.Frames; at += chunk {
 		n := min(chunk, b.Frames-at)
 		for next < len(b.Changes) && b.Changes[next].Frame < at+n {
@@ -269,7 +363,9 @@ func (p *processor) run(b *plug.Block, at, n int) {
 		buf[2*i], buf[2*i+1] = left[i], right[i]
 	}
 	for i := 0; i < n; i += piece {
-		p.insert.Process(buf[2*i : 2*min(i+piece, n)])
+		end := min(i+piece, n)
+		p.insert.Process(buf[2*i : 2*end])
+		p.keepDown(b.Position.Frame+int64(at+i), b.Position.Frame+int64(at+end-1))
 	}
 	outL := b.Out[0][at : at+n]
 	for i := range n {
@@ -294,15 +390,80 @@ func (p *processor) passBy(b *plug.Block) {
 	}
 }
 
-// take takes a change to the bypass.
+// take takes a change to the bypass or the amount.
 func (p *processor) take(c plug.Change) {
-	if c.ID != BypassID {
+	switch c.ID {
+	case AmountID:
+		p.eq.SetAmount(Descriptor.Params[1].Clamp(c.Value) / 100)
+	case BypassID:
+		if on := c.Value > 0.5; on != p.bypass {
+			p.bypass = on
+			p.eq.SetBypass(on)
+		}
+	}
+}
+
+// setInsert makes in the insert played.
+func (p *processor) setInsert(in audio.Insert) {
+	p.insert = in
+	p.reducer, _ = in.(reducer)
+}
+
+// claimTraces gives each band a trace: its own, where it has one, or
+// one a band gone had.
+func (p *processor) claimTraces() {
+	ids := *p.ids.Load()
+	for _, id := range ids {
+		if p.traceOf(int64(id)) != nil {
+			continue
+		}
+		for k := range p.traces {
+			t := &p.traces[k]
+			if old := t.id.Load(); old == 0 || !slices.Contains(ids, int(old)) {
+				t.id.Store(int64(id))
+				break
+			}
+		}
+	}
+}
+
+// traceOf returns band id's trace, or nil.
+func (p *processor) traceOf(id int64) *plug.Trace {
+	for k := range p.traces {
+		if p.traces[k].id.Load() == id {
+			return &p.traces[k].trace
+		}
+	}
+	return nil
+}
+
+// keepDown keeps how far each band turns itself down for frames from to
+// to, as the insert last played them.
+func (p *processor) keepDown(from, to int64) {
+	if p.reducer == nil {
 		return
 	}
-	if on := c.Value > 0.5; on != p.bypass {
-		p.bypass = on
-		p.eq.SetBypass(on)
+	for k := range p.traces {
+		t := &p.traces[k]
+		id := t.id.Load()
+		if id == 0 {
+			continue
+		}
+		r, ok := p.reducer.Reduction(int(id))
+		if !ok {
+			continue
+		}
+		t.trace.Put(from, float32(r))
+		t.trace.Put(to, float32(r))
 	}
+}
+
+// Trace implements [plug.Tracer]: band n's reduction as bandTrace+n.
+func (p *processor) Trace(id uint32) *plug.Trace {
+	if id <= bandTrace {
+		return nil
+	}
+	return p.traceOf(int64(id - bandTrace))
 }
 
 // Latency implements [plug.Processor]: the EQ is never late.
@@ -316,7 +477,7 @@ func (p *processor) Tail() int { return 0 }
 // from before.
 func (p *processor) Reset() {
 	if p.rate > 0 {
-		p.insert = p.eq.InsertAt(int(p.rate))
+		p.setInsert(p.eq.InsertAt(int(p.rate)))
 	}
 }
 
