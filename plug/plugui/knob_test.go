@@ -181,3 +181,20 @@ func TestAnActionDialShowsItsTaskRunAndEnd(t *testing.T) {
 		t.Errorf("it reads as %+v", info)
 	}
 }
+
+func TestTheHistoryFillsToItsLeftEdgeAsItCatchesUp(t *testing.T) {
+	hs := &History{}
+	const w = 1060
+	for _, lag := range []float64{0, 0.5, 3, historyCatchUp} {
+		hs.n = 2000
+		hs.shown = float64(hs.n) - lag
+		if x0, _ := hs.columnAt(hs.firstShown(), w); x0 > 0 {
+			t.Errorf("lagging %v columns, the first column drawn starts at %v: the left edge is bare", lag, x0)
+		}
+	}
+	// Fewer columns than fill it: they start at the first.
+	hs.n, hs.shown = 10, 10
+	if hs.firstShown() != 0 {
+		t.Errorf("with 10 columns, the first drawn is %d", hs.firstShown())
+	}
+}

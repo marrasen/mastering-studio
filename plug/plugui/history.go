@@ -227,6 +227,22 @@ func (hs *History) Column(k int64) (in, out float32, down []float32, loud float3
 	return c.in, c.out, c.down[:len(hs.Reductions)], c.loud
 }
 
+// firstShown is the first column drawn: the one at the left edge, or
+// before it, as far as the scroll has come, which lags the columns made
+// by as many as historyCatchUp.
+func (hs *History) firstShown() int64 {
+	return max(0, int64(math.Floor(hs.shown))-shownCols-1)
+}
+
+// columnAt returns where column k runs across a history w wide, in
+// whole pixels, each column starting where the last ended.
+func (hs *History) columnAt(k int64, w float32) (x0, x1 float32) {
+	colW := w / shownCols
+	x0 = float32(math.Round(float64(w - float32(hs.shown-float64(k))*colW)))
+	x1 = float32(math.Round(float64(w - float32(hs.shown-float64(k+1))*colW)))
+	return x0, x1
+}
+
 // Scrolled returns how far the scroll has come, in columns.
 func (hs *History) Scrolled() float64 { return hs.shown }
 
@@ -259,14 +275,11 @@ func (hs *History) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 		label := audioui.Shaped(fmt.Sprintf("%.0f", db), 9, false, true)
 		label.Paint(p, geom.Pt(box.W-label.Advance-6, y+2), audioui.Faded(ink, 0.35))
 	}
-	colW := box.W / shownCols
 	in := HistoryIn.Get(th)
 	// each runs fn over the columns shown, with where each is.
 	each := func(fn func(c *historyColumn, x0, w float32)) {
-		for k := max(0, hs.n-shownCols-1); k < hs.n; k++ {
-			// Whole pixels, each column starting where the last ended.
-			x1 := float32(math.Round(float64(box.W - float32(hs.shown-float64(k+1))*colW)))
-			x0 := float32(math.Round(float64(box.W - float32(hs.shown-float64(k))*colW)))
+		for k := hs.firstShown(); k < hs.n; k++ {
+			x0, x1 := hs.columnAt(k, box.W)
 			if x0 >= box.W || x1 <= 0 || x1 <= x0 {
 				continue
 			}
