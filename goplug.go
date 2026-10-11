@@ -368,9 +368,21 @@ func (a *app) showGoSettings() {
 				if err != nil {
 					continue
 				}
+				v := set.values(&d)
+				// Its own bypass, as the chain's light has it: the
+				// plugin is told at once, its state only as it is next
+				// read, which would leave the views a while behind.
+				for _, p := range d.Params {
+					if p.Flags&plug.Bypass != 0 {
+						v[p.ID] = 0
+						if s.Bypass {
+							v[p.ID] = 1
+						}
+					}
+				}
 				// Written only as they change: the window holds the
 				// album as last published.
-				if v := set.values(&d); !maps.Equal(v, s.Values) {
+				if !maps.Equal(v, s.Values) {
 					s.Values = v
 				}
 				if !bytes.Equal(set.State, s.GoState) {

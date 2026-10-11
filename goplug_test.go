@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marrasen/mastering-studio/plug/eq"
+
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/mastering-studio/plug"
@@ -378,8 +380,8 @@ func TestAGoPluginRunsWithoutLockingOrMakingAnything(t *testing.T) {
 
 func TestThePaneAnimatesItsPluginsInOutAndAcross(t *testing.T) {
 	a := goAlbum(0)
-	eq := Slot{ID: 10, Path: goPath, Class: "marrasen.eq", Name: "EQ", Values: map[uint32]float64{1: 0}}
-	a.Tracks[0].Chain = append(a.Tracks[0].Chain, eq)
+	eqSlot := Slot{ID: 10, Path: goPath, Class: "marrasen.eq", Name: "EQ", Values: map[uint32]float64{1: 0}}
+	a.Tracks[0].Chain = append(a.Tracks[0].Chain, eqSlot)
 	w, r, run := stage(t, a)
 	show := func(id, n int) {
 		t.Helper()
@@ -478,5 +480,24 @@ func TestAPluginsViewsReadWhatItReports(t *testing.T) {
 	lp.p.Process(frames)
 	if got := h.Param(1); got != 0.75 {
 		t.Fatalf("the views read a peak of %v, want 0.75, as it reports", got)
+	}
+}
+
+func TestAPluginsViewsSeeItsBypassAtOnce(t *testing.T) {
+	a := savedApp(t)
+	id := a.Tracks[0].ID
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: eq.Descriptor.ID, Name: "EQ"}})
+	a.rackOf(&a.Tracks[0])
+	slot := a.Tracks[0].Chain[0].ID
+	for _, on := range []bool{true, false, true} {
+		a.handle(SetBypass{Track: id, Slot: slot, On: on})
+		a.showGoSettings()
+		want := 0.0
+		if on {
+			want = 1
+		}
+		if got := a.Tracks[0].Chain[0].Values[eq.BypassID]; got != want {
+			t.Fatalf("bypassed %v, the EQ's views are shown its bypass at %v", on, got)
+		}
 	}
 }
