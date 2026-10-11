@@ -145,3 +145,26 @@ func TestAViewIsGivenTheSpectrumItAskedForOnce(t *testing.T) {
 		t.Fatalf("the view was given its spectrum %d times, %v", calls, got)
 	}
 }
+
+func TestAViewsAskForASpectrumGoesToTheApp(t *testing.T) {
+	w, r, run := stage(t, goAlbum(0))
+	v := r.goViews[9]
+	if v == nil {
+		t.Fatal("the trim has no views")
+	}
+	gunim.RegisterPatch(w, "album", func(_ *root, _ struct{}, u *gunim.UI) {
+		goHost{v}.Spectrum([]float64{100, 1000}, func([]float64, error, *gunim.UI) {}, u)
+	})
+	if err := w.Client().Patch("album", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	_, sent := edits(w)
+	if len(sent) != 1 {
+		t.Fatalf("asking for a spectrum sent %v", sent)
+	}
+	in, ok := sent[0].(MeasureSpectrum)
+	if !ok || in.Track != 1 || in.Slot != 9 || len(in.Freqs) != 2 || v.spectra[in.Ticket] == nil {
+		t.Fatalf("asking for a spectrum sent %+v, and waits on %v", sent[0], v.spectra)
+	}
+}
