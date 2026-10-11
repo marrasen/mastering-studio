@@ -15,11 +15,12 @@ import (
 )
 
 // reduction reads how far the limiter turns the sound down, in
-// decibels, below zero: nothing while no sound plays, as a meter of it
+// decibels, below zero: nothing once the sound stops, as a meter of it
 // rests.
 type reduction struct {
-	h plug.Host
-	l plug.Listener
+	h    plug.Host
+	l    plug.Listener
+	last float32
 }
 
 func newReduction(h plug.Host) *reduction {
@@ -27,31 +28,41 @@ func newReduction(h plug.Host) *reduction {
 	return &reduction{h: h, l: plug.Listener{Sound: out}}
 }
 
-// read reads it, and whether the sound moves.
-func (r *reduction) read() (db float32, live bool) {
-	if frames, _ := r.l.Listen(4096); len(frames) == 0 {
-		return 0, false
+// read reads it, a frame of the window, dt, on, and whether the sound
+// plays: between the chunks the sound comes in, it holds.
+func (r *reduction) read(dt time.Duration) (db float32, live bool) {
+	frames, _, playing := r.l.Hear(4096, dt)
+	switch {
+	case len(frames) > 0:
+		r.last = float32(r.h.Param(ReductionID))
+	case !playing:
+		r.last = 0
 	}
-	return float32(r.h.Param(ReductionID)), true
+	return r.last, playing
 }
 
 // vuOf reads the level of a sound in VU, 0 VU at -18 dBFS, as studios
-// calibrate: the average of the frames heard since the last read, as a
-// VU meter rectifies, and whether the sound moves.
+// calibrate: the average of the frames heard since the last chunk, as a
+// VU meter rectifies, held between chunks, and whether the sound plays.
 func vuOf(s plug.Sound) func(time.Duration) (float32, bool) {
 	l := plug.Listener{Sound: s}
-	return func(time.Duration) (float32, bool) {
-		frames, _ := l.Listen(8192)
-		if len(frames) == 0 {
-			return vuLow - 2, false
+	last := float32(vuRest)
+	return func(dt time.Duration) (float32, bool) {
+		frames, _, playing := l.Hear(8192, dt)
+		switch {
+		case len(frames) > 0:
+			var sum float64
+			for _, v := range frames {
+				sum += math.Abs(float64(v))
+			}
+			// A sine's average is 0.9 of its RMS, by which a VU meter
+			// reads it.
+			avg := sum / float64(len(frames)) * math.Pi / (2 * math.Sqrt2)
+			last = float32(20*math.Log10(max(avg, 1e-9)) + 18)
+		case !playing:
+			last = vuRest
 		}
-		var sum float64
-		for _, v := range frames {
-			sum += math.Abs(float64(v))
-		}
-		// A sine's average is 0.9 of its RMS, by which a VU meter reads it.
-		avg := sum / float64(len(frames)) * math.Pi / (2 * math.Sqrt2)
-		return float32(20*math.Log10(max(avg, 1e-9)) + 18), true
+		return last, playing
 	}
 }
 
@@ -102,7 +113,7 @@ func (c *chip) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 
 // Step implements [gunim.Animator]: the bar follows the reduction.
 func (c *chip) Step(dt time.Duration) bool {
-	db, live := c.r.read()
+	db, live := c.r.read(dt)
 	c.shown.Animate(db, anim.Snappy)
 	return c.shownG.Step(dt) || live
 }
@@ -130,7 +141,7 @@ func newPanel(h plug.Host) *panel {
 	r := newReduction(h)
 	_, out := h.Sound()
 	p := &panel{
-		gr:  newVU("GAIN REDUCTION", func(time.Duration) (float32, bool) { return r.read() }),
+		gr:  newVU("GAIN REDUCTION", r.read),
 		out: newVU("OUTPUT", vuOf(out)),
 	}
 	for _, id := range []uint32{DriveID, CeilingID, ReleaseID} {

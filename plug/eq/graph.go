@@ -110,8 +110,11 @@ const (
 // it behind the bands: measured as the sound is heard, its levels rising
 // at once and falling slower, as a meter's do.
 type spectrum struct {
-	in, out   plug.Sound
-	at        int64
+	in, out plug.Sound
+	at      int64
+	// still is how long the sound has brought nothing new, up to
+	// plug.StillAfter.
+	still     time.Duration
 	meter     *audioui.Spectrometer
 	frames    []float32
 	freqs     []float32
@@ -124,7 +127,7 @@ type spectrum struct {
 }
 
 func newSpectrum(h plug.Host) spectrum {
-	s := spectrum{meter: audioui.NewSpectrometer(specFrames), frames: make([]float32, 2*specFrames)}
+	s := spectrum{meter: audioui.NewSpectrometer(specFrames), frames: make([]float32, 2*specFrames), still: plug.StillAfter}
 	s.in, s.out = h.Sound()
 	s.freqs = make([]float32, specPoints)
 	for i := range s.freqs {
@@ -139,31 +142,35 @@ func newSpectrum(h plug.Host) spectrum {
 	return s
 }
 
-// measure measures what was heard last, before the EQ and after, and
-// reports whether there was any: none while the sound stands still.
-func (s *spectrum) measure() bool {
+// measure measures what was heard last, before the EQ and after,
+// where anything new was, and reports whether it did and whether the
+// sound plays: as it does through the frames of the window between the
+// chunks it comes in, until nothing new comes for plug.StillAfter.
+func (s *spectrum) measure(dt time.Duration) (measured, playing bool) {
 	if s.in == nil || s.out == nil {
-		return false
+		return false, false
 	}
 	n, at, rate := s.out.Heard(s.frames)
-	if at == 0 || at == s.at || n < specFrames {
-		return false
+	if at == 0 || at == s.at {
+		s.still = min(s.still+dt, plug.StillAfter)
+		return false, at != 0 && s.still < plug.StillAfter
 	}
-	s.at = at
-	if !s.meter.Measure(s.frames[:2*n], rate, s.freqs, s.heard) {
-		return false
+	s.at, s.still = at, 0
+	if n < specFrames || !s.meter.Measure(s.frames[:2*n], rate, s.freqs, s.heard) {
+		return false, true
 	}
 	if n, _, _ := s.in.Heard(s.frames); n == specFrames {
 		s.meter.Measure(s.frames, rate, s.freqs, s.before)
 	}
-	return true
+	return true, true
 }
 
 // step moves the levels drawn a frame's way toward those measured,
 // toward silence while nothing plays, and reports whether they still
 // move.
 func (s *spectrum) step(dt time.Duration) bool {
-	playing := s.measure()
+	// Between chunks, the levels ease on toward those last measured.
+	measured, playing := s.measure(dt)
 	if !playing {
 		for i := range s.heard {
 			s.heard[i], s.before[i] = specBottom-20, specBottom-20
@@ -186,7 +193,7 @@ func (s *spectrum) step(dt time.Duration) bool {
 		ease(&s.heardSm[i], s.heard[i]+tilt)
 		ease(&s.beforeSm[i], s.before[i]+tilt)
 	}
-	return playing || !settled
+	return measured || playing || !settled
 }
 
 func newGraph(p *plugin, h plug.Host) *graph {

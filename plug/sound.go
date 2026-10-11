@@ -1,5 +1,13 @@
 package plug
 
+import "time"
+
+// StillAfter is how long a sound hears no new frames before a view
+// takes it as stopped. Sound comes in chunks, tens of milliseconds
+// apart, and the window draws frames between them that hear nothing
+// new: a view that took those as silence would flicker.
+const StillAfter = 250 * time.Millisecond
+
 // A Listener reads a [Sound] a frame of the window at a time, each
 // frame of the sound once: what a meter or a spectrum takes. It is for
 // one view, on the window's goroutine.
@@ -8,6 +16,22 @@ type Listener struct {
 	buf   []float32
 	at    int64
 	rate  int
+	// still is how long it has heard nothing new, up to StillAfter.
+	still time.Duration
+}
+
+// Hear is Listen for a view that steps a frame of the window, dt long,
+// at a time: with the frames heard since, it reports whether the sound
+// plays, as it does through the frames of the window between its
+// chunks, until it has heard nothing new for StillAfter.
+func (l *Listener) Hear(most int, dt time.Duration) (frames []float32, rate int, playing bool) {
+	frames, rate = l.Listen(most)
+	if len(frames) > 0 {
+		l.still = 0
+		return frames, rate, true
+	}
+	l.still = min(l.still+dt, StillAfter)
+	return nil, rate, l.at != 0 && l.still < StillAfter
 }
 
 // Listen returns the frames heard since it was last called, at most

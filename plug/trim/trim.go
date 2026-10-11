@@ -145,6 +145,9 @@ func (p *processor) Reset() { p.gain = p.target }
 type meter struct {
 	l      plug.Listener
 	levels *audioui.Levels
+	// since is the time since the last chunk of sound, which the levels
+	// take it over.
+	since time.Duration
 }
 
 func newMeter(s plug.Sound) *meter {
@@ -152,11 +155,19 @@ func newMeter(s plug.Sound) *meter {
 }
 
 // step takes what was heard over dt, and says the levels still move.
+// Between the chunks the sound comes in, the levels hold.
 func (m *meter) step(dt time.Duration) bool {
-	if frames, rate := m.l.Listen(8192); len(frames) > 0 {
-		m.levels.Take(frames, rate, dt)
+	m.since += dt
+	frames, rate, playing := m.l.Hear(8192, dt)
+	if len(frames) > 0 {
+		m.levels.Take(frames, rate, m.since)
+		m.since = 0
 		return true
 	}
+	if playing {
+		return true
+	}
+	m.since = 0
 	m.levels.Quiet(dt)
 	return m.levels.Peak[0] > -89 || m.levels.Peak[1] > -89 || m.levels.RMS[0] > -89 || m.levels.RMS[1] > -89
 }

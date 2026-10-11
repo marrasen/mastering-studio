@@ -440,3 +440,33 @@ func TestTheGraphShowsTheSpectrumBeforeAndAfter(t *testing.T) {
 		t.Fatalf("the spectrum stays at %v once the sound stops", g.spec.heardSm[k])
 	}
 }
+
+func TestTheSpectrumHoldsStillBetweenTheChunksTheSoundComesIn(t *testing.T) {
+	p, h := newEQ(t)
+	in, out := &tone{level: 0.25}, &tone{level: 0.5}
+	h.in, h.out = in, out
+	g := newGraph(p, h)
+	k := 0
+	for i, f := range g.spec.freqs {
+		if math.Abs(float64(f)-1000) < math.Abs(float64(g.spec.freqs[k])-1000) {
+			k = i
+		}
+	}
+	// At 144 frames a second, a chunk of 1024 frames every third: the
+	// frames between hear nothing new.
+	frame := time.Second / 144
+	low, high := float32(0), float32(-200)
+	for i := range 144 * 2 {
+		if i%3 == 0 {
+			in.at += 1024
+			out.at += 1024
+		}
+		g.Step(frame)
+		if i >= 144 {
+			low, high = min(low, g.spec.heardSm[k]), max(high, g.spec.heardSm[k])
+		}
+	}
+	if high-low > 0.5 {
+		t.Errorf("between chunks the spectrum at 1 kHz swings %.1f dB, from %.1f to %.1f", high-low, low, high)
+	}
+}

@@ -188,3 +188,34 @@ func TestTheChipMetersTheSoundAndRestsWhenItStops(t *testing.T) {
 		t.Fatal("the chip never rests once the sound stops")
 	}
 }
+
+func TestTheChipsBarsHoldBetweenTheChunksTheSoundComesIn(t *testing.T) {
+	p, h := newPlugin(t)
+	s := &steady{level: 0.5}
+	h.out = s
+	v, ok := p.(plug.Viewer)
+	if !ok {
+		t.Fatal("the trim has no views")
+	}
+	c, ok := v.View(plug.Chip, h).(*chip)
+	if !ok {
+		t.Fatal("the chip is of another type")
+	}
+	// At 144 frames a second, a chunk of 1024 frames every third: the
+	// frames between hear nothing new.
+	frame := time.Second / 144
+	low, high := float32(0), float32(-200)
+	for i := range 144 * 2 {
+		if i%3 == 0 {
+			s.at += 1024
+		}
+		c.Step(frame)
+		if i >= 144 {
+			low, high = min(low, c.out.levels.RMS[0]), max(high, c.out.levels.RMS[0])
+		}
+	}
+	// A steady half of full scale: -6 dB, held.
+	if high-low > 0.2 || math.Abs(float64(low+high)/2+6.02) > 0.3 {
+		t.Errorf("between chunks the level swings %.1f dB, from %.1f to %.1f; want -6 held", high-low, low, high)
+	}
+}

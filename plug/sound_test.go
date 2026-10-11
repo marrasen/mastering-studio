@@ -38,3 +38,33 @@ func TestAListenerReadsEachFrameOnce(t *testing.T) {
 		t.Fatal("a Listener of no sound heard something")
 	}
 }
+
+func TestAListenerHearsPlayingBetweenChunksUntilStill(t *testing.T) {
+	p := &playing{at: 1000}
+	l := Listener{Sound: p}
+	frame := StillAfter / 10
+	if got, _, on := l.Hear(256, frame); len(got) == 0 || !on {
+		t.Fatal("a sound playing was not heard playing")
+	}
+	// The frames of the window between chunks hear nothing new, and the
+	// sound plays on through them.
+	for i := range 9 {
+		if got, _, on := l.Hear(256, frame); got != nil || !on {
+			t.Fatalf("%d frames between chunks, the sound stopped", i+1)
+		}
+	}
+	p.at += 100
+	if got, _, on := l.Hear(256, frame); len(got) != 2*100 || !on {
+		t.Fatal("the next chunk was not heard")
+	}
+	// Nothing new for StillAfter: it stopped.
+	for range 9 {
+		l.Hear(256, frame)
+	}
+	if _, _, on := l.Hear(256, frame); on {
+		t.Fatal("a sound still for StillAfter plays on")
+	}
+	if _, _, on := (&Listener{}).Hear(256, frame); on {
+		t.Fatal("a Listener of no sound hears it playing")
+	}
+}

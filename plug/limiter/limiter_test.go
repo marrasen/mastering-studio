@@ -269,11 +269,23 @@ func TestTheMetersReadTheReductionAndTheSound(t *testing.T) {
 	if db, live := pn.gr.read(0); !live || db != -4.5 {
 		t.Errorf("the reduction reads %v, want the host's -4.5", db)
 	}
+	// Between the chunks the sound comes in, both hold.
+	frame := plug.StillAfter / 10
+	if db, live := pn.out.read(frame); !live || math.Abs(float64(db)) > 0.05 {
+		t.Errorf("between chunks the sound reads %.2f VU, want 0 held", db)
+	}
+	if db, live := pn.gr.read(frame); !live || db != -4.5 {
+		t.Errorf("between chunks the reduction reads %v, want -4.5 held", db)
+	}
 	// The sound stops: both meters fall to rest.
-	if db, live := pn.out.read(0); live || db > vuLow {
+	for range 10 {
+		pn.out.read(frame)
+		pn.gr.read(frame)
+	}
+	if db, live := pn.out.read(frame); live || db > vuLow {
 		t.Errorf("a still sound reads %.2f VU, want under the scale", db)
 	}
-	if db, live := pn.gr.read(0); live || db != 0 {
+	if db, live := pn.gr.read(frame); live || db != 0 {
 		t.Errorf("a still sound's reduction reads %v, want 0", db)
 	}
 }
