@@ -15,6 +15,7 @@ import (
 	// The Go plugins built in.
 	_ "github.com/marrasen/mastering-studio/plug/dynamics"
 	_ "github.com/marrasen/mastering-studio/plug/eq"
+	_ "github.com/marrasen/mastering-studio/plug/imager"
 	_ "github.com/marrasen/mastering-studio/plug/maximizer"
 	_ "github.com/marrasen/mastering-studio/plug/trim"
 )
