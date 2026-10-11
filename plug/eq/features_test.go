@@ -522,3 +522,104 @@ func clickOn(t *testing.T, w *gunim.Window, run func(int), n gunim.Node) {
 	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
 	run(1)
 }
+
+// toBands turns v's switch to the list of bands.
+func toBands(t *testing.T, w *gunim.Window, run func(int), v *full) {
+	t.Helper()
+	sw := boundsIn(t, w, run, v.views)
+	at := geom.Pt(sw.Min.X+sw.Size().W*0.75, sw.Center().Y)
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(60)
+}
+
+func TestTheGraphShowsDarkenedBehindTheBands(t *testing.T) {
+	p, h := newEQ(t)
+	two := bell[0]
+	two.ID, two.Freq = 2, 4000
+	p.setBands([]audio.Band{bell[0], two})
+	v, w, run := fullOf(t, p, h)
+	before := boundsIn(t, w, run, v.panel)
+	toBands(t, w, run, v)
+	graph, list := boundsIn(t, w, run, v.panel), boundsIn(t, w, run, v.scroll)
+	if v.g.behind != 1 || graph.Size().H <= before.Size().H || graph.Max.Y != list.Max.Y {
+		t.Fatalf("under the list, the graph is %v (from %v), behind %v, the list %v", graph, before, v.g.behind, list)
+	}
+	// A double-click where the graph shows under the list adds no band.
+	at := geom.Pt(graph.Max.X-40, graph.Max.Y-40)
+	for _, n := range []int{1, 2} {
+		w.Input(input.PointerMove{Pos: at})
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: n})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	}
+	run(2)
+	if len(p.Bands()) != 2 {
+		t.Errorf("a double-click on the list reached the graph under it: %d bands", len(p.Bands()))
+	}
+	// The pointer on a band's row lights the band on the graph.
+	var second *bandRow
+	for _, r := range v.list.rows {
+		if r.id == 2 {
+			second = r
+		}
+	}
+	w.Input(input.PointerMove{Pos: boundsIn(t, w, run, second).Center()})
+	run(1)
+	if v.g.lit != 2 {
+		t.Errorf("the pointer on the second band's row lights band %d", v.g.lit)
+	}
+	w.Input(input.PointerMove{Pos: geom.Pt(5, graph.Max.Y-5)})
+	run(1)
+	if v.g.lit != 0 {
+		t.Errorf("the pointer off the rows still lights band %d", v.g.lit)
+	}
+}
+
+func TestTheTunerTurnsTheLookAndResetsIt(t *testing.T) {
+	t.Cleanup(func() { look = defaultLook })
+	p, h := newEQ(t)
+	p.setBands(bell)
+	v, w, run := fullOf(t, p, h)
+	toBands(t, w, run, v)
+	clickOn(t, w, run, v.tune)
+	run(60)
+	if v.tuneIn.Value() < 0.99 {
+		t.Fatalf("clicked, the tuner is open %v", v.tuneIn.Value())
+	}
+	dragUp(t, w, run, v.tuners[0], 60)
+	dragUp(t, w, run, v.tuners[1], 60)
+	if look.Dark <= defaultLook.Dark || look.Blur <= defaultLook.Blur {
+		t.Fatalf("turned up, the look is %+v", look)
+	}
+	// A click on the card, beside its Reset, over the first band's gain
+	// knob, reaches nothing under it.
+	h.log = nil
+	card := boundsIn(t, w, run, v.card)
+	at := card.Min.Add(geom.Pt(150, 90))
+	var first *bandRow
+	for _, r := range v.list.rows {
+		if r.id == 1 {
+			first = r
+		}
+	}
+	if !boundsIn(t, w, run, first.knobs[1]).Contains(at) {
+		t.Fatalf("the spot clicked, %v, is not over the gain knob, %v", at, boundsIn(t, w, run, first.knobs[1]))
+	}
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(2)
+	if len(h.log) != 0 {
+		t.Errorf("a click on the tuner's card reached the bands: %v", h.log)
+	}
+	clickOn(t, w, run, v.reset)
+	if look != defaultLook || v.tuners[0].Value() != defaultLook.Dark*100 {
+		t.Errorf("reset, the look is %+v, its darkness knob at %v", look, v.tuners[0].Value())
+	}
+	clickOn(t, w, run, v.tune)
+	run(60)
+	if v.tuneIn.Value() > 0.01 {
+		t.Errorf("clicked again, the tuner is still open at %v", v.tuneIn.Value())
+	}
+}

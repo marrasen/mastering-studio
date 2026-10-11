@@ -2,6 +2,7 @@ package eq
 
 import (
 	"fmt"
+	"image/color"
 	"math"
 	"slices"
 	"strconv"
@@ -107,6 +108,11 @@ type graph struct {
 	// onChange, where set, hears that the bands, or the band picked,
 	// may have changed.
 	onChange func(u *gunim.UI)
+	// behind is how far the list of bands is over the graph, from 0 to
+	// 1, and lit the band whose row the pointer is on there, which the
+	// graph shows filled, as it does the band picked.
+	behind float32
+	lit    int
 	// tipBand is the band the readout beside a point shows, and tipIn how
 	// far it is in: it fades and rises in as the pointer comes over a
 	// point, and away as it leaves.
@@ -936,10 +942,19 @@ func (g *graph) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Ch
 	end := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: 1, Clip: true, Radius: radius})
 	g.paintGrid(p, th, box)
 	g.paintSpectrum(p, th, box)
+	if g.behind > 0.001 {
+		// Behind the list: darkened, the curve and the points over the
+		// dark, as bright as the look says.
+		p.RRect(whole, 0, paint.Solid(color.NRGBA{A: uint8(255 * min(max(look.Dark*float64(g.behind), 0), 1))}))
+	}
+	curve := p.Layer(paint.LayerOpts{Bounds: whole, Opacity: 1 - g.behind*float32(1-look.Curve)})
 	bypass := g.bypassAmt.Value()
 	g.paintCurve(p, th, box, bypass)
 	g.paintDots(p, th, bypass)
-	g.paintReadout(p, th, box)
+	curve()
+	if g.behind < 0.5 {
+		g.paintReadout(p, th, box)
+	}
 	if len(g.bands) == 0 {
 		size := ReadoutSize.Get(th)
 		run := audioui.Shaped("Double-click to add a band", size, false, false)
@@ -1033,7 +1048,10 @@ func (g *graph) paintCurve(p *paint.Painter, th *theme.Live, box geom.Size, bypa
 	if len(g.curve) != n+1 {
 		g.curve = make([]float32, n+1)
 	}
-	focus := g.hot
+	focus := g.lit
+	if focus == 0 {
+		focus = g.hot
+	}
 	if focus == 0 {
 		focus = g.sel
 	}

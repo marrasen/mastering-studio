@@ -10,6 +10,7 @@ import (
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
+	"github.com/marrasen/gunim/input"
 	"github.com/marrasen/gunim/paint"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
@@ -75,6 +76,9 @@ type bandRow struct {
 	knobs     []*plugui.Knob // freq, gain, q, then the dynamics'
 	on, dyn   *widget.IconButton
 	del       *widget.IconButton
+	// glass puts the row on a card of glass, as the list does over the
+	// graph, the band lit there while the pointer is on its row.
+	glass bool
 	// in is how far the row is in, and dynIn how far its dynamics are;
 	// dynX is where its dynamics start.
 	in, dynIn *anim.Float
@@ -227,6 +231,29 @@ func (r *bandRow) show(b *audio.Band, place int, u *gunim.UI) {
 	u.Invalidate()
 }
 
+// Overhear implements [gunim.Overhearer]: a row of the list lights its
+// band on the graph while the pointer is on it.
+func (r *bandRow) Overhear(e input.Event, u *gunim.UI) {
+	if !r.glass {
+		return
+	}
+	m, ok := e.(input.PointerMove)
+	if !ok {
+		return
+	}
+	b, _ := u.Bounds(r)
+	switch {
+	case r.id != 0 && b.Contains(m.Pos):
+		if r.g.lit != r.id {
+			r.g.lit = r.id
+			u.Invalidate()
+		}
+	case r.g.lit == r.id:
+		r.g.lit = 0
+		u.Invalidate()
+	}
+}
+
 // width is how wide the row is with its dynamics in.
 func (r *bandRow) width() float32 {
 	w := float32(rowKinds + 3*plugui.KnobW + 3*(rowButton+rowGap) + 2*rowSection + 5*plugui.KnobW)
@@ -306,6 +333,19 @@ func (r *bandRow) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gun
 	defer p.Push(paint.Translate(geom.Pt(0, (1-in)*10)))()
 	end := p.Layer(paint.LayerOpts{Bounds: whole.Inset(geom.Uniform(-12)), Opacity: in})
 	defer end()
+	if r.glass {
+		// The card: the graph behind it blurred, under a tint of the
+		// ground, its top edge catching the light.
+		card := geom.Rc(-8, -4, box.W+16, box.H+8)
+		glass := p.Layer(paint.LayerOpts{Bounds: card, Opacity: 1, Backdrop: float32(look.Blur), Clip: true, Radius: 12})
+		p.RRect(card, 12, paint.Solid(audioui.Faded(audioui.Ground.Get(th), float32(look.Card))))
+		glass()
+		p.RRectStroke(card, 12, paint.Fill{}, paint.Stroke{Width: 1, Color: audioui.Faded(widget.Ink.Get(th), 0.1)})
+		if r.g.lit == r.id && r.id != 0 {
+			c := bandColor(th, r.place)
+			p.RRectStroke(card, 12, paint.Fill{}, paint.Stroke{Width: 1.5, Color: audioui.Faded(c, 0.6)})
+		}
+	}
 	if r.numbered {
 		c := bandColor(th, r.place)
 		at := geom.Pt(rowNumber/2-4, box.H/2)

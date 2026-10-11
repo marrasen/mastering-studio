@@ -30,15 +30,21 @@ type bandList struct {
 	size  geom.Size
 }
 
-// listRow is how far apart the rows are.
-const listRow = plugui.KnobH + 10
+// listRow is how far apart the rows are, and listInset how far in from
+// the list's edges they stand.
+const (
+	listRow   = plugui.KnobH + 10
+	listInset = 12
+)
 
 func newBandList(g *graph) *bandList {
 	l := &bandList{g: g, addAt: anim.NewFloat(0)}
 	l.Add(l.addAt)
 	// Room for every band, and as many again leaving.
 	for range 2 * maxBands {
-		l.rows = append(l.rows, newBandRow(g, true))
+		r := newBandRow(g, true)
+		r.glass = true
+		l.rows = append(l.rows, r)
 		a := anim.NewFloat(0)
 		l.at = append(l.at, a)
 		l.Add(a)
@@ -111,7 +117,7 @@ func (l *bandList) rowOf(id int, used map[*bandRow]bool) int {
 }
 
 // height is how tall the list is: its rows and the add button.
-func (l *bandList) height() float32 { return float32(len(l.g.bands)*listRow) + 44 }
+func (l *bandList) height() float32 { return float32(len(l.g.bands)*listRow) + 44 + 2*listInset }
 
 // Children implements [gunim.Composite].
 func (l *bandList) Children() []gunim.Node {
@@ -126,13 +132,14 @@ func (l *bandList) Children() []gunim.Node {
 // button under them.
 func (l *bandList) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	l.size = geom.Sz(c.Max.W, max(l.height(), c.Min.H))
+	// In from the edges as far as the rows' cards reach past them.
 	for k, r := range l.rows {
-		kids.At(k).Layout(gunim.Tight(geom.Sz(min(c.Max.W, r.width()), plugui.KnobH)))
-		kids.At(k).Place(geom.Pt(0, l.at[k].Value()+4))
+		kids.At(k).Layout(gunim.Tight(geom.Sz(min(c.Max.W-2*listInset, r.width()), plugui.KnobH)))
+		kids.At(k).Place(geom.Pt(listInset, l.at[k].Value()+listInset))
 	}
 	n := len(l.rows)
 	kids.At(n).Layout(gunim.Constraints{Max: geom.Sz(200, 36)})
-	kids.At(n).Place(geom.Pt(rowNumber, l.addAt.Value()+6))
+	kids.At(n).Place(geom.Pt(listInset+rowNumber, l.addAt.Value()+listInset+4))
 	return l.size
 }
 
