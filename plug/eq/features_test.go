@@ -687,3 +687,18 @@ func TestTheTopControlsStandOnGlassOverTheGraph(t *testing.T) {
 		t.Errorf("a double-click on the bar reached the graph: %d bands", len(p.Bands()))
 	}
 }
+
+func TestTheHintStandsCentredWhereTheRowWould(t *testing.T) {
+	p, h := newEQ(t)
+	p.setBands(bell)
+	v, w, run := fullOf(t, p, h)
+	graph := boundsIn(t, w, run, v.panel)
+	card, _ := v.hintCard(12, graph.Size())
+	if math.Abs(float64(card.Center().X-graph.Center().X)) > 1 || card.Min.X < rowInset {
+		t.Errorf("the hint's card is at %v in a graph %v: not centred", card, graph)
+	}
+	if card.Max.Y > graph.Max.Y-18 || card.Max.Y < graph.Max.Y-rowFoot-plugui.KnobH {
+		t.Errorf("the hint's card is at %v: not where the row stands, clear of the frequencies at %v", card,
+			graph.Max.Y-16)
+	}
+}

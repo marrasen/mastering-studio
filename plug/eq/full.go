@@ -10,6 +10,8 @@ import (
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/paint"
+	"github.com/marrasen/gunim/text"
+	"github.com/marrasen/gunim/theme"
 	"github.com/marrasen/gunim/widget"
 	"github.com/marrasen/mastering-studio/plug"
 	"github.com/marrasen/mastering-studio/plug/plugui"
@@ -359,12 +361,7 @@ func (v *full) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.
 	fade(1, 1-listed, -listed*12)
 	fade(2, listed, (1-listed)*12)
 	if b, _ := v.g.band(v.g.sel); b == nil && listed < 0.99 {
-		// No band picked: how to pick one, where its row would be.
-		r := geom.Rc(rowInset, v.rowAt.Min.Y, box.W-2*rowInset, v.rowAt.Size().H)
-		msg := "Pick a band to change it, or double-click the graph to add one. Drag a point to move it, " +
-			"scroll on it to change its width, and right-click it for more."
-		paintFit(p, msg, ReadoutSize.Get(th), false, geom.Pt(4, r.Min.Y+(r.Size().H-ReadoutSize.Get(th))/2),
-			box.W-8, audioui.Faded(widget.Ink.Get(th), 0.5*(1-listed)*(1-v.row.in.Value())))
+		v.paintHint(p, th, box, (1-listed)*(1-min(max(v.row.in.Value(), 0), 1)))
 	}
 	// The bar's glass, then what stands on it.
 	kids.At(3).Paint(p)
@@ -394,3 +391,55 @@ func (*glassPane) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) g
 func (g *glassPane) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	plugui.PaintGlass(p, f.Theme, geom.Rect{Max: box.Point()}, g.radius)
 }
+
+// The hint shown where the band's row stands while no band is picked,
+// a line each.
+var hintLines = []string{
+	"Pick a band to change it, or double-click the graph to add one",
+	"Drag a point to move it, scroll on it to change its width, and right-click it for more",
+}
+
+// paintHint draws how to pick a band, centred on a card of glass where
+// the band's row stands, as far in as t, fading as the row comes in.
+func (v *full) paintHint(p *paint.Painter, th *theme.Live, box geom.Size, t float32) {
+	if t < 0.01 {
+		return
+	}
+	size := ReadoutSize.Get(th)
+	ink := widget.Ink.Get(th)
+	card, runs := v.hintCard(size, box)
+	at := card.Center()
+	defer p.Push(paint.Translate(geom.Pt(0, (1-t)*8)))()
+	end := p.Layer(paint.LayerOpts{Bounds: card.Inset(geom.Uniform(-8)), Opacity: t})
+	defer end()
+	plugui.PaintGlass(p, th, card, 12)
+	for i, run := range runs {
+		alpha := float32(0.85)
+		if i > 0 {
+			alpha = 0.55
+		}
+		// Cut short where the card is narrower than the words.
+		room := card.Size().W - 2*hintPad
+		x := at.X - min(run.Advance, room)/2
+		paintFit(p, hintLines[i], size, i == 0, geom.Pt(x, card.Min.Y+hintPad+float32(i)*(size+6)), room,
+			audioui.Faded(ink, alpha))
+	}
+}
+
+// hintCard returns where the hint's card is, centred where the band's
+// row stands, in a view box big, its words size big; and the words.
+func (v *full) hintCard(size float32, box geom.Size) (geom.Rect, []text.Run) {
+	runs := make([]text.Run, len(hintLines))
+	w := float32(0)
+	for i, line := range hintLines {
+		runs[i] = audioui.Shaped(line, size, i == 0, false)
+		w = max(w, runs[i].Advance)
+	}
+	w = min(w+2*hintPad, box.W-2*rowInset)
+	h := float32(len(runs))*(size+6) + 2*hintPad - 6
+	at := v.rowAt.Center()
+	return geom.Rc(at.X-w/2, at.Y-h/2, w, h), runs
+}
+
+// hintPad is the room round the hint's words on its card.
+const hintPad = 14
