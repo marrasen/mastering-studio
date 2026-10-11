@@ -4,6 +4,7 @@ import (
 	"math"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
@@ -270,5 +271,39 @@ func TestTheDisplayDragsABandsWidthAndACrossover(t *testing.T) {
 	d.Handle(input.PointerUp{Pos: x, Button: input.ButtonPrimary}, nil)
 	if got := h.values[CrossoverID+1]; math.Abs(got-2000) > 5 || !slices.Equal(h.log, []string{"begin", "set", "end"}) {
 		t.Errorf("dragged to 2 kHz, the second crossover is at %v, by %v", got, h.log)
+	}
+}
+
+func TestTheDisplayLightsWhatThePointerIsOnGliding(t *testing.T) {
+	p, h := newImager(t)
+	pn, ok := p.View(plug.Panel, h).(*panel)
+	if !ok {
+		t.Fatal("the panel is of another type")
+	}
+	d := pn.disp
+	d.Layout(gunim.Constraints{Max: geom.Sz(1200, 600)}, gunim.Frame{}, gunim.Children{})
+	d.line = 250
+	d.Handle(input.PointerMove{Pos: geom.Pt(d.xOf(1200), 100)}, nil)
+	d.group.Step(time.Second / 60)
+	if v := d.xLit[1].Value(); v <= 0 || v >= 0.99 {
+		t.Errorf("a frame after the pointer came onto the crossover, it is lit %v: not gliding", v)
+	}
+	for range 30 {
+		d.group.Step(time.Second / 60)
+	}
+	if d.xLit[1].Value() < 0.99 {
+		t.Errorf("on the crossover, it is lit %v", d.xLit[1].Value())
+	}
+	// Under the bars' reach, where the controls stand, no band.
+	d.Handle(input.PointerMove{Pos: geom.Pt(d.xOf(10000), d.line+d.reach()+20)}, nil)
+	if d.hotBand != -1 {
+		t.Errorf("under the bars' reach, band %d is lit", d.hotBand)
+	}
+	d.Handle(input.PointerMove{Pos: geom.Pt(d.xOf(10000), d.line)}, nil)
+	for range 30 {
+		d.group.Step(time.Second / 60)
+	}
+	if d.bandLit[3].Value() < 0.99 || d.xLit[1].Value() > 0.01 {
+		t.Errorf("on the high band, it is lit %v, the crossover %v", d.bandLit[3].Value(), d.xLit[1].Value())
 	}
 }

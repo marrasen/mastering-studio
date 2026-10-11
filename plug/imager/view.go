@@ -81,8 +81,12 @@ type display struct {
 	at                       int64
 	still                    time.Duration
 	// hot is what the pointer is on: a crossover, hotX, from 0, or a
-	// band, hotBand, or neither; held is what is dragged.
+	// band, hotBand, or neither, and xLit and bandLit how lit each is,
+	// gliding; held is what is dragged.
 	hotX, hotBand int
+	xLit          [bands - 1]*anim.Float
+	bandLit       [bands]*anim.Float
+	group         anim.Group
 	held          int
 	heldFrom      geom.Point
 	heldWas       float64
@@ -105,6 +109,14 @@ func newDisplay(h plug.Host, v values) *display {
 	d.freqs = make([]float32, specPoints)
 	for i := range d.freqs {
 		d.freqs[i] = float32(viewLow * math.Pow(viewHigh/viewLow, float64(i)/(specPoints-1)))
+	}
+	for k := range d.xLit {
+		d.xLit[k] = anim.NewFloat(0)
+		d.group.Add(d.xLit[k])
+	}
+	for k := range d.bandLit {
+		d.bandLit[k] = anim.NewFloat(0)
+		d.group.Add(d.bandLit[k])
 	}
 	for _, p := range []*[]float32{&d.mid, &d.side, &d.midSm, &d.sideSm} {
 		*p = make([]float32, specPoints)
@@ -164,7 +176,7 @@ func (d *display) Step(dt time.Duration) bool {
 		ease(&d.midSm[i], d.mid[i])
 		ease(&d.sideSm[i], d.side[i])
 	}
-	return playing || !settled
+	return d.group.Step(dt) || playing || !settled
 }
 
 // xOf is where across the display a frequency is, and hzAt the
@@ -259,12 +271,9 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		}
 		top := d.line - w*d.reach()
 		r := geom.Rc(span[0]+3, min(top, d.line), span[1]-span[0]-6, float32(math.Abs(float64(top-d.line))))
-		hot := float32(0.18)
-		if d.hotBand == b || d.held == holdBand && d.hotBand == b {
-			hot = 0.3
-		}
-		p.RRect(r, 4, paint.Solid(audioui.Faded(c, hot)))
-		p.RRect(geom.Rc(r.Min.X, top-1, r.Size().W, 2), 1, paint.Solid(c))
+		lit := d.bandLit[b].Value()
+		p.RRect(r, 4, paint.Solid(audioui.Faded(c, 0.18+0.12*lit)))
+		p.RRect(geom.Rc(r.Min.X, top-1-lit, r.Size().W, 2+2*lit), 1+lit, paint.Solid(c))
 		words := param(WidthID).Text(d.v[WidthID+uint32(b)])
 		if st := d.v[StereoizeID+uint32(b)]; st > 0.5 {
 			words += fmt.Sprintf("  ·  stereoize %.0f%%", st)
@@ -284,13 +293,34 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	}
 	for i, hz := range d.v.crossovers() {
 		x := d.xOf(hz)
-		a := float32(0.35)
-		if d.hotX == i {
-			a = 0.9
+		lit := d.xLit[i].Value()
+		a := 0.35 + 0.55*lit
+		w, r := 1.5+lit, 5+2*lit
+		p.RRect(geom.Rc(x-w/2, 0, w, box.H), 0, paint.Solid(audioui.Faded(ink, a)))
+		if lit > 0.01 {
+			p.ShadowRRect(geom.Rc(x-r, d.line-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, 0)),
+				paint.Shadow{Blur: 10 * lit, Color: audioui.Faded(ink, 0.4*lit)})
 		}
-		p.RRect(geom.Rc(x-0.75, 0, 1.5, box.H), 0, paint.Solid(audioui.Faded(ink, a)))
-		p.RRect(geom.Rc(x-5, d.line-5, 10, 10), 5, paint.Solid(audioui.Faded(ink, a)))
+		p.RRect(geom.Rc(x-r, d.line-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, a)))
 	}
+}
+
+// light lights what the pointer is on, gliding.
+func (d *display) light(x, b int) {
+	d.hotX, d.hotBand = x, b
+	for i, l := range d.xLit {
+		l.Animate(float32(onOff(i == x)), anim.Snappy)
+	}
+	for i, l := range d.bandLit {
+		l.Animate(float32(onOff(i == b)), anim.Snappy)
+	}
+}
+
+func onOff(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // hz2 writes a frequency on the grid, short.
@@ -301,15 +331,20 @@ func hz2(hz float64) string {
 	return fmt.Sprintf("%.0f", hz)
 }
 
-// hit returns the crossover near x, or -1, and else the band at x.
-func (d *display) hit(x float32) (crossover, band int) {
+// hit returns the crossover near pos, or -1, and else the band whose
+// bar pos is in reach of, or -1: under the bars' reach, where the
+// controls stand and the gaps between them, no band.
+func (d *display) hit(pos geom.Point) (crossover, band int) {
 	for i, hz := range d.v.crossovers() {
-		if math.Abs(float64(x-d.xOf(hz))) < 6 {
+		if math.Abs(float64(pos.X-d.xOf(hz))) < 6 {
 			return i, -1
 		}
 	}
+	if pos.Y > d.line+d.reach()+6 {
+		return -1, -1
+	}
 	for b, span := range d.bandsAt() {
-		if x >= span[0] && x < span[1] {
+		if pos.X >= span[0] && pos.X < span[1] {
 			return -1, b
 		}
 	}
@@ -326,16 +361,16 @@ func (d *display) Handle(e input.Event, u *gunim.UI) bool {
 			d.drag(e.Pos, e.Mods.Has(input.ModShift), u)
 			break
 		}
-		d.hotX, d.hotBand = d.hit(e.Pos.X)
+		d.light(d.hit(e.Pos))
 	case input.PointerLeave:
 		if d.held == holdNone {
-			d.hotX, d.hotBand = -1, -1
+			d.light(-1, -1)
 		}
 	case input.PointerDown:
 		if e.Button != input.ButtonPrimary {
 			return false
 		}
-		x, b := d.hit(e.Pos.X)
+		x, b := d.hit(e.Pos)
 		switch {
 		case x >= 0:
 			d.held, d.hotX, d.heldFrom = holdCrossover, x, e.Pos
@@ -362,6 +397,7 @@ func (d *display) Handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		d.held = holdNone
+		d.light(d.hit(e.Pos))
 	default:
 		return false
 	}

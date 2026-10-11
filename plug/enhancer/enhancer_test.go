@@ -4,6 +4,7 @@ import (
 	"math"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/geom"
@@ -325,5 +326,54 @@ func TestTheCurveShowsTheBandTouched(t *testing.T) {
 	if pn.touched != 0 || pn.styles[0].Selected() != Crisp {
 		t.Errorf("the low band's style set to crisp, the curve shows band %d and its selector %d", pn.touched,
 			pn.styles[0].Selected())
+	}
+}
+
+func TestTheCurveFollowsTheBarsAndGlidesBetweenThem(t *testing.T) {
+	p, h := newEnhancer(t)
+	h.values[AmountID] = 60
+	h.values[AmountID+3], h.values[StyleID+3] = 20, Crisp
+	pn, ok := p.View(plug.Panel, h).(*panel)
+	if !ok {
+		t.Fatal("the panel is of another type")
+	}
+	d, c := pn.disp, pn.curve
+	d.Layout(gunim.Constraints{Max: geom.Sz(1200, 600)}, gunim.Frame{}, gunim.Children{})
+	d.line, d.top = 400, 100
+	step := func(n int) {
+		for range n {
+			c.Step(time.Second / 60)
+			d.group.Step(time.Second / 60)
+		}
+	}
+	if c.band != 0 {
+		t.Fatalf("opened, the curve shows band %d, not the one set most, 0", c.band)
+	}
+	// On a crossover: lit, and the curve stays.
+	d.Handle(input.PointerMove{Pos: geom.Pt(d.xOf(1200), 300)}, nil)
+	step(30)
+	if d.xLit[1].Value() < 0.99 || c.band != 0 {
+		t.Errorf("on the second crossover, it is lit %v, and the curve shows band %d", d.xLit[1].Value(), c.band)
+	}
+	// Under the line, where the controls stand, no band.
+	d.Handle(input.PointerMove{Pos: geom.Pt(d.xOf(10000), d.line+30)}, nil)
+	if d.hotBand != -1 || c.band != 0 {
+		t.Errorf("under the bars, band %d is lit, and the curve shows band %d", d.hotBand, c.band)
+	}
+	// On the high band's bar: the curve turns to it, gliding, and keeps
+	// it as the pointer goes on under the line.
+	d.Handle(input.PointerMove{Pos: geom.Pt(d.xOf(10000), 350)}, nil)
+	step(3)
+	if a := c.amount.Value(); c.band != 3 || a <= 0.21 || a >= 0.59 || c.swap.Value() > 0.9 || c.was == "" {
+		t.Errorf("partway to the high band, the curve shows band %d at %v, its title swapped %v from %q",
+			c.band, a, c.swap.Value(), c.was)
+	}
+	d.Handle(input.PointerMove{Pos: geom.Pt(d.xOf(10000), d.line+30)}, nil)
+	step(60)
+	if c.band != 3 || math.Abs(float64(c.amount.Value())-0.2) > 0.01 || c.weight[Crisp].Value() < 0.99 {
+		t.Errorf("after, the curve shows band %d at %v, crisp at %v", c.band, c.amount.Value(), c.weight[Crisp].Value())
+	}
+	if d.bandLit[3].Value() > 0.01 || d.xLit[1].Value() > 0.01 {
+		t.Errorf("off them, the high band is lit %v and the crossover %v", d.bandLit[3].Value(), d.xLit[1].Value())
 	}
 }

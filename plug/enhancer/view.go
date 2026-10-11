@@ -164,8 +164,13 @@ type display struct {
 	glow                 [bands]*anim.Float
 	group                anim.Group
 	// hot is what the pointer is on: a crossover, hotX, from 0, or a
-	// band, hotBand, or neither; held is what is dragged.
+	// band's bar, hotBand, or neither; xLit and bandLit are how lit each
+	// is, gliding; onBand hears of each band the pointer comes onto.
+	// held is what is dragged.
 	hotX, hotBand int
+	xLit          [bands - 1]*anim.Float
+	bandLit       [bands]*anim.Float
+	onBand        func(b int)
 	held          int
 	heldFrom      geom.Point
 	heldWas       float64
@@ -195,6 +200,14 @@ func newDisplay(h plug.Host, v values) *display {
 		for i := range *p {
 			(*p)[i] = specBottom - 20
 		}
+	}
+	for k := range d.xLit {
+		d.xLit[k] = anim.NewFloat(0)
+		d.group.Add(d.xLit[k])
+	}
+	for k := range d.bandLit {
+		d.bandLit[k] = anim.NewFloat(0)
+		d.group.Add(d.bandLit[k])
 	}
 	for k := range d.glow {
 		d.glow[k] = anim.NewFloat(0)
@@ -383,18 +396,15 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 		c := styleColor(th, d.v.style(b))
 		top := d.line - float32(d.v[AmountID+uint32(b)]/100)*d.reach()
 		r := geom.Rc(span[0]+3, top, span[1]-span[0]-6, d.line-top)
-		glow := d.glow[b].Value()
-		fill := 0.14 + 0.3*glow
-		if d.hotBand == b {
-			fill += 0.1
-		}
+		glow, lit := d.glow[b].Value(), d.bandLit[b].Value()
+		fill := 0.14 + 0.3*glow + 0.12*lit
 		if r.Size().H > 0.5 {
 			if glow > 0.02 {
 				p.ShadowRRect(r, 4, paint.Solid(audioui.Faded(c, 0)), paint.Shadow{Blur: 18 * glow, Color: audioui.Faded(c, 0.5*glow)})
 			}
 			p.RRect(r, 4, paint.Solid(audioui.Faded(c, fill)))
 		}
-		p.RRect(geom.Rc(r.Min.X, top-1, r.Size().W, 2), 1, paint.Solid(audioui.Faded(c, 0.5+0.5*glow)))
+		p.RRect(geom.Rc(r.Min.X, top-1-lit, r.Size().W, 2+2*lit), 1+lit, paint.Solid(audioui.Faded(c, 0.5+0.5*max(glow, lit))))
 		words := fmt.Sprintf("%s  ·  %s", pct(d.v[AmountID+uint32(b)]), styleNames[d.v.style(b)])
 		label := audioui.Shaped(words, 11, true, false)
 		if label.Advance < span[1]-span[0]-8 {
@@ -403,12 +413,30 @@ func (d *display) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.
 	}
 	for i, hz := range d.v.crossovers() {
 		x := d.xOf(hz)
-		a := float32(0.35)
-		if d.hotX == i {
-			a = 0.9
+		lit := d.xLit[i].Value()
+		a := 0.35 + 0.55*lit
+		w, r := 1.5+lit, 5+2*lit
+		p.RRect(geom.Rc(x-w/2, 0, w, box.H), 0, paint.Solid(audioui.Faded(ink, a)))
+		if lit > 0.01 {
+			p.ShadowRRect(geom.Rc(x-r, d.line-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, 0)),
+				paint.Shadow{Blur: 10 * lit, Color: audioui.Faded(ink, 0.4*lit)})
 		}
-		p.RRect(geom.Rc(x-0.75, 0, 1.5, box.H), 0, paint.Solid(audioui.Faded(ink, a)))
-		p.RRect(geom.Rc(x-5, d.line-5, 10, 10), 5, paint.Solid(audioui.Faded(ink, a)))
+		p.RRect(geom.Rc(x-r, d.line-r, 2*r, 2*r), r, paint.Solid(audioui.Faded(ink, a)))
+	}
+}
+
+// light lights what the pointer is on, gliding, and tells of a band's
+// bar it comes onto.
+func (d *display) light(x, b int) {
+	if b >= 0 && b != d.hotBand && d.onBand != nil {
+		d.onBand(b)
+	}
+	d.hotX, d.hotBand = x, b
+	for i, l := range d.xLit {
+		l.Animate(float32(onOff(i == x)), anim.Snappy)
+	}
+	for i, l := range d.bandLit {
+		l.Animate(float32(onOff(i == b)), anim.Snappy)
 	}
 }
 
@@ -420,15 +448,20 @@ func hz2(hz float64) string {
 	return fmt.Sprintf("%.0f", hz)
 }
 
-// hit returns the crossover near x, or -1, and else the band at x.
-func (d *display) hit(x float32) (crossover, band int) {
+// hit returns the crossover near pos, or -1, and else the band whose
+// bar pos is over, from the line its bars stand on up, or -1: under the
+// line, where the controls stand and the gaps between them, no band.
+func (d *display) hit(pos geom.Point) (crossover, band int) {
 	for i, hz := range d.v.crossovers() {
-		if math.Abs(float64(x-d.xOf(hz))) < 6 {
+		if math.Abs(float64(pos.X-d.xOf(hz))) < 6 {
 			return i, -1
 		}
 	}
+	if pos.Y > d.line+6 {
+		return -1, -1
+	}
 	for b, span := range d.bandsAt() {
-		if x >= span[0] && x < span[1] {
+		if pos.X >= span[0] && pos.X < span[1] {
 			return -1, b
 		}
 	}
@@ -445,16 +478,16 @@ func (d *display) Handle(e input.Event, u *gunim.UI) bool {
 			d.drag(e.Pos, e.Mods.Has(input.ModShift), u)
 			break
 		}
-		d.hotX, d.hotBand = d.hit(e.Pos.X)
+		d.light(d.hit(e.Pos))
 	case input.PointerLeave:
 		if d.held == holdNone {
-			d.hotX, d.hotBand = -1, -1
+			d.light(-1, -1)
 		}
 	case input.PointerDown:
 		if e.Button != input.ButtonPrimary {
 			return false
 		}
-		x, b := d.hit(e.Pos.X)
+		x, b := d.hit(e.Pos)
 		switch {
 		case x >= 0:
 			d.held, d.hotX, d.heldFrom = holdCrossover, x, e.Pos
@@ -481,6 +514,7 @@ func (d *display) Handle(e input.Event, u *gunim.UI) bool {
 			return false
 		}
 		d.held = holdNone
+		d.light(d.hit(e.Pos))
 	default:
 		return false
 	}
@@ -528,22 +562,36 @@ const (
 	harmonicsFloor = -80
 )
 
-// shapeOf returns band amount a's style s's whole curve at x: x and what
-// the curve adds to it.
-func shapeOf(s int, a, x float64) float64 {
+// blendOf returns, for a band at amount a whose style is the styles
+// mixed by w, its whole curve at x: x and what the curves add to it. The
+// curve's pane mixes them as one style gives way to another.
+func blendOf(w [styles]float64, a, x float64) float64 {
 	g := math.Exp(a * driveDB / 20 * math.Ln10)
-	return x + a*(curve(s, g*x)/g-x)
+	add := 0.0
+	for s, ws := range w {
+		if ws != 0 {
+			add += ws * (curve(s, g*x)/g - x)
+		}
+	}
+	return x + a*add
 }
 
 // harmonicsOf returns the level of each harmonic, from the second, that
 // style s at amount a adds to a tone at harmonicsTone, in decibels under
 // the tone.
 func harmonicsOf(s int, a float64) [harmonicsShown]float64 {
+	var w [styles]float64
+	w[s] = 1
+	return harmonicsBlend(w, a)
+}
+
+// harmonicsBlend is harmonicsOf for styles mixed by w.
+func harmonicsBlend(w [styles]float64, a float64) [harmonicsShown]float64 {
 	const n = 256
 	var sum [harmonicsShown + 2]complex128
 	for i := range n {
 		ph := 2 * math.Pi * float64(i) / n
-		y := shapeOf(s, a, harmonicsTone*math.Sin(ph))
+		y := blendOf(w, a, harmonicsTone*math.Sin(ph))
 		for k := 2; k < len(sum); k++ {
 			sum[k] += complex(y, 0) * cmplx.Exp(complex(0, -float64(k)*ph))
 		}
@@ -559,11 +607,90 @@ func harmonicsOf(s int, a float64) [harmonicsShown]float64 {
 // curvePane shows, on glass, the curve of the band the panel looks at:
 // the curve a sound through it bends along, against the straight line
 // it would follow untouched; and beside it the harmonics it adds to a
-// tone, a bar each.
+// tone, a bar each. As the band, its amount or its style changes, the
+// curve and the bars glide to the new ones, the colour with them, and
+// the title gives way to the new one.
 type curvePane struct {
 	v    values
 	band int
-	size geom.Size
+	// amount and weight are the amount and how much of each style the
+	// pane draws, gliding; shownBand the band they glide to.
+	amount    *anim.Float
+	weight    [styles]*anim.Float
+	shownBand int
+	// title is the title, and was the one before, giving way as swap
+	// goes from 0 to 1.
+	title, was string
+	swap       *anim.Float
+	harm       [harmonicsShown]float64
+	harmOf     [styles + 1]float32
+	group      anim.Group
+	size       geom.Size
+}
+
+func newCurvePane(v values, band int) *curvePane {
+	c := &curvePane{v: v, band: band, shownBand: band, swap: anim.NewFloat(1),
+		amount: anim.NewFloat(float32(v[AmountID+uint32(band)] / 100))}
+	c.group.Add(c.amount, c.swap)
+	for s := range c.weight {
+		c.weight[s] = anim.NewFloat(float32(onOff(s == v.style(band))))
+		c.group.Add(c.weight[s])
+	}
+	c.title = c.titleOf()
+	return c
+}
+
+// titleOf is the title of the band the pane looks at.
+func (c *curvePane) titleOf() string {
+	return fmt.Sprintf("%s  ·  %s  ·  %s", bandNames[c.band], styleNames[c.v.style(c.band)],
+		pct(c.v[AmountID+uint32(c.band)]))
+}
+
+// Step implements [gunim.Animator]: the curve glides to the band's.
+func (c *curvePane) Step(dt time.Duration) bool {
+	sp := anim.Spring{Response: 0.3, Damping: 0.9}
+	if to := float32(c.v[AmountID+uint32(c.band)] / 100); c.amount.Target() != to {
+		c.amount.Animate(to, sp)
+	}
+	for s, w := range c.weight {
+		if to := float32(onOff(s == c.v.style(c.band))); w.Target() != to {
+			w.Animate(to, sp)
+		}
+	}
+	if t := c.titleOf(); t != c.title {
+		// Another band's title rises in; the same band's, its amount or
+		// style changed, turns over at once, as it is being set.
+		if c.band != c.shownBand {
+			c.was = c.title
+			c.swap.Jump(0)
+			c.swap.Animate(1, sp)
+		}
+		c.title, c.shownBand = t, c.band
+	}
+	return c.group.Step(dt)
+}
+
+// weights are the styles' weights as the pane draws them now.
+func (c *curvePane) weights() [styles]float64 {
+	var w [styles]float64
+	for s, a := range c.weight {
+		w[s] = float64(min(max(a.Value(), 0), 1))
+	}
+	return w
+}
+
+// harmonics are the harmonics the pane draws now, worked out again only
+// as the curve moves.
+func (c *curvePane) harmonics(w [styles]float64, a float64) [harmonicsShown]float64 {
+	var key [styles + 1]float32
+	for s := range w {
+		key[s] = float32(w[s])
+	}
+	key[styles] = float32(a)
+	if key != c.harmOf || c.harmOf == ([styles + 1]float32{}) {
+		c.harm, c.harmOf = harmonicsBlend(w, a), key
+	}
+	return c.harm
 }
 
 // The pane's size, and the room round its contents.
@@ -579,15 +706,33 @@ func (c *curvePane) Layout(cs gunim.Constraints, _ gunim.Frame, _ gunim.Children
 	return cs.Max
 }
 
+// colourOf is the styles' colours mixed by w.
+func colourOf(th *theme.Live, w [styles]float64) color.NRGBA {
+	var r, g, b, a, sum float64
+	for s, ws := range w {
+		cl := styleColor(th, s)
+		r, g, b, a, sum = r+ws*float64(cl.R), g+ws*float64(cl.G), b+ws*float64(cl.B), a+ws*float64(cl.A), sum+ws
+	}
+	if sum < 1e-6 {
+		return styleColor(th, Tape)
+	}
+	return color.NRGBA{R: uint8(r / sum), G: uint8(g / sum), B: uint8(b / sum), A: uint8(a / sum)}
+}
+
 // Paint implements [gunim.Node].
 func (c *curvePane) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim.Children) {
 	th := f.Theme
 	ink := widget.Ink.Get(th)
-	s, a := c.v.style(c.band), c.v[AmountID+uint32(c.band)]/100
-	col := styleColor(th, s)
+	w, a := c.weights(), float64(max(c.amount.Value(), 0))
+	col := colourOf(th, w)
 	plugui.PaintGlass(p, th, geom.Rect{Max: box.Point()}, widget.CardRadius.Get(th)+4)
-	title := audioui.Shaped(fmt.Sprintf("%s  ·  %s  ·  %s", bandNames[c.band], styleNames[s], pct(a*100)), 10, true, false)
-	title.Paint(p, geom.Pt(curvePad, curvePad-2), audioui.Faded(ink, 0.7))
+	swap := min(max(c.swap.Value(), 0), 1)
+	if swap < 0.99 && c.was != "" {
+		was := audioui.Shaped(c.was, 10, true, false)
+		was.Paint(p, geom.Pt(curvePad, curvePad-2-8*swap), audioui.Faded(ink, 0.7*(1-swap)))
+	}
+	title := audioui.Shaped(c.title, 10, true, false)
+	title.Paint(p, geom.Pt(curvePad, curvePad-2+8*(1-swap)), audioui.Faded(ink, 0.7*swap))
 	side := box.H - 2*curvePad - 18
 	if side < 20 {
 		return
@@ -602,7 +747,7 @@ func (c *curvePane) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	var prev geom.Point
 	for i := range steps + 1 {
 		x := -1 + 2*float64(i)/steps
-		y := shapeOf(s, a, x)
+		y := blendOf(w, a, x)
 		pt := geom.Pt(ctr.X+float32(x)*half, ctr.Y-float32(max(min(y, 1), -1))*half)
 		if i > 0 {
 			audioui.Segment(p, prev, pt, 2, col)
@@ -611,14 +756,14 @@ func (c *curvePane) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ guni
 	}
 	// The harmonics, the second up, as tall as they are loud.
 	bars := geom.Rc(sq.Max.X+curvePad, sq.Min.Y, box.W-sq.Max.X-2*curvePad, side-14)
-	w := bars.Size().W / harmonicsShown
-	for k, lv := range harmonicsOf(s, a) {
+	bw := bars.Size().W / harmonicsShown
+	for k, lv := range c.harmonics(w, a) {
 		t := float32(1 - lv/harmonicsFloor)
 		h := t * bars.Size().H
-		x := bars.Min.X + float32(k)*w
-		p.RRect(geom.Rc(x+2, bars.Max.Y-h, w-4, h), 2, paint.Solid(audioui.Faded(col, 0.35+0.5*t)))
+		x := bars.Min.X + float32(k)*bw
+		p.RRect(geom.Rc(x+2, bars.Max.Y-h, bw-4, h), 2, paint.Solid(audioui.Faded(col, 0.35+0.5*t)))
 		num := audioui.Shaped(strconv.Itoa(k+2), 9, false, true)
-		num.Paint(p, geom.Pt(x+(w-num.Advance)/2, bars.Max.Y+3), audioui.Faded(ink, 0.45))
+		num.Paint(p, geom.Pt(x+(bw-num.Advance)/2, bars.Max.Y+3), audioui.Faded(ink, 0.45))
 	}
 }
 
@@ -650,11 +795,17 @@ type panel struct {
 func newPanel(h plug.Host) *panel {
 	v := valuesOf(h)
 	p := &panel{v: v, disp: newDisplay(h, v), tuner: plugui.NewTuner("Tune how the sound shows behind the controls")}
-	p.curve = &curvePane{v: v}
 	for b := range bands {
 		if v[AmountID+uint32(b)] > v[AmountID+uint32(p.touched)] {
 			p.touched = b
 		}
+	}
+	p.curve = newCurvePane(v, p.touched)
+	// The band the pointer comes onto, the curve shows, and keeps
+	// showing as the pointer goes on elsewhere.
+	p.disp.onBand = func(b int) {
+		p.touched = b
+		p.curve.band = b
 	}
 	p.sections = append(p.sections, plugui.NewSection(h, &Descriptor, "CROSSOVERS", 0,
 		CrossoverID, CrossoverID+1, CrossoverID+2))
@@ -721,13 +872,8 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	return size
 }
 
-// Paint implements [gunim.Node]: the curve shows the band under the
-// pointer, or else the band last touched.
+// Paint implements [gunim.Node].
 func (p *panel) Paint(pt *paint.Painter, _ gunim.Frame, _ geom.Size, kids gunim.Children) {
-	p.curve.band = p.touched
-	if p.disp.hotBand >= 0 {
-		p.curve.band = p.disp.hotBand
-	}
 	for k := range kids.All {
 		k.Paint(pt)
 	}
@@ -743,7 +889,7 @@ func (p *panel) Follow(id uint32, v float64, u *gunim.UI) {
 	}
 	p.output.Follow(id, v, u)
 	if b := bandOf(id); b >= 0 {
-		p.touched = b
+		p.touched, p.curve.band = b, b
 		if id >= StyleID {
 			p.styles[b].SetSelected(int(math.Round(v)), u)
 		}
