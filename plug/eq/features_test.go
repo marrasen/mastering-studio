@@ -647,6 +647,20 @@ func TestTheTunerTurnsTheLookAndResetsIt(t *testing.T) {
 	}
 }
 
+func TestTheBandsRowStandsClearOfTheFrequencies(t *testing.T) {
+	p, h := newEQ(t)
+	p.setBands(bell)
+	v, w, run := fullOf(t, p, h)
+	withUI(t, w, run, func(u *gunim.UI) { v.g.sel = 1; v.changed(u) })
+	run(30)
+	graph, row := boundsIn(t, w, run, v.panel), boundsIn(t, w, run, v.row)
+	// The frequencies are written in the graph's last 16 pixels, and the
+	// row's card reaches 4 under the row.
+	if card := row.Max.Y + 4; card > graph.Max.Y-18 {
+		t.Errorf("the row's card reaches %v, over the frequencies from %v", card, graph.Max.Y-16)
+	}
+}
+
 func TestTheTopControlsStandOnGlassOverTheGraph(t *testing.T) {
 	p, h := newEQ(t)
 	p.setBands(bell)

@@ -261,6 +261,9 @@ const (
 	barPadY  = 4
 	gap      = 10
 	rowInset = 16
+	// rowFoot is how far up from the graph's foot the row stands, clear
+	// of the frequencies written along it.
+	rowFoot = 30
 )
 
 // Layout implements [gunim.Node].
@@ -305,7 +308,7 @@ func (v *full) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) g
 	} else {
 		kids.At(1).Layout(gunim.Tight(geom.Sz(rowW, rowH)))
 	}
-	v.rowAt = geom.Rc((size.W-rowW)/2, max(size.H-rowH-rowInset, 0), rowW, rowH)
+	v.rowAt = geom.Rc((size.W-rowW)/2, max(size.H-rowH-rowFoot, 0), rowW, rowH)
 	kids.At(1).Place(v.rowAt.Min)
 	top := v.barAt.Max.Y + gap
 	if listed < 0.01 && v.listed.Target() == 0 {
