@@ -118,12 +118,10 @@ func (d *deck) takeTurnLocked() bool {
 	default:
 		return false
 	}
-	n := d.next
+	n, was := d.next, d.rack
 	d.sw.close()
-	if d.rack != n.rack {
-		d.rack.setActive(false)
-	}
 	d.sw, d.rack, d.id, d.next, d.stage, d.rate = n.sw, n.rack, n.id, nil, n.stage, n.rate
+	d.letGoLocked(was)
 	select {
 	case d.turns <- n.id:
 	default:
@@ -167,9 +165,7 @@ func (d *deck) stopLocked(fade time.Duration) {
 		sw.close()
 		d.mu.Lock()
 		defer d.mu.Unlock()
-		if d.rack != r {
-			r.setActive(false)
-		}
+		d.letGoLocked(r)
 	}()
 	d.voice, d.sw, d.rack, d.id = nil, nil, nil, 0
 }
@@ -386,10 +382,20 @@ func (d *deck) unqueueLocked() {
 		}
 	}
 	d.next.sw.close()
-	if d.next.rack != d.rack {
-		d.next.rack.setActive(false)
-	}
+	r := d.next.rack
 	d.next = nil
+	d.letGoLocked(r)
+}
+
+// letGoLocked stops chain r's plugins, unless the track playing or the
+// one queued runs through it: a track played again, or queued, as the
+// sound it played before fades out, runs through the chain it did. It
+// runs with mu held.
+func (d *deck) letGoLocked(r *rack) {
+	if r == nil || r == d.rack || d.next != nil && d.next.rack == r {
+		return
+	}
+	r.setActive(false)
 }
 
 // hasNext says a track is queued.
