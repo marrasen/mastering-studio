@@ -422,6 +422,15 @@ func (p *goPane) forget(v *goView, u *gunim.UI) {
 // isOpen says the pane shows a plugin's views.
 func (p *goPane) isOpen() bool { return p.v != nil }
 
+// title is the name of the plugin the pane shows, as its sheet has it,
+// or "" for none.
+func (p *goPane) title() string {
+	if sh := p.sheets[p.v]; p.v != nil && sh != nil {
+		return sh.title.Text
+	}
+	return ""
+}
+
 // Children implements [gunim.Composite]: the sheets come and go as the
 // pane opens and closes.
 func (p *goPane) Children() []gunim.Node { return nil }

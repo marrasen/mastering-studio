@@ -768,9 +768,10 @@ func TestTheLegendSwitchesTheLoudnessCurves(t *testing.T) {
 func TestTheViewSwitchesToTheSpectrogramAndANoteIsKeptAsTyped(t *testing.T) {
 	w, r, run := stage(t, album())
 	b := boundsOf(t, w, run, r.head.view)
-	w.Input(input.PointerMove{Pos: b.Center()})
-	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
-	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
+	at := b.Min.Add(r.head.view.parts[partGram].Center())
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
 	run(1)
 	if _, rest := edits(w); len(rest) != 1 || rest[0] != (SetView{View: ViewGram}) {
 		t.Fatalf("the view's switch sent %v", rest)
@@ -1446,4 +1447,50 @@ func TestATracksRowCountsItsTimedNotes(t *testing.T) {
 	a.Tracks[0].Marks = []Mark{{ID: 1, At: time.Second, Text: "a"}, {ID: 2, At: 2 * time.Second, Text: "b"}}
 	_, _, run := stage(t, a)
 	run(2)
+}
+
+func TestTheViewSwitchShowsAPluginOpenAndClosesIt(t *testing.T) {
+	a := goAlbum(0)
+	w, r, run := stage(t, a)
+	sw := r.head.view
+	open := func() {
+		t.Helper()
+		a.ShowGo, a.ShowGos = 9, a.ShowGos+1
+		if err := w.Client().Publish(albumTopic, a); err != nil {
+			t.Fatal(err)
+		}
+		run(60)
+		if !r.pane.isOpen() || sw.shown() != partPlugin || sw.plugIn.Value() < 0.99 || sw.plugName != "Trim" {
+			t.Fatalf("opened, the switch shows part %d, the plugin's in %v, named %q", sw.shown(), sw.plugIn.Value(), sw.plugName)
+		}
+		if r.head.followIn.Value() > 0.01 {
+			t.Errorf("with a plugin shown, Follow is still in at %v", r.head.followIn.Value())
+		}
+	}
+	clickPart := func(at geom.Point) {
+		t.Helper()
+		b := boundsOf(t, w, run, sw)
+		w.Input(input.PointerMove{Pos: b.Min.Add(at)})
+		w.Input(input.PointerDown{Pos: b.Min.Add(at), Button: input.ButtonPrimary, Clicks: 1})
+		w.Input(input.PointerUp{Pos: b.Min.Add(at), Button: input.ButtonPrimary})
+		run(60)
+	}
+	// Wave closes the plugin, the view being the waveform already.
+	open()
+	clickPart(sw.parts[partWave].Center())
+	if _, rest := edits(w); r.pane.isOpen() || len(rest) != 0 || r.head.followIn.Value() < 0.99 {
+		t.Fatalf("Wave left the plugin open %v, sent %v, Follow in at %v", r.pane.isOpen(), rest, r.head.followIn.Value())
+	}
+	// The cross closes it.
+	open()
+	clickPart(sw.closeAt().Center())
+	if r.pane.isOpen() || sw.plugIn.Value() > 0.01 {
+		t.Fatalf("the cross left the plugin open %v, its part in at %v", r.pane.isOpen(), sw.plugIn.Value())
+	}
+	// Spectrogram closes it, and shows the spectrogram.
+	open()
+	clickPart(sw.parts[partGram].Center())
+	if _, rest := edits(w); r.pane.isOpen() || len(rest) != 1 || rest[0] != (SetView{View: ViewGram}) {
+		t.Errorf("Spectrogram left the plugin open %v, and sent %v", r.pane.isOpen(), rest)
+	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"strings"
+	"time"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
@@ -43,11 +44,14 @@ type trackHead struct {
 	track    Track
 	field    *renameField
 	renaming bool
-	// note is the track's note, kept as it is typed; view switches the
-	// editor between the waveform and the spectrogram.
-	note   *widget.TextField
-	view   *pill
-	follow *pill
+	// note is the track's note, kept as it is typed; view says, and
+	// switches, what the area under the head shows; follow says how the
+	// editor follows the playhead, and fades away, followIn, while a
+	// plugin is shown there.
+	note     *widget.TextField
+	view     *viewSwitch
+	follow   *pill
+	followIn *anim.Float
 	// titleW is how wide the title is drawn, for the double-click.
 	titleW float32
 	// later is a track to rename once it is the one shown.
@@ -72,8 +76,8 @@ func (f *renameField) Handle(e input.Event, u *gunim.UI) bool {
 }
 
 func newTrackHead(r *root) *trackHead {
-	h := &trackHead{r: r, hover: anim.NewFloat(0)}
-	h.Add(h.hover)
+	h := &trackHead{r: r, hover: anim.NewFloat(0), followIn: anim.NewFloat(1)}
+	h.Add(h.hover, h.followIn)
 	h.field = &renameField{TextField: widget.NewTextField(), h: h}
 	h.field.OnCommit = func(text string, _ *gunim.UI) gunim.Intent {
 		h.renaming = false
@@ -96,13 +100,7 @@ func newTrackHead(r *root) *trackHead {
 		}
 		return SetNote{ID: h.track.ID, Note: text}
 	}
-	h.view = newPill("Spectrogram", func(u *gunim.UI) {
-		v := ViewGram
-		if r.state.View == ViewGram {
-			v = ViewWave
-		}
-		u.Send(r, SetView{View: v})
-	})
+	h.view = newViewSwitch(r)
 	h.follow = newPill(followNames[FollowJump], func(u *gunim.UI) {
 		u.Send(r, SetFollow{Follow: r.state.Follow.next()})
 	})
@@ -140,8 +138,7 @@ func (h *trackHead) show(t Track, s Album, u *gunim.UI) {
 	}
 	h.follow.words = followNames[s.Follow]
 	h.follow.setLit(s.Follow != FollowOff)
-	h.view.words = "Spectrogram"
-	h.view.setLit(s.View == ViewGram)
+
 	// The note as kept, but while it is typed in: the field is ahead.
 	if u.Focused() != h.note || switched {
 		h.note.SetText(t.Note, u)
@@ -182,18 +179,33 @@ func (h *trackHead) Children() []gunim.Node {
 // Focusable implements [gunim.Focusable].
 func (h *trackHead) Focusable() bool { return false }
 
-// Layout implements [gunim.Node]: the buttons at the right, the field
-// over the title.
+// Step implements [gunim.Animator]: Follow fades away while a plugin is
+// shown under the head, as it follows nothing there.
+func (h *trackHead) Step(dt time.Duration) bool {
+	if to := onOff(!h.r.pane.isOpen()); h.followIn.Target() != to {
+		h.followIn.Animate(to, anim.Spring{Response: 0.25, Damping: 1})
+	}
+	return h.Group.Step(dt)
+}
+
+// Layout implements [gunim.Node]: the switch and Follow at the right,
+// Follow taking as much room as it is in; the field over the title.
 func (h *trackHead) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	h.size = c.Max
 	mid := h.size.H / 2
+	in := min(max(h.followIn.Value(), 0), 1)
 	fw := pillWidth("Follow: Scroll")
-	kids.At(1).Layout(gunim.Tight(geom.Sz(fw, 30)))
+	if in < 0.01 && h.followIn.Target() == 0 {
+		kids.At(1).Layout(gunim.Tight(geom.Size{}))
+	} else {
+		kids.At(1).Layout(gunim.Tight(geom.Sz(fw, 30)))
+	}
 	kids.At(1).Place(geom.Pt(h.size.W-fw, mid-15))
-	rw := pillWidth("Spectrogram")
-	kids.At(0).Layout(gunim.Tight(geom.Sz(rw, 30)))
-	kids.At(0).Place(geom.Pt(h.size.W-fw-8-rw, mid-15))
-	kids.At(2).Layout(gunim.Tight(geom.Sz(min(360, h.size.W-fw-rw-40), 34)))
+	fw = (fw + 8) * in
+	rw := h.view.width()
+	kids.At(0).Layout(gunim.Tight(geom.Sz(rw, switchH)))
+	kids.At(0).Place(geom.Pt(h.size.W-fw-rw, mid-switchH/2))
+	kids.At(2).Layout(gunim.Tight(geom.Sz(max(min(360, h.size.W-fw-rw-40), 0), 34)))
 	kids.At(2).Place(geom.Pt(0, mid-17))
 	// The note, from after the title to the buttons.
 	h.titleW = min(shaped(h.track.Title, 16, true).Advance, h.size.W*0.3)
@@ -235,7 +247,11 @@ func (h *trackHead) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids g
 		paintFit(p, t.Title, 16, true, geom.Pt(0, box.H/2-10), h.titleW, pal.ink)
 	}
 	kids.At(0).Paint(p)
-	kids.At(1).Paint(p)
+	if in := min(max(h.followIn.Value(), 0), 1); in > 0.01 {
+		end := p.Layer(paint.LayerOpts{Bounds: geom.Rect{Max: box.Point()}, Opacity: in})
+		kids.At(1).Paint(p)
+		end()
+	}
 	if h.renaming {
 		kids.At(2).Paint(p)
 	} else if t.ID != 0 {
