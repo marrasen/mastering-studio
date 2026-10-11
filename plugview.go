@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
@@ -347,6 +348,12 @@ func (r *root) showGo(t Track, s, was Album, u *gunim.UI) {
 			r.pane.leave(v, u)
 		}
 	}
+	// The sheets' titles, as the plugins are named now.
+	for _, sl := range t.Chain {
+		if sh := r.pane.sheets[r.goViews[sl.ID]]; sh != nil && !sh.renaming {
+			sh.title.Text = sl.title()
+		}
+	}
 	for _, v := range gone {
 		r.pane.forget(v, u)
 		v.close()
@@ -638,6 +645,9 @@ type goSheet struct {
 	// scale is how far the view is drawn down from the size it is laid
 	// out at, to fit a cell smaller than viewLeast.
 	scale float32
+	// field renames the plugin, over its title, while renaming says so.
+	field    *sheetField
+	renaming bool
 }
 
 func newGoSheet(p *goPane, v *goView) *goSheet {
@@ -652,6 +662,20 @@ func newGoSheet(p *goPane, v *goView) *goSheet {
 		p.leave(v, u)
 		u.Invalidate()
 		return nil
+	}
+	sh.field = &sheetField{TextField: widget.NewTextField(), sh: sh}
+	sh.field.OnCommit = func(text string, _ *gunim.UI) gunim.Intent {
+		sh.renaming = false
+		return sh.named(text)
+	}
+	sh.field.Keys = func(k input.KeyPress, u *gunim.UI) bool {
+		if k.Key != input.KeyEscape {
+			return false
+		}
+		sh.renaming = false
+		u.Focus(p.r)
+		u.Invalidate()
+		return true
 	}
 	sh.patches = newPill("Patches", sh.openPatches)
 	sh.patches.menu = true
@@ -725,6 +749,53 @@ func (sh *goSheet) openDeletes(kept []string, u *gunim.UI) {
 // smaller, it is drawn smaller.
 var viewLeast = geom.Sz(720, 440)
 
+// sheetField is the field a sheet's plugin is renamed in: it renames as
+// Enter is pressed or it loses the keyboard, and Escape lets it go
+// unchanged.
+type sheetField struct {
+	*widget.TextField
+	sh *goSheet
+}
+
+// Handle implements [gunim.Handler].
+func (f *sheetField) Handle(e input.Event, u *gunim.UI) bool {
+	if _, ok := e.(input.FocusLost); ok && f.sh.renaming {
+		f.sh.renaming = false
+		if in := f.sh.named(f.Text()); in != nil {
+			u.Send(f.sh, in)
+		}
+		u.Invalidate()
+	}
+	return f.TextField.Handle(e, u)
+}
+
+// rename starts renaming the sheet's plugin, its title in the field.
+func (sh *goSheet) rename(u *gunim.UI) {
+	sh.renaming = true
+	sh.field.Disabled = false
+	sh.field.Placeholder = sh.v.d.Name
+	sh.field.SetText(sh.title.Text, u)
+	sh.field.Select(0, len([]rune(sh.title.Text)))
+	u.Focus(sh.field)
+	u.Invalidate()
+}
+
+// named is the renaming of the sheet's plugin to text, or nil for none.
+func (sh *goSheet) named(text string) gunim.Intent {
+	text = strings.TrimSpace(text)
+	if text == sh.title.Text {
+		return nil
+	}
+	if text == "" {
+		text = sh.v.d.Name
+	}
+	return RenamePlugin{Track: sh.v.track, Slot: sh.v.slot, Label: text}
+}
+
+// titleAt is where the sheet's title stands, for the double-click that
+// renames it.
+func (sh *goSheet) titleAt() geom.Rect { return geom.Rc(10, 4, 300, goPaneBar-8) }
+
 // moveTo has the sheet glide to r; one not yet placed, or not in, is
 // there at once.
 func (sh *goSheet) moveTo(r geom.Rect) {
@@ -747,7 +818,8 @@ func (sh *goSheet) rect() geom.Rect {
 
 // Children implements [gunim.Composite].
 func (sh *goSheet) Children() []gunim.Node {
-	return []gunim.Node{sh.title, sh.closer, sh.v.paneView(), sh.patchMenu}
+	sh.field.Disabled = !sh.renaming
+	return []gunim.Node{sh.title, sh.closer, sh.v.paneView(), sh.patchMenu, sh.field}
 }
 
 // Transition implements [gunim.Transitioner]: in with a little spring,
@@ -775,6 +847,8 @@ func (sh *goSheet) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Childre
 	kids.At(3).Place(geom.Pt(size.W-48-pw, 4))
 	kids.At(0).Layout(gunim.Constraints{Max: geom.Sz(max(size.W-pw-88, 0), 24)})
 	kids.At(0).Place(geom.Pt(16, 10))
+	kids.At(4).Layout(gunim.Tight(geom.Sz(min(260, max(size.W-pw-88, 0)), 30)))
+	kids.At(4).Place(geom.Pt(10, 5))
 	// The view, laid out no smaller than viewLeast, and drawn down to fit
 	// where its room is smaller, the pointer following.
 	room := geom.Sz(max(size.W-32, 0), max(size.H-goPaneBar-12, 0))
@@ -801,6 +875,10 @@ func (sh *goSheet) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	pt.RRect(r, 10, paint.Solid(pal.raised))
 	pal.outline(pt, r, 10, 1)
 	for i := range kids.Len() {
+		// While renaming, the field in the title's place.
+		if i == 0 && sh.renaming || i == 4 && !sh.renaming {
+			continue
+		}
 		if i == 2 && sh.scale < 1 {
 			// The view, drawn down to its room.
 			pop := pt.Push(paint.Scale(sh.scale, geom.Point{}))
@@ -812,8 +890,16 @@ func (sh *goSheet) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	}
 }
 
-// Handle implements [gunim.Handler]: a sheet leaving takes nothing.
-func (sh *goSheet) Handle(_ input.Event, _ *gunim.UI) bool { return false }
+// Handle implements [gunim.Handler]: a double-click on the title
+// renames the plugin; a sheet leaving takes nothing.
+func (sh *goSheet) Handle(e input.Event, u *gunim.UI) bool {
+	d, ok := e.(input.PointerDown)
+	if !ok || sh.leaving || d.Button != input.ButtonPrimary || d.Clicks != 2 || !sh.titleAt().Contains(d.Pos) {
+		return false
+	}
+	sh.rename(u)
+	return true
+}
 
 // Focusable implements [gunim.Focusable].
 func (sh *goSheet) Focusable() bool { return false }

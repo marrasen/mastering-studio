@@ -1,6 +1,8 @@
 package plugui
 
 import (
+	"math"
+
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
@@ -156,35 +158,82 @@ func (s *Section) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, kids gun
 // reaching as near the edges as half the inset. It tells place where
 // each goes, and returns where the first row's top is.
 func PlaceSections(size geom.Size, inset float32, sections []*Section, place func(i int, r geom.Rect)) float32 {
-	type row struct {
-		from, to int
-		w        float32
-	}
-	var rows []row
-	cur := row{}
+	widths := make([]float32, len(sections))
 	for i, s := range sections {
-		w := s.Width()
-		if cur.to > cur.from && cur.w+SectionGap+w > size.W-inset {
-			rows = append(rows, cur)
-			cur = row{from: i}
-		}
-		if cur.to > cur.from {
-			cur.w += SectionGap
-		}
-		cur.w += w
-		cur.to = i + 1
+		widths[i] = s.Width()
 	}
-	rows = append(rows, cur)
+	rows := balancedRows(widths, size.W-inset)
 	top := size.H - inset - (float32(len(rows))*(SectionH+SectionGap) - SectionGap)
 	y := top
 	for _, r := range rows {
-		x := (size.W - r.w) / 2
-		for i := r.from; i < r.to; i++ {
-			w := sections[i].Width()
-			place(i, geom.Rc(x, y, w, SectionH))
-			x += w + SectionGap
+		x := (size.W - rowWidth(widths[r[0]:r[1]])) / 2
+		for i := r[0]; i < r[1]; i++ {
+			place(i, geom.Rc(x, y, widths[i], SectionH))
+			x += widths[i] + SectionGap
 		}
 		y += SectionH + SectionGap
 	}
 	return top
+}
+
+// rowWidth is how wide sections of widths stand in a row.
+func rowWidth(widths []float32) float32 {
+	w := float32(0)
+	for i, v := range widths {
+		if i > 0 {
+			w += SectionGap
+		}
+		w += v
+	}
+	return w
+}
+
+// balancedRows splits sections of widths, in order, into as few rows as
+// fit in room, each from and to an index, and of those, the rows whose
+// widest is least: as even as they go, so no section stands alone under
+// a full row where it need not.
+func balancedRows(widths []float32, room float32) [][2]int {
+	n := len(widths)
+	if n == 0 {
+		return [][2]int{{0, 0}}
+	}
+	// How many rows: as many as filling each in turn takes.
+	count, w := 1, float32(0)
+	for i, v := range widths {
+		if i > 0 && w+SectionGap+v > room {
+			count, w = count+1, v
+			continue
+		}
+		if i > 0 {
+			w += SectionGap
+		}
+		w += v
+	}
+	// best[k][i] is the least widest row splitting the first i sections
+	// into k rows, and cut[k][i] where its last row starts.
+	inf := float32(math.Inf(1))
+	best := make([][]float32, count+1)
+	cut := make([][]int, count+1)
+	for k := range best {
+		best[k], cut[k] = make([]float32, n+1), make([]int, n+1)
+		for i := range best[k] {
+			best[k][i] = inf
+		}
+	}
+	best[0][0] = 0
+	for k := 1; k <= count; k++ {
+		for i := 1; i <= n; i++ {
+			for j := k - 1; j < i; j++ {
+				if v := max(best[k-1][j], rowWidth(widths[j:i])); v < best[k][i] {
+					best[k][i], cut[k][i] = v, j
+				}
+			}
+		}
+	}
+	rows := make([][2]int, count)
+	for k, i := count, n; k > 0; k-- {
+		rows[k-1] = [2]int{cut[k][i], i}
+		i = cut[k][i]
+	}
+	return rows
 }

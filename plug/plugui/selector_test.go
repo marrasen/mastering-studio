@@ -69,3 +69,40 @@ func TestAKnobBoundToItsOwnValueTurnsItAsAGesture(t *testing.T) {
 		t.Errorf("turning a slope a step up from 24 set %v (%s), want 36", v, k)
 	}
 }
+
+func TestFourLampsInTwoColumnsStandTwoByTwo(t *testing.T) {
+	s := NewSelector([]string{"A", "B", "C", "D"}, []string{"a", "b", "c", "d"})
+	s.Columns = 2
+	size := s.Layout(gunim.Constraints{Min: geom.Sz(56, 0), Max: geom.Sz(56, 100)}, gunim.Frame{}, gunim.Children{})
+	if size.W != 56 || size.H != SelectorH+lampRow {
+		t.Errorf("four lamps two by two stand %v", size)
+	}
+	// Each lamp where it stands: the top row first, then the second.
+	for i, at := range []geom.Point{{X: 14, Y: 8}, {X: 42, Y: 8}, {X: 14, Y: 24}, {X: 42, Y: 24}} {
+		if got := s.at(at); got != i {
+			t.Errorf("at %v is option %d, want %d", at, got, i)
+		}
+	}
+	// Under the lamps, on the name, the lamp of the last row above.
+	if got := s.at(geom.Pt(42, size.H-4)); got != 3 {
+		t.Errorf("under the right column, option %d", got)
+	}
+}
+
+func TestSectionsSplitIntoEvenRows(t *testing.T) {
+	// Five that fit in one row of 500, and a sixth: two rows, three and
+	// three, not five and one.
+	w := []float32{100, 100, 100, 100, 50, 100}
+	rows := balancedRows(w, 560)
+	if len(rows) != 2 || rows[0] != [2]int{0, 3} || rows[1] != [2]int{3, 6} {
+		t.Errorf("six sections split %v", rows)
+	}
+	if rows := balancedRows(w[:3], 560); len(rows) != 1 || rows[0] != [2]int{0, 3} {
+		t.Errorf("three that fit split %v", rows)
+	}
+	for _, r := range balancedRows([]float32{300, 300, 300, 300, 300}, 700) {
+		if rowWidth([]float32{300, 300, 300, 300, 300}[r[0]:r[1]]) > 700 {
+			t.Errorf("a row %v runs past the room", r)
+		}
+	}
+}

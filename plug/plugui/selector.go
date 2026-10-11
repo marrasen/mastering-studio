@@ -29,12 +29,16 @@ type Selector struct {
 	OnPick func(i int, u *gunim.UI)
 	// Locked greys the selector, and it picks nothing.
 	Locked bool
-	tip    widget.PartTip
-	cells  []geom.Rect
-	size   geom.Size
+	// Columns, where set, sets the lamps in rows of so many, as four
+	// two by two, which takes less room across; else all in one row.
+	Columns int
+	tip     widget.PartTip
+	cells   []geom.Rect
+	size    geom.Size
 }
 
-// SelectorH is how tall a selector is: a row of lamps, and the name
+// SelectorH is how tall a selector of one row is: a row of lamps, and
+// the name
 // under them.
 const SelectorH = 34
 
@@ -78,13 +82,34 @@ func (s *Selector) glide(u *gunim.UI) {
 	u.Invalidate()
 }
 
-// Layout implements [gunim.Node]: a lamp each, evenly across.
+// lampRow is how tall a row of lamps is.
+const lampRow = 16
+
+// grid returns how many lamps stand across, and how many rows they
+// take.
+func (s *Selector) grid() (cols, rows int) {
+	cols = len(s.names)
+	if s.Columns > 0 && s.Columns < cols {
+		cols = s.Columns
+	}
+	return cols, (len(s.names) + cols - 1) / cols
+}
+
+// lampsH is how tall the lamps stand, all their rows.
+func (s *Selector) lampsH() float32 {
+	_, rows := s.grid()
+	return float32(rows) * lampRow
+}
+
+// Layout implements [gunim.Node]: a lamp each, evenly across, in rows
+// of Columns where it is set, and the name under them.
 func (s *Selector) Layout(c gunim.Constraints, _ gunim.Frame, _ gunim.Children) geom.Size {
-	s.size = c.Constrain(geom.Sz(float32(len(s.names))*24, SelectorH))
-	cw := s.size.W / float32(len(s.names))
+	cols, _ := s.grid()
+	s.size = c.Constrain(geom.Sz(max(float32(cols)*24, 48), s.lampsH()+SelectorH-lampRow))
+	cw := s.size.W / float32(cols)
 	s.cells = s.cells[:0]
 	for i := range s.names {
-		s.cells = append(s.cells, geom.Rc(float32(i)*cw, 0, cw, 16))
+		s.cells = append(s.cells, geom.Rc(float32(i%cols)*cw, float32(i/cols)*lampRow, cw, lampRow))
 	}
 	return s.size
 }
@@ -121,7 +146,7 @@ func (s *Selector) Paint(p *paint.Painter, f gunim.Frame, box geom.Size, _ gunim
 			alpha *= 0.7
 		}
 		t := audioui.Shaped(s.names[i], 10, i == s.sel, false)
-		t.Paint(p, geom.Pt((box.W-t.Advance)/2-d*20, 19), audioui.Faded(ink, alpha))
+		t.Paint(p, geom.Pt((box.W-t.Advance)/2-d*20, s.lampsH()+3), audioui.Faded(ink, alpha))
 	}
 }
 
@@ -132,10 +157,15 @@ func abs32(v float32) float32 {
 	return v
 }
 
-// at returns the option at pos, or -1.
+// at returns the option at pos, or -1: the lamp's, or, under the
+// lamps, the one of the last row's above.
 func (s *Selector) at(pos geom.Point) int {
+	if pos.Y < 0 || pos.Y >= s.size.H {
+		return -1
+	}
+	y := min(pos.Y, s.lampsH()-1)
 	for i, r := range s.cells {
-		if pos.X >= r.Min.X && pos.X < r.Max.X && pos.Y >= 0 && pos.Y < s.size.H {
+		if pos.X >= r.Min.X && pos.X < r.Max.X && y >= r.Min.Y && y < r.Max.Y {
 			return i
 		}
 	}

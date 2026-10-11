@@ -813,6 +813,7 @@ func newPanel(h plug.Host) *panel {
 		s := plugui.NewSection(h, &Descriptor, bandNames[b], 0, AmountID+uint32(b))
 		s.Knobs[0].Tooltip = "How much the band's harmonics are added: none leaves it as it was"
 		sel := plugui.NewSelector(styleNames, styleTips)
+		sel.Columns = 2
 		sel.SetSelected(v.style(b), nil)
 		id := StyleID + uint32(b)
 		sel.OnPick = func(i int, u *gunim.UI) {
@@ -829,8 +830,9 @@ func newPanel(h plug.Host) *panel {
 	return p
 }
 
-// styleW is how wide a band's style selector stands.
-const styleW = 96
+// styleW is how wide a band's style selector stands: its four lamps two
+// by two.
+const styleW = 56
 
 // Children implements [gunim.Composite].
 func (p *panel) Children() []gunim.Node {

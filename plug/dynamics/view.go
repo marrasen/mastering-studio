@@ -204,6 +204,7 @@ func newPanel(h plug.Host) *panel {
 	p.zero = plugui.NewTrimPot(h, param(MeterID))
 	p.zero.Tooltip = "The level that reads 0 VU on the output meter, in dBFS"
 	p.side = plugui.NewSelector(sideNames, sideTips)
+	p.side.Columns = 2
 	p.side.SetSelected(int(math.Round(h.Param(SideModeID))), nil)
 	p.side.OnPick = func(i int, u *gunim.UI) {
 		p.freq.Disabled = i == SideFull
@@ -227,7 +228,7 @@ func newPanel(h plug.Host) *panel {
 	p.freq = side.Knobs[0]
 	p.freq.Tooltip = "The frequency the compressor listens under, about or over"
 	p.freq.Disabled = p.side.Selected() == SideFull
-	side.Add(p.side, 96).Add(p.listen, 32)
+	side.Add(p.side, 56).Add(p.listen, 32)
 	p.sections = []*plugui.Section{
 		plugui.NewSection(h, &Descriptor, "INPUT", 0, InputID),
 		plugui.NewSection(h, &Descriptor, "GATE", GateOnID, GateThresholdID, GateRangeID, GateAttackID, GateReleaseID),
@@ -275,7 +276,7 @@ func (p *panel) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) 
 	n := 3 + len(p.sections)
 	outAt := p.metersAt.Min.Add(geom.Pt(meterPad+mw+plugui.SectionGap, meterPad))
 	kids.At(n).Layout(gunim.Tight(geom.Sz(plugui.TrimPotSize, plugui.TrimPotSize)))
-	kids.At(n).Place(outAt.Add(geom.Pt(mw-plugui.TrimPotSize-10, mh-plugui.TrimPotSize-10)))
+	kids.At(n).Place(outAt.Add(geom.Pt(mw-plugui.TrimPotSize-11, mh-plugui.TrimPotSize-11)))
 	// The tuner's button at the top right, its card under it.
 	n++
 	kids.At(n).Layout(gunim.Tight(geom.Sz(32, 32)))

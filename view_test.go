@@ -1697,3 +1697,41 @@ func TestCtrlClickShowsUpToFourPluginsInAGrid(t *testing.T) {
 		t.Errorf("a click shows %v", got)
 	}
 }
+
+func TestADoubleClickOnAPluginsTitleRenamesIt(t *testing.T) {
+	a := goAlbum(0)
+	a.ShowGo, a.ShowGos = 9, 1
+	w, r, run := stage(t, a)
+	run(60)
+	sh := r.pane.sheets[r.goViews[9]]
+	at := boundsOf(t, w, run, r.pane).Min.Add(sh.rect().Min).Add(geom.Pt(30, 20))
+	w.Input(input.PointerMove{Pos: at})
+	for _, n := range []int{1, 2} {
+		w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: n})
+		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	}
+	run(2)
+	if !sh.renaming || sh.field.Text() != "Trim" {
+		t.Fatalf("double-clicked, the title is renaming %v, from %q", sh.renaming, sh.field.Text())
+	}
+	edits(w)
+	gunim.RegisterPatch(w, "album", func(_ *root, _ struct{}, u *gunim.UI) { sh.field.SetText("More bass", u) })
+	if err := w.Client().Patch("album", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	run(1)
+	w.Input(input.KeyPress{Key: input.KeyEnter})
+	run(2)
+	if _, rest := edits(w); sh.renaming || !slices.Contains(rest, gunim.Intent(RenamePlugin{Track: 1, Slot: 9, Label: "More bass"})) {
+		t.Errorf("Enter sent %v, renaming still %v", rest, sh.renaming)
+	}
+	// Named so, the title, the switch and the card say it.
+	a.Tracks[0].Chain[0].Label = "More bass"
+	if err := w.Client().Publish(albumTopic, a); err != nil {
+		t.Fatal(err)
+	}
+	run(30)
+	if sh.title.Text != "More bass" || r.head.view.plugName != "More bass" {
+		t.Errorf("renamed, the sheet says %q and the switch %q", sh.title.Text, r.head.view.plugName)
+	}
+}
