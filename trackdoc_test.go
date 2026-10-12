@@ -11,9 +11,9 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/trim"
 	"github.com/marrasen/gunim/widget"
-	"github.com/marrasen/mastering-studio/plug"
-	"github.com/marrasen/mastering-studio/plug/trim"
 )
 
 // A plugin of the tests' own that reads whole tracks, and counts the

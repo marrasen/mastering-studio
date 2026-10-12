@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/gunim/audio/plug"
 )
 
 // Tracks for plugins that read them whole, as [plug.TrackPlugin]: each

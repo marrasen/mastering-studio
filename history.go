@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim"
-	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/gunim/audio/plug"
 )
 
 // Undo and redo: the album's changes, one history for it all, each
