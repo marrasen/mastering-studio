@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/mastering-studio/plug/trim"
+	"github.com/marrasen/gunim/audio/plug/trim"
 )
 
 // playingDeck plays a 20-second track at 44.1 kHz through a chain of

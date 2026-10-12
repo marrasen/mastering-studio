@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marrasen/mastering-studio/plug/eq"
+	"github.com/marrasen/gunim/audio/plug/eq"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/trim"
 	"github.com/marrasen/gunim/input"
-	"github.com/marrasen/mastering-studio/plug"
-	"github.com/marrasen/mastering-studio/plug/trim"
 )
 
 // A plugin of the tests' own, which keeps a state: what it was last

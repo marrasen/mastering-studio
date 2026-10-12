@@ -12,8 +12,8 @@ import (
 	"strings"
 
 	"github.com/marrasen/gunim"
+	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/widget"
-	"github.com/marrasen/mastering-studio/plug"
 )
 
 // Patches: a Go plugin's settings kept by name, for any slot of the same

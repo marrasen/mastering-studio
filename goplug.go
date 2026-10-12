@@ -10,15 +10,15 @@ import (
 	"sync/atomic"
 
 	"github.com/marrasen/gunim"
-	"github.com/marrasen/mastering-studio/plug"
+	"github.com/marrasen/gunim/audio/plug"
 
 	// The Go plugins built in.
-	_ "github.com/marrasen/mastering-studio/plug/dynamics"
-	_ "github.com/marrasen/mastering-studio/plug/enhancer"
-	_ "github.com/marrasen/mastering-studio/plug/eq"
-	_ "github.com/marrasen/mastering-studio/plug/imager"
-	_ "github.com/marrasen/mastering-studio/plug/maximizer"
-	_ "github.com/marrasen/mastering-studio/plug/trim"
+	_ "github.com/marrasen/gunim/audio/plug/dynamics"
+	_ "github.com/marrasen/gunim/audio/plug/enhancer"
+	_ "github.com/marrasen/gunim/audio/plug/eq"
+	_ "github.com/marrasen/gunim/audio/plug/imager"
+	_ "github.com/marrasen/gunim/audio/plug/maximizer"
+	_ "github.com/marrasen/gunim/audio/plug/trim"
 )
 
 // The chain's half of the Go plugins, in package plug: built into the

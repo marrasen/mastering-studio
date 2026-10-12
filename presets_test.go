@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/marrasen/mastering-studio/plug/trim"
+	"github.com/marrasen/gunim/audio/plug/trim"
 
 	"github.com/marrasen/gunim/audio"
 )

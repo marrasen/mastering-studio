@@ -8,10 +8,10 @@ import (
 	"testing"
 
 	"github.com/marrasen/gunim/audio"
+	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/eq"
+	"github.com/marrasen/gunim/audio/plug/trim"
 	"github.com/marrasen/gunim/input"
-	"github.com/marrasen/mastering-studio/plug"
-	"github.com/marrasen/mastering-studio/plug/eq"
-	"github.com/marrasen/mastering-studio/plug/trim"
 )
 
 func TestAPatchTheEQComesWithLoadsAsAStepToUndo(t *testing.T) {

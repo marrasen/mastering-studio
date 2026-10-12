@@ -5,9 +5,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/marrasen/mastering-studio/plug"
-	"github.com/marrasen/mastering-studio/plug/maximizer"
-	"github.com/marrasen/mastering-studio/plug/trim"
+	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/maximizer"
+	"github.com/marrasen/gunim/audio/plug/trim"
 )
 
 // A plugin of the tests' own that tells of a block processed after it
