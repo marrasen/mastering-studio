@@ -17,7 +17,9 @@ import (
 	_ "github.com/marrasen/gunim/audio/plug/enhancer"
 	_ "github.com/marrasen/gunim/audio/plug/eq"
 	_ "github.com/marrasen/gunim/audio/plug/imager"
+	_ "github.com/marrasen/gunim/audio/plug/impact"
 	_ "github.com/marrasen/gunim/audio/plug/maximizer"
+	_ "github.com/marrasen/gunim/audio/plug/stabilizer"
 	_ "github.com/marrasen/gunim/audio/plug/trim"
 )
 
