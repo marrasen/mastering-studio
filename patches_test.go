@@ -7,10 +7,13 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/plug/braid"
 	"github.com/marrasen/gunim/audio/plug/eq"
+	"github.com/marrasen/gunim/audio/vst3"
+	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/input"
 )
 
@@ -85,7 +88,7 @@ func TestAPatchIsSavedLoadedElsewhereAndDeleted(t *testing.T) {
 	}
 }
 
-func TestThePanesPatchesMenuListsAndLoadsThePatches(t *testing.T) {
+func TestTheSheetsBrowserListsLoadsKeepsAndDeletesThePatches(t *testing.T) {
 	a := goAlbum(0)
 	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 10, Path: goPath, Class: eq.Descriptor.ID, Name: "EQ",
 		Values: map[uint32]float64{1: 0}})
@@ -97,27 +100,135 @@ func TestThePanesPatchesMenuListsAndLoadsThePatches(t *testing.T) {
 	if sh == nil {
 		t.Fatal("the EQ's sheet is not shown")
 	}
-	b := boundsOf(t, w, run, sh.patches)
-	w.Input(input.PointerMove{Pos: b.Center()})
-	w.Input(input.PointerDown{Pos: b.Center(), Button: input.ButtonPrimary, Clicks: 1})
-	w.Input(input.PointerUp{Pos: b.Center(), Button: input.ButtonPrimary})
-	run(2)
-	labels := make([]string, 0, len(sh.patchMenu.Items()))
-	for _, it := range sh.patchMenu.Items() {
-		labels = append(labels, it.Label)
+	if sh.browsing || boundsOfSize(t, w, run, sh.browser) != (geom.Size{}) {
+		t.Fatal("the browser shows before it is asked to")
 	}
-	want := []string{"Comes with EQ", "Flat", "Warm", "Bright", "Vocal presence", "Bass boost", "Loudness", "Low cut",
-		"Saved", "Mine", "Save patch…", "Delete patch…"}
-	if !slices.Equal(labels, want) {
-		t.Fatalf("the menu lists %q, want %q", labels, want)
+	click(t, w, run, sh.browse)
+	run(30)
+	if _, rest := edits(w); !slices.Contains(rest, gunim.Intent(BrowsePresets{On: true})) {
+		t.Fatalf("the browser's button sent %v", rest)
 	}
-	if in := sh.patchMenu.OnPick(2, nil); in != (LoadPatch{Track: 1, Slot: 10, Name: "Warm", Own: true}) {
+	if !sh.browsing || boundsOfSize(t, w, run, sh.browser).W < 100 {
+		t.Fatal("asked to, the browser does not show")
+	}
+	var names []string
+	for _, p := range sh.src.Presets() {
+		names = append(names, p.Bank+"/"+p.Group+"/"+p.Name)
+	}
+	if len(names) != 1+len(eq.Descriptor.Patches) || names[0] != "User/EQ/Mine" || names[1] != "Factory/EQ/Flat" {
+		t.Fatalf("the browser lists %q", names)
+	}
+	pick := func(i int) gunim.Intent {
+		ps := sh.src.Presets()
+		gunim.RegisterPatch(w, "album", func(_ *root, _ struct{}, u *gunim.UI) { sh.src.Pick(ps[i], u) })
+		if err := w.Client().Patch("album", struct{}{}); err != nil {
+			t.Fatal(err)
+		}
+		run(1)
+		_, rest := edits(w)
+		if len(rest) != 1 {
+			t.Fatalf("a pick sent %v", rest)
+		}
+		return rest[0]
+	}
+	if in := pick(2); in != (LoadPatch{Track: 1, Slot: 10, Name: "Warm", Own: true}) {
 		t.Errorf("Warm picked sends %v", in)
 	}
-	if in := sh.patchMenu.OnPick(9, nil); in != (LoadPatch{Track: 1, Slot: 10, Name: "Mine"}) {
+	if in := pick(0); in != (LoadPatch{Track: 1, Slot: 10, Name: "Mine"}) {
 		t.Errorf("Mine picked sends %v", in)
 	}
-	if in := sh.patchMenu.OnPick(10, nil); in != (NamePatch{Track: 1, Slot: 10}) {
-		t.Errorf("Save picked sends %v", in)
+	// The patch kept that plays can be deleted; one the EQ comes with
+	// cannot.
+	idx := slices.IndexFunc(a.Tracks[0].Chain, func(s Slot) bool { return s.ID == 10 })
+	a.Tracks[0].Chain[idx].Preset = PresetRef{Bank: "Factory", Group: "EQ", Name: "Warm"}
+	a.Tracks[0].Chain[idx].Playing = true
+	_ = w.Client().Publish(albumTopic, a)
+	run(5)
+	if cur, ok := sh.src.Current(); !ok || cur.Name != "Warm" || !sh.drop.Disabled {
+		t.Fatalf("Warm playing, the browser's current is %v %v, and delete is enabled %v", cur, ok, !sh.drop.Disabled)
+	}
+	a.Tracks[0].Chain[idx].Preset = PresetRef{Bank: "User", Group: "EQ", Name: "Mine"}
+	_ = w.Client().Publish(albumTopic, a)
+	run(5)
+	if sh.drop.Disabled {
+		t.Fatal("Mine playing, it cannot be deleted")
+	}
+	click(t, w, run, sh.drop)
+	if _, rest := edits(w); !slices.Contains(rest, gunim.Intent(DeletePatch{Class: eq.Descriptor.ID, Name: "Mine"})) {
+		t.Fatalf("delete sent %v", rest)
+	}
+	// Settings typed into the field are kept as a patch.
+	gunim.RegisterPatch(w, "album", func(_ *root, _ struct{}, u *gunim.UI) {
+		if in := sh.keep.OnCommit(" Airy ", u); in != (SavePatch{Track: 1, Slot: 10, Name: " Airy "}) {
+			t.Errorf("keeping sends %v", in)
+		}
+		if in := sh.keep.OnCommit("  ", u); in != nil {
+			t.Errorf("keeping no name sends %v", in)
+		}
+	})
+	_ = w.Client().Patch("album", struct{}{})
+	run(1)
+}
+
+// click clicks n in the window.
+func click(t *testing.T, w *gunim.Window, run func(int), n gunim.Node) {
+	t.Helper()
+	at := boundsOf(t, w, run, n).Center()
+	w.Input(input.PointerMove{Pos: at})
+	w.Input(input.PointerDown{Pos: at, Button: input.ButtonPrimary, Clicks: 1})
+	w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
+	run(2)
+}
+
+// boundsOfSize is the size n stands at in the window.
+func boundsOfSize(t *testing.T, w *gunim.Window, run func(int), n gunim.Node) geom.Size {
+	t.Helper()
+	return boundsOf(t, w, run, n).Size()
+}
+
+func TestThePatchLoadedShowsAsPlayingUntilTheSettingsChange(t *testing.T) {
+	a, tr, s := goApp(t)
+	a.patchesFile = filepath.Join(t.TempDir(), "patches.json")
+	playing := func() (PresetRef, bool) {
+		a.showGoSettings()
+		// Undone, the album's tracks are anew.
+		now, i := a.slot(tr.ID, s.ID)
+		return now.Chain[i].Preset, now.Chain[i].Playing
+	}
+	if _, on := playing(); on {
+		t.Fatal("added, the braid plays a patch")
+	}
+	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: braid.GainID, Value: -3, Gesture: 1})
+	a.handle(SavePatch{Track: tr.ID, Slot: s.ID, Name: "Quiet"})
+	if p, on := playing(); !on || p != (PresetRef{Bank: vst3.UserBank, Group: "Braid", Name: "Quiet"}) {
+		t.Fatalf("kept, the braid plays %v (%v)", p, on)
+	}
+	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: braid.GainID, Value: 2, Gesture: 2})
+	if _, on := playing(); on {
+		t.Fatal("changed, the braid still plays the patch")
+	}
+	a.handle(LoadPatch{Track: tr.ID, Slot: s.ID, Name: "Quiet"})
+	if p, on := playing(); !on || p.Name != "Quiet" || p.Bank != vst3.UserBank {
+		t.Fatalf("loaded, the braid plays %v (%v)", p, on)
+	}
+	a.handle(Undo{})
+	if _, on := playing(); on {
+		t.Fatal("the load undone, the braid still plays the patch")
+	}
+}
+
+func TestAPatchTheEQComesWithShowsInItsGroup(t *testing.T) {
+	a, tr, _ := goApp(t)
+	a.handle(AddPlugin{Track: tr.ID, Choice: PluginChoice{Path: goPath, Class: eq.Descriptor.ID, Name: "EQ"}})
+	s := tr.Chain[1]
+	a.rackOf(tr)
+	a.handle(LoadPatch{Track: tr.ID, Slot: s.ID, Name: "Warm", Own: true})
+	a.showGoSettings()
+	want := PresetRef{Bank: vst3.FactoryBank, Group: patchGroup(eq.Descriptor.ID, ""), Name: "Warm"}
+	if k := slices.IndexFunc(eq.Descriptor.Patches, func(p plug.Patch) bool { return p.Name == "Warm" }); eq.Descriptor.Patches[k].Category != "" {
+		want.Group = eq.Descriptor.Patches[k].Category
+	}
+	if got := tr.Chain[1]; !got.Playing || got.Preset != want {
+		t.Fatalf("Warm loaded, the EQ plays %v (%v), want %v", got.Preset, got.Playing, want)
 	}
 }
