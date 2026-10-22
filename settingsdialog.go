@@ -24,10 +24,12 @@ type (
 	// SettingsDraft is what the settings' dialog shows.
 	SettingsDraft struct {
 		// Output is how the studio plays, Drivers the ASIO drivers it
-		// can play through, and Now how it plays at this moment.
-		Output  Output
-		Drivers []string
-		Now     OutputState
+		// can play through, OutputNames the outputs of the driver
+		// chosen, by name, and Now how it plays at this moment.
+		Output      Output
+		Drivers     []string
+		OutputNames []string
+		Now         OutputState
 		// Theme is the theme's name, and Edits the changes made to it,
 		// as theme.MarshalValues writes them.
 		Theme string
@@ -92,11 +94,16 @@ const (
 type settingsDialog struct {
 	*widget.Dialog
 	draft SettingsDraft
-	// The sound's.
+	// The sound's: pairs offers the driver's outputs two at a time, by
+	// the first of each in firsts, and shows under it where a driver is
+	// chosen.
 	driver, rate, bits, buffer *widget.Dropdown
 	dither, auto               *widget.Checkbox
 	panel                      *widget.Button
 	now, path, problem         *widget.Label
+	pairs                      *widget.Dropdown
+	firsts                     []int
+	pairFold                   *widget.Fold
 	// The look's: editor edits the theme called editing, and the
 	// dialog is wideLook wide on its tab. Then the updates'.
 	look, updates *widget.Dropdown
@@ -119,6 +126,11 @@ func newSettingsDialog(d SettingsDraft) *settingsDialog {
 	s.driver.OnChange = func(_ int, _ *gunim.UI) gunim.Intent { return set() }
 	s.panel = widget.NewButton("Driver settings…")
 	s.panel.OnClick = widget.Sends(OpenControlPanel{})
+	s.pairs = widget.NewDropdown(nil)
+	s.pairs.Label = "Outputs"
+	s.setPairs(d, nil)
+	s.pairs.OnChange = func(_ int, _ *gunim.UI) gunim.Intent { return set() }
+	s.pairFold = widget.NewFold(widget.Row(s.pairs), d.Output.Driver != "")
 
 	rates := make([]string, len(outputRates))
 	for i, r := range outputRates {
@@ -151,10 +163,11 @@ func newSettingsDialog(d SettingsDraft) *settingsDialog {
 
 	s.now, s.path, s.problem = widget.NewLabel(""), widget.NewLabel(""), widget.NewLabel("")
 	s.problem.Color = widget.DialogProblem
-	// The panel's button shows where there is a driver to choose.
+	// The panel's button and the outputs show where there is a driver
+	// to choose.
 	output := widget.Row(s.driver)
 	if len(d.Drivers) > 0 {
-		output = widget.Row(s.driver, s.panel)
+		output = widget.Column(widget.Row(s.driver, s.panel), s.pairFold)
 	}
 	sound := widget.NewForm()
 	sound.Add("Output", output).
@@ -228,6 +241,9 @@ func (s *settingsDialog) show(d SettingsDraft, u *gunim.UI) {
 	if d.Output.rate() != s.draft.Output.rate() {
 		s.buffer.SetItems(widget.Labels(bufferNames(d.Output.rate())...))
 	}
+	if !slices.Equal(d.OutputNames, s.draft.OutputNames) || d.Output.Pair != s.draft.Output.Pair {
+		s.setPairs(d, u)
+	}
 	s.draft = d
 	if d.Theme != s.editing {
 		// Another theme picked: its changes are edited from now on.
@@ -250,6 +266,8 @@ func (s *settingsDialog) fill(d SettingsDraft, u *gunim.UI) {
 	// A driver that failed to start opens its settings too: a change
 	// there may let it.
 	s.panel.Disabled = d.Output.Driver == ""
+	s.pairs.Disabled = d.Output.Driver == ""
+	s.pairFold.SetOpen(d.Output.Driver != "", u)
 	s.dither.Disabled = d.Output.bits() == 32
 	s.buffer.Disabled = !d.Output.Fixed
 	if !d.Output.Fixed && d.Now.Frames > 0 {
@@ -272,6 +290,15 @@ func (s *settingsDialog) fill(d SettingsDraft, u *gunim.UI) {
 		s.installNote.Text = "The studio takes newer releases once it is installed."
 	}
 	s.now.Text, s.path.Text, s.problem.Text = soundNow(d.Now), soundPath(d), soundProblem(d)
+}
+
+// setPairs offers the pairs of the driver's outputs, the one kept
+// chosen.
+func (s *settingsDialog) setPairs(d SettingsDraft, u *gunim.UI) {
+	firsts, labels := outputPairs(d.OutputNames, d.Output.Pair)
+	s.firsts = firsts
+	s.pairs.SetItems(widget.Labels(labels...))
+	s.pairs.SetSelected(slices.Index(firsts, d.Output.Pair), u)
 }
 
 // saveEdits asks to keep over as the changes to the theme edited.
@@ -303,6 +330,9 @@ func (s *settingsDialog) output() Output {
 		Fixed: !s.auto.Checked(), Buffer: bufferSizes[max(0, min(s.buffer.Selected(), len(bufferSizes)-1))]}
 	if i := s.driver.Selected() - 1; i >= 0 && i < len(s.draft.Drivers) {
 		o.Driver = s.draft.Drivers[i]
+	}
+	if i := s.pairs.Selected(); i >= 0 && i < len(s.firsts) {
+		o.Pair = s.firsts[i]
 	}
 	if b := bitsChoices[max(0, min(s.bits.Selected(), len(bitsChoices)-1))].bits; b != 32 {
 		o.Bits = b
@@ -410,20 +440,37 @@ func soundPath(d SettingsDraft) string {
 }
 
 // soundProblem says why the output chosen plays otherwise, and, where
-// the system's sound plays in place of a driver, says so.
+// the system's sound plays in place of a driver, says so. Before that
+// it says where the driver lacks the outputs kept.
 func soundProblem(d SettingsDraft) string {
 	p := d.Now.Problem
 	if p != "" && d.Output.Driver != "" && d.Now.Driver == "" && !d.Now.Silent {
 		p += ". " + systemSound() + " plays in its place."
 	}
+	if pp := pairProblem(d); pp != "" {
+		p = strings.TrimSpace(pp + " " + p)
+	}
 	return p
+}
+
+// pairProblem says where the driver chosen lacks the outputs kept: the
+// sound meant for one it lacks plays nowhere.
+func pairProblem(d SettingsDraft) string {
+	o := d.Output
+	if o.Driver == "" || hasPair(d.OutputNames, o.Pair) {
+		return ""
+	}
+	if o.Pair+1 == len(d.OutputNames) {
+		return fmt.Sprintf("%s has no output %d, so the right channel plays nowhere. Choose other outputs.", o.Driver, o.Pair+2)
+	}
+	return fmt.Sprintf("%s has no outputs %d and %d, so nothing plays on them. Choose other outputs.", o.Driver, o.Pair+1, o.Pair+2)
 }
 
 // The app's half of the dialog.
 
 // settingsDraft is the settings' dialog's state.
 func (a *app) settingsDraft() SettingsDraft {
-	return SettingsDraft{Output: a.output, Drivers: a.drivers, Now: a.d.outputState(), Theme: a.theme, Edits: a.themeEdits[a.theme],
+	return SettingsDraft{Output: a.output, Drivers: a.drivers, OutputNames: a.outputNames, Now: a.d.outputState(), Theme: a.theme, Edits: a.themeEdits[a.theme],
 		Installed: a.installed != nil, Updates: a.updatesMode(), Beta: a.Beta, Checking: a.checking, Checked: a.checked}
 }
 
@@ -449,6 +496,7 @@ func (a *app) openSettings(open bool) {
 				a.drivers = append(a.drivers, d.Name)
 			}
 		}
+		a.outputNames = driverOutputs(a.output.Driver)
 		a.installed, _ = install.Find(installer())
 		a.settingsTick = time.NewTicker(500 * time.Millisecond)
 		err = a.c.Mount(gunim.Root, "settings", "settings", a.settingsDraft(), settingsTopic)
@@ -496,6 +544,43 @@ func (a *app) registerEdited(name string) {
 // themed is the theme called name, with the changes made to it.
 func (a *app) themed(name string) theme.Theme {
 	return themeEdits(a.themeEdits[name]).Over(studioThemeNamed(name).Theme)
+}
+
+// driverOutputs returns the names of the outputs of the ASIO driver
+// named, or none where it can't say; a test puts a function of its own
+// here.
+var driverOutputs = func(driver string) []string {
+	if driver == "" {
+		return nil
+	}
+	_, outs, err := asio.Channels(driver)
+	if err != nil {
+		log.Printf("mastering: the outputs of %s: %v", driver, err)
+		return nil
+	}
+	return outs
+}
+
+// setOutput has the studio play as o says, and keeps it. Another driver
+// chosen tells its outputs, and where it lacks the pair kept, the sound
+// plays on its first two.
+func (a *app) setOutput(o Output) {
+	was := a.output.Driver
+	a.output = o
+	err := a.d.openOutput(a.output)
+	if o.Driver != was {
+		// Asked once it plays: a driver can't say while another does.
+		a.outputNames = driverOutputs(o.Driver)
+		if !hasPair(a.outputNames, o.Pair) {
+			a.output.Pair = 0
+			err = a.d.openOutput(a.output)
+		}
+	}
+	a.writeSettings()
+	if err != nil {
+		a.Note = "The sound: " + err.Error()
+	}
+	a.tellFallback()
 }
 
 // tellFallback has the window ask about a driver chosen that failed to
@@ -585,12 +670,7 @@ func (a *app) handleSettings(in gunim.Intent) {
 	case SettingsClosed:
 		a.openSettings(false)
 	case SetOutput:
-		a.output = in.Output
-		a.writeSettings()
-		if err := a.d.openOutput(a.output); err != nil {
-			a.Note = "The sound: " + err.Error()
-		}
-		a.tellFallback()
+		a.setOutput(in.Output)
 	case OpenControlPanel:
 		// The driver's settings show until closed: the studio plays on.
 		go func() {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"slices"
 	"time"
 
 	"github.com/marrasen/gunim/audio"
@@ -29,6 +31,11 @@ type Output struct {
 	// the driver takes the size its control panel sets.
 	Fixed  bool `json:",omitempty"`
 	Buffer int  `json:",omitempty"`
+	// Pair is the first of the two driver outputs the sound plays on,
+	// by its index from 0, and the other is the one after it: 2 plays
+	// on the third and fourth. Zero plays on the first two. The
+	// system's own sound pays it no heed.
+	Pair int `json:",omitempty"`
 }
 
 // firstOutput is how the studio plays until the user says otherwise.
@@ -63,7 +70,36 @@ func (o Output) options() speaker.Options {
 		so.Latency = audio.DurationAt(int64(o.Buffer), so.Rate)
 		so.Buffer = o.Buffer
 	}
+	if o.Driver != "" && o.Pair > 0 {
+		so.Outputs = []int{o.Pair, o.Pair + 1}
+	}
 	return so
+}
+
+// hasPair says the driver with the outputs named has the pair that
+// starts at first. A driver that told no names may have it.
+func hasPair(names []string, first int) bool {
+	return len(names) == 0 || first+1 < len(names)
+}
+
+// outputPairs returns the pairs of outputs offered, by the first of
+// each, and their names: each two of the driver's outputs in turn, and
+// the pair kept too where the driver lacks it, so the choice shows what
+// plays.
+func outputPairs(names []string, kept int) (firsts []int, labels []string) {
+	for i := 0; i+1 < len(names); i += 2 {
+		firsts = append(firsts, i)
+		labels = append(labels, names[i]+" – "+names[i+1])
+	}
+	if !slices.Contains(firsts, kept) {
+		firsts = append(firsts, kept)
+		name := fmt.Sprintf("Outputs %d – %d", kept+1, kept+2)
+		if kept >= 0 && kept+1 < len(names) {
+			name = names[kept] + " – " + names[kept+1]
+		}
+		labels = append(labels, name)
+	}
+	return firsts, labels
 }
 
 // SetOutput sets how the studio plays.
