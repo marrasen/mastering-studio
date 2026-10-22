@@ -484,10 +484,18 @@ func (a *app) saveThemeEdits(in SaveThemeEdits) {
 // registerEdited gives the window the theme called name with the
 // changes made to it, to take at its name.
 func (a *app) registerEdited(name string) {
+	for _, w := range a.plugWins {
+		w.w.RegisterTheme(a.themed(name))
+	}
 	if a.registerTheme == nil {
 		return
 	}
-	a.registerTheme(themeEdits(a.themeEdits[name]).Over(studioThemeNamed(name).Theme))
+	a.registerTheme(a.themed(name))
+}
+
+// themed is the theme called name, with the changes made to it.
+func (a *app) themed(name string) theme.Theme {
+	return themeEdits(a.themeEdits[name]).Over(studioThemeNamed(name).Theme)
 }
 
 // tellFallback has the window ask about a driver chosen that failed to
@@ -595,6 +603,9 @@ func (a *app) handleSettings(in gunim.Intent) {
 		a.writeSettings()
 		if a.c != nil {
 			_ = a.c.SetTheme(a.theme)
+		}
+		for _, w := range a.plugWins {
+			_ = w.c.SetTheme(themeNamed(a.theme))
 		}
 	case SaveThemeEdits:
 		a.saveThemeEdits(in)

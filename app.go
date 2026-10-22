@@ -552,7 +552,20 @@ type app struct {
 	checks   chan checked
 	quitNow  chan struct{}
 	// gunim is the program's gunim app, for windows of its own.
-	gunim        *gunim.App
+	gunim *gunim.App
+	// newWindow opens a window owned by the studio's, plugWins are the
+	// plugins' windows open, by slot, and plugIn carries their intents.
+	// noEmbed are the plugins whose editors open in windows of their
+	// own, by slot; picked the presets the slots' plugins took last;
+	// presetsKept counts the presets kept, and browse says the plugins'
+	// windows show the browser of presets.
+	newWindow    func(gunim.WindowOptions) (*gunim.Window, error)
+	plugWins     map[int]*plugWin
+	plugIn       chan gunim.Intent
+	noEmbed      map[int]*livePlugin
+	picked       map[int]picked
+	presetsKept  int
+	browse       bool
 	settingsOpen bool
 	settingsTick *time.Ticker
 	drivers      []string
@@ -629,7 +642,7 @@ func newApp(ctx context.Context, d *deck, file string) *app {
 		chosen: make(chan []string, 1), chosenRefs: make(chan []string, 1), dirs: make(chan string, 1), progress: make(chan exported, 64),
 		racks: map[int]*rack{}, version: map[int]int{}, measuringVersion: map[int]int{}, states: map[int][]byte{}, found: make(chan []PluginChoice, 1),
 		replacing: make(chan ReplaceFile, 1), matches: make(chan matched, 4),
-		albums: make(chan albumChoice, 1), lames: make(chan string, 1)}
+		albums: make(chan albumChoice, 1), lames: make(chan string, 1), plugIn: make(chan gunim.Intent, 16)}
 	a.Gap, a.Target, a.Bits, a.Dither, a.Volume = time.Second, -14, 16, true, 0.8
 	a.ExportWAV, a.MP3Rate = true, 320
 	a.Curves = CurveS | CurveI
@@ -921,7 +934,14 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.Recent = st.plugins()
 	a.Background, a.Spectrum, a.Carry, a.Beta = st.Background, st.spectrum(), st.Carry, st.Beta
 	a.output, a.theme, a.themeEdits = st.Output, themeNamed(st.Theme), st.ThemeEdits
+	a.browse = st.Browse
 	a.registerTheme = o.registerTheme
+	if o.app != nil && o.main != nil {
+		a.newWindow = func(wo gunim.WindowOptions) (*gunim.Window, error) {
+			wo.Parent = o.main
+			return o.app.NewWindow(wo)
+		}
+	}
 	for _, t := range studioThemes {
 		a.registerEdited(t.Name)
 	}
@@ -1077,6 +1097,8 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 			// The track played to its end.
 			a.Playing = false
 			a.d.stop()
+		case in := <-a.plugIn:
+			a.handlePluginWindow(in)
 		case ev, ok := <-c.Intents():
 			if !ok {
 				return c.Err()
@@ -1110,6 +1132,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 		a.applyLoop()
 		a.syncDocs()
 		a.showGoSettings()
+		a.syncPluginWindows()
 		_ = c.Publish(albumTopic, a.Album)
 		if a.settingsOpen {
 			_ = c.Publish(settingsTopic, a.settingsDraft())

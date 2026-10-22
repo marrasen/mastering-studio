@@ -158,6 +158,8 @@ type livePlugin struct {
 	gain float32
 	// edits is the count of the editor's edits last seen.
 	edits uint64
+	// class is a VST3 plugin's class, for its presets.
+	class *vst3.Class
 	// taps, made as a view first asks, keep the sound fed into the
 	// plugin and the sound that comes out, for its views.
 	taps atomic.Pointer[plugTaps]
@@ -221,7 +223,7 @@ func loadPlugin(s Slot, state []byte, rate int, offline bool) (*livePlugin, erro
 	}
 	// Its latency, as some plugins tell it only once they process.
 	p.Prime(100 * time.Millisecond)
-	lp := &livePlugin{slot: s.ID, p: p, edits: p.Edits(), gain: 1}
+	lp := &livePlugin{slot: s.ID, p: p, edits: p.Edits(), gain: 1, class: &c}
 	if s.Gained {
 		lp.gain = float32(math.Pow(10, float64(s.Gain)/20))
 	}

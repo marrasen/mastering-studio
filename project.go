@@ -46,6 +46,8 @@ type settings struct {
 	Carry Carry `json:",omitempty"`
 	// Beta takes pre-releases as updates too.
 	Beta bool `json:",omitempty"`
+	// Browse opens the plugins' windows with the browser of presets.
+	Browse bool `json:",omitempty"`
 	// Output is how the studio plays its sound, and Theme the theme it
 	// is painted in.
 	Output Output
@@ -124,7 +126,7 @@ func (a *app) writeSettings() {
 		return
 	}
 	s := settings{Albums: a.RecentAlbums, Plugins: a.Recent, LAME: a.lame, Window: a.window, Zoom: a.zoom,
-		Background: a.Background, Spectrum: &a.Spectrum, Carry: a.Carry, Beta: a.Beta,
+		Background: a.Background, Spectrum: &a.Spectrum, Carry: a.Carry, Beta: a.Beta, Browse: a.browse,
 		Output: a.output, Theme: a.theme, ThemeEdits: a.themeEdits}
 	b, err := json.MarshalIndent(s, "", "\t")
 	if err == nil && os.MkdirAll(filepath.Dir(a.settingsFile), 0o755) == nil {

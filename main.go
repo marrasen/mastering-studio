@@ -152,8 +152,10 @@ type options struct {
 	// registerTheme gives the window a theme, to take at its name.
 	registerTheme func(theme.Theme)
 	// app is the program's gunim app, which opens windows of its own,
-	// as what an update changed.
-	app *gunim.App
+	// as what an update changed, and main is the main window, which
+	// owns the plugins' windows.
+	app  *gunim.App
+	main *gunim.Window
 }
 
 func run(o options) error {
@@ -173,7 +175,7 @@ func run(o options) error {
 		registerViews(w, d)
 		o.placement = w.Placement
 		o.registerTheme = w.RegisterTheme
-		o.app = a
+		o.app, o.main = a, w
 		c := w.Client()
 		if o.shot != "" {
 			go func() {
