@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/marrasen/gunim/audioui"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/theme"
+	"github.com/marrasen/gunim/widget"
 )
 
 func TestTheSoundAndThemeAreKeptInTheSettings(t *testing.T) {
@@ -50,6 +52,134 @@ func TestTheSoundsOptionsFollowTheSettings(t *testing.T) {
 	o = Output{Rate: 48000, Fixed: true, Buffer: 4800}.options()
 	if !o.Fixed || o.Latency != 100*time.Millisecond || o.Buffer != 4800 {
 		t.Errorf("4800 samples at 48 kHz: %+v", o)
+	}
+	// A driver plays on the pair kept; the first two need no naming,
+	// and the system's sound takes none.
+	if o := (Output{Driver: "Interface ASIO", Pair: 2}).options(); !slices.Equal(o.Outputs, []int{2, 3}) {
+		t.Errorf("outputs 3 and 4: %v", o.Outputs)
+	}
+	if o := (Output{Driver: "Interface ASIO"}).options(); o.Outputs != nil {
+		t.Errorf("the first two: %v", o.Outputs)
+	}
+	if o := (Output{Pair: 2}).options(); o.Outputs != nil {
+		t.Errorf("the system's sound: %v", o.Outputs)
+	}
+}
+
+// labels returns the names of a drop-down's items.
+func labels(d *widget.Dropdown) []string {
+	var out []string
+	for _, it := range d.Items() {
+		out = append(out, it.Label)
+	}
+	return out
+}
+
+func TestTheSettingsOfferTheDriversOutputsInPairs(t *testing.T) {
+	names := []string{"Out 1", "Out 2", "Out 3", "Out 4", "Out 5", "Out 6"}
+	d := SettingsDraft{Output: Output{Driver: "Interface ASIO", Pair: 2}, Drivers: []string{"Interface ASIO"}, OutputNames: names}
+	s := newSettingsDialog(d)
+	want := []string{"Out 1 – Out 2", "Out 3 – Out 4", "Out 5 – Out 6"}
+	if got := labels(s.pairs); !slices.Equal(got, want) || s.pairs.Selected() != 1 {
+		t.Fatalf("offers %q, %d chosen, want %q, 1", got, s.pairs.Selected(), want)
+	}
+	if got := s.output(); got.Pair != 2 || got.Driver != d.Output.Driver || !s.pairFold.Open() || s.pairs.Disabled || s.problem.Text != "" {
+		t.Errorf("sends %+v, shown %v, disabled %v, problem %q", got, s.pairFold.Open(), s.pairs.Disabled, s.problem.Text)
+	}
+	s.pairs.SetSelected(2, nil)
+	if got := s.output().Pair; got != 4 {
+		t.Errorf("with Out 5 – Out 6 chosen, sends pair %d", got)
+	}
+
+	// The system's sound plays on no driver's outputs.
+	s = newSettingsDialog(SettingsDraft{Drivers: []string{"Interface ASIO"}})
+	if s.pairFold.Open() || !s.pairs.Disabled {
+		t.Errorf("with the system's sound, the outputs show %v, disabled %v", s.pairFold.Open(), s.pairs.Disabled)
+	}
+
+	// A pair the driver lacks shows as kept, and the dialog says
+	// nothing plays there.
+	d.Output.Pair = 6
+	s = newSettingsDialog(d)
+	if got := labels(s.pairs); len(got) != 4 || got[3] != "Outputs 7 – 8" || s.pairs.Selected() != 3 || s.output().Pair != 6 {
+		t.Errorf("a pair the driver lacks: offers %q, %d chosen, sends %+v", got, s.pairs.Selected(), s.output())
+	}
+	if want := "Interface ASIO has no outputs 7 and 8, so nothing plays on them."; !strings.HasPrefix(s.problem.Text, want) {
+		t.Errorf("the problem says %q, want %q", s.problem.Text, want)
+	}
+	d.Output.Pair, d.OutputNames = 4, names[:5]
+	if got := soundProblem(d); !strings.HasPrefix(got, "Interface ASIO has no output 6, so the right channel plays nowhere.") {
+		t.Errorf("with the right output lacking, the problem says %q", got)
+	}
+	// Where the driver told no names, the pair may be there.
+	d.OutputNames = nil
+	if got := soundProblem(d); got != "" {
+		t.Errorf("with no names told, the problem says %q", got)
+	}
+}
+
+// The dialog offers the outputs of the driver chosen as the app tells
+// them, the pair it plays on chosen.
+func TestTheSettingsFollowTheDriversOutputs(t *testing.T) {
+	w := gunim.NewOffscreen(geom.Sz(1440, 900), nil)
+	var s *settingsDialog
+	gunim.RegisterView(w, "settings", func(d SettingsDraft) *settingsDialog { s = newSettingsDialog(d); return s },
+		func(s *settingsDialog, d SettingsDraft, u *gunim.UI) { s.show(d, u) })
+	c := w.Client()
+	d := SettingsDraft{Output: Output{Driver: "Big ASIO", Pair: 4}, Drivers: []string{"Big ASIO", "Small ASIO"},
+		OutputNames: []string{"A1", "A2", "A3", "A4", "A5", "A6"}}
+	if err := c.Mount(gunim.Root, "settings", "settings", d, settingsTopic); err != nil {
+		t.Fatal(err)
+	}
+	w.Frame(time.Second / 60)
+	d.Output, d.OutputNames = Output{Driver: "Small ASIO"}, []string{"B1", "B2"}
+	if err := c.Publish(settingsTopic, d); err != nil {
+		t.Fatal(err)
+	}
+	w.Frame(time.Second / 60)
+	if got := labels(s.pairs); !slices.Equal(got, []string{"B1 – B2"}) || s.pairs.Selected() != 0 || s.output().Pair != 0 || s.output().Driver != "Small ASIO" {
+		t.Errorf("after Small ASIO is chosen: offers %q, %d chosen, sends %+v", got, s.pairs.Selected(), s.output())
+	}
+	// The system's sound chosen, the outputs fold away.
+	d.Output, d.OutputNames = Output{}, nil
+	if err := c.Publish(settingsTopic, d); err != nil {
+		t.Fatal(err)
+	}
+	w.Frame(time.Second / 60)
+	if s.pairFold.Open() || !s.pairs.Disabled {
+		t.Errorf("after the system's sound is chosen, the outputs show %v, disabled %v", s.pairFold.Open(), s.pairs.Disabled)
+	}
+}
+
+func TestAnotherDriverPlaysOnItsFirstPairWhereItLacksTheOneKept(t *testing.T) {
+	was, wasOuts := openSpeaker, driverOutputs
+	var opened speaker.Options
+	openSpeaker = func(_ *audio.Mixer, o speaker.Options) (*speaker.Speaker, error) {
+		opened = o
+		return nil, errors.New("shut")
+	}
+	outs := map[string][]string{"Big ASIO": {"A1", "A2", "A3", "A4", "A5", "A6"}, "Small ASIO": {"B1", "B2"}}
+	driverOutputs = func(d string) []string { return outs[d] }
+	defer func() { openSpeaker, driverOutputs = was, wasOuts }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	a.settingsFile = filepath.Join(t.TempDir(), "settings.json")
+
+	a.handle(SetOutput{Output: Output{Driver: "Big ASIO", Pair: 4}})
+	if a.output.Pair != 4 || !slices.Equal(opened.Outputs, []int{4, 5}) || !slices.Equal(a.settingsDraft().OutputNames, outs["Big ASIO"]) {
+		t.Fatalf("on Big ASIO: pair %d, opened on %v, the dialog told %q", a.output.Pair, opened.Outputs, a.settingsDraft().OutputNames)
+	}
+	a.handle(SetOutput{Output: Output{Driver: "Small ASIO", Pair: 4}})
+	if a.output.Pair != 0 || opened.Outputs != nil || readSettings(a.settingsFile).Output.Pair != 0 ||
+		!slices.Equal(a.settingsDraft().OutputNames, outs["Small ASIO"]) {
+		t.Errorf("on Small ASIO: pair %d, opened on %v, kept %d, the dialog told %q", a.output.Pair, opened.Outputs,
+			readSettings(a.settingsFile).Output.Pair, a.settingsDraft().OutputNames)
+	}
+	// A driver that tells no names keeps the pair: it may have it.
+	a.handle(SetOutput{Output: Output{Driver: "Quiet ASIO", Pair: 2}})
+	if a.output.Pair != 2 || !slices.Equal(opened.Outputs, []int{2, 3}) {
+		t.Errorf("on Quiet ASIO: pair %d, opened on %v", a.output.Pair, opened.Outputs)
 	}
 }
 

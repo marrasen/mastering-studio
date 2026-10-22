@@ -535,8 +535,8 @@ type app struct {
 	// output is how the studio plays its sound, and theme the theme it
 	// is painted in, both kept for the computer. settingsOpen says the
 	// settings' dialog is up, told anew at each of settingsTick, with
-	// the ASIO drivers found as it opened, and the studio as installed,
-	// or nil.
+	// the ASIO drivers found as it opened, the outputs of the driver
+	// chosen, and the studio as installed, or nil.
 	output Output
 	theme  string
 	// themeEdits are the changes made to each theme in the settings'
@@ -556,6 +556,7 @@ type app struct {
 	settingsOpen bool
 	settingsTick *time.Ticker
 	drivers      []string
+	outputNames  []string
 	installed    *install.Installation
 	// version counts each track's changes, so a measuring tells whether
 	// it measured the track as it is.
