@@ -23,8 +23,10 @@ type Output struct {
 	// Dither says; zero leaves 32-bit float.
 	Bits   int `json:",omitempty"`
 	Dither bool
-	// Fixed holds the buffer at Buffer samples. Otherwise it starts at
-	// autoLatency and grows each time the sound breaks up.
+	// Fixed holds the buffer at Buffer samples, and asks an ASIO driver
+	// for buffers of that size, or the nearest it allows. Otherwise it
+	// starts at autoLatency and grows each time the sound breaks up, and
+	// the driver takes the size its control panel sets.
 	Fixed  bool `json:",omitempty"`
 	Buffer int  `json:",omitempty"`
 }
@@ -59,6 +61,7 @@ func (o Output) options() speaker.Options {
 	if o.Fixed && o.Buffer > 0 {
 		so.Fixed = true
 		so.Latency = audio.DurationAt(int64(o.Buffer), so.Rate)
+		so.Buffer = o.Buffer
 	}
 	return so
 }

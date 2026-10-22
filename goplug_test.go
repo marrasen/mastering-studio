@@ -3,17 +3,21 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/plug/eq"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
-	"github.com/marrasen/gunim/audio/plug/trim"
+	"github.com/marrasen/gunim/audio/plug/braid"
 	"github.com/marrasen/gunim/input"
 )
 
@@ -50,15 +54,15 @@ func (trimless) Latency() int        { return 0 }
 func (trimless) Tail() int           { return 0 }
 func (trimless) Reset()              {}
 
-// trimSlot is a slot of the trim.
-func trimSlot(id int) Slot {
-	return Slot{ID: id, Path: goPath, Class: trim.Descriptor.ID, Name: trim.Descriptor.Name}
+// braidSlot is a slot of the braid.
+func braidSlot(id int) Slot {
+	return Slot{ID: id, Path: goPath, Class: braid.Descriptor.ID, Name: braid.Descriptor.Name}
 }
 
 func TestTheGoPluginsAreAmongTheChoices(t *testing.T) {
 	ps := scanPlugins(nil)
-	if !slices.ContainsFunc(ps, func(c PluginChoice) bool { return c.Path == goPath && c.Class == "marrasen.trim" }) {
-		t.Fatal("the trim is not among the plugins to add")
+	if !slices.ContainsFunc(ps, func(c PluginChoice) bool { return c.Path == goPath && c.Class == "marrasen.braid" }) {
+		t.Fatal("the braid is not among the plugins to add")
 	}
 }
 
@@ -68,18 +72,18 @@ func TestATrackMeasuresThroughAGoPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := goSettings{Params: map[uint32]float64{trim.GainID: -6}}.pack()
-	wet, err := measure(context.Background(), path, 0, Edit{}, []Slot{trimSlot(1)}, map[int][]byte{1: state})
+	state := goSettings{Params: map[uint32]float64{braid.GainID: -6}}.pack()
+	wet, err := measure(context.Background(), path, 0, Edit{}, []Slot{braidSlot(1)}, map[int][]byte{1: state})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !dry.Loud || !wet.Loud || math.Abs(float64(wet.LUFS-(dry.LUFS-6))) > 0.1 {
-		t.Fatalf("through the trim at -6 dB the track measures %.2f LUFS, %.2f without", wet.LUFS, dry.LUFS)
+		t.Fatalf("through the braid at -6 dB the track measures %.2f LUFS, %.2f without", wet.LUFS, dry.LUFS)
 	}
 }
 
 func TestAGoPluginsSettingsRoundTrip(t *testing.T) {
-	lp, err := newPlugin(trimSlot(1), goSettings{Params: map[uint32]float64{trim.GainID: 40}}.pack(), 48000, false)
+	lp, err := newPlugin(braidSlot(1), goSettings{Params: map[uint32]float64{braid.GainID: 60}}.pack(), 48000, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,8 +93,8 @@ func TestAGoPluginsSettingsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, err := readGoSettings(b)
-	if err != nil || s.Params[trim.GainID] != 24 {
-		t.Fatalf("the gain set to +40 dB comes back as %v (%v), want +24, its most", s.Params, err)
+	if err != nil || s.Params[braid.GainID] != 48 {
+		t.Fatalf("the gain set to +60 dB comes back as %v (%v), want +48, its most", s.Params, err)
 	}
 	if _, err := newPlugin(Slot{ID: 2, Path: goPath, Class: "nobody.nothing", Name: "Nothing"}, nil, 48000, false); err == nil {
 		t.Fatal("a Go plugin not built in loaded")
@@ -100,7 +104,7 @@ func TestAGoPluginsSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-// goApp returns savedApp's album with the trim added to its first
+// goApp returns savedApp's album with the braid added to its first
 // track, its chain loaded.
 func goApp(t *testing.T) (*app, *Track, Slot) {
 	t.Helper()
@@ -109,16 +113,16 @@ func goApp(t *testing.T) (*app, *Track, Slot) {
 	tr := &a.Tracks[0]
 	shows := a.ShowGos
 	a.handle(AddPlugin{Track: tr.ID, Choice: goChoices()[slices.IndexFunc(goChoices(), func(c PluginChoice) bool {
-		return c.Class == trim.Descriptor.ID
+		return c.Class == braid.Descriptor.ID
 	})]})
 	if a.ShowGos != shows+1 || len(tr.Chain) != 1 || a.ShowGo != tr.Chain[0].ID {
-		t.Fatalf("the trim added has chain %+v, and asks to show %d (%d asks)", tr.Chain, a.ShowGo, a.ShowGos)
+		t.Fatalf("the braid added has chain %+v, and asks to show %d (%d asks)", tr.Chain, a.ShowGo, a.ShowGos)
 	}
 	a.rackOf(tr)
 	return a, tr, tr.Chain[0]
 }
 
-// gainOf returns the gain of slot s's trim, as kept, and as loaded.
+// gainOf returns the gain of slot s's braid, as kept, and as loaded.
 func gainOf(t *testing.T, a *app, tr *Track, s Slot) (kept, loaded float64) {
 	t.Helper()
 	set, err := readGoSettings(a.states[s.ID])
@@ -127,39 +131,39 @@ func gainOf(t *testing.T, a *app, tr *Track, s Slot) (kept, loaded float64) {
 	}
 	e := a.goEngineOf(tr, s.ID)
 	if e == nil {
-		t.Fatal("the trim is not loaded")
+		t.Fatal("the braid is not loaded")
 	}
-	return set.values(&trim.Descriptor)[trim.GainID], e.param(trim.GainID).value()
+	return set.values(&braid.Descriptor)[braid.GainID], e.param(braid.GainID).value()
 }
 
 func TestAGestureOnAGoPluginIsOneStepToUndo(t *testing.T) {
 	a, tr, s := goApp(t)
 	steps := len(a.undo)
 	for _, v := range []float64{-1, -2, -3} {
-		a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: trim.GainID, Value: v, Gesture: 1})
+		a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: braid.GainID, Value: v, Gesture: 1})
 	}
 	if kept, loaded := gainOf(t, a, tr, s); kept != -3 || loaded != -3 {
-		t.Fatalf("dragged to -3 dB, the trim keeps %v and plays %v", kept, loaded)
+		t.Fatalf("dragged to -3 dB, the braid keeps %v and plays %v", kept, loaded)
 	}
-	if len(a.undo) != steps+1 || a.UndoLabel != "Gain of Trim on "+tr.Title {
+	if len(a.undo) != steps+1 || a.UndoLabel != "Gain of Braid on "+tr.Title {
 		t.Fatalf("one drag made %d steps, the last %q", len(a.undo)-steps, a.UndoLabel)
 	}
 	// Another gesture, another step.
-	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: trim.GainID, Value: 5, Gesture: 2})
+	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: braid.GainID, Value: 5, Gesture: 2})
 	if len(a.undo) != steps+2 {
 		t.Fatalf("two gestures made %d steps", len(a.undo)-steps)
 	}
 	a.handle(Undo{})
 	if kept, loaded := gainOf(t, a, tr, s); kept != -3 || loaded != -3 {
-		t.Fatalf("undone, the trim keeps %v and plays %v, want -3", kept, loaded)
+		t.Fatalf("undone, the braid keeps %v and plays %v, want -3", kept, loaded)
 	}
 	a.handle(Undo{})
 	if kept, loaded := gainOf(t, a, tr, s); kept != 0 || loaded != 0 {
-		t.Fatalf("undone again, the trim keeps %v and plays %v, want 0", kept, loaded)
+		t.Fatalf("undone again, the braid keeps %v and plays %v, want 0", kept, loaded)
 	}
 	// What the window is shown follows.
 	a.showGoSettings()
-	if v := a.Tracks[0].Chain[0].Values[trim.GainID]; v != 0 {
+	if v := a.Tracks[0].Chain[0].Values[braid.GainID]; v != 0 {
 		t.Fatalf("the window is shown a gain of %v, want 0", v)
 	}
 }
@@ -209,15 +213,15 @@ func TestAGoPluginOpensItsViewsInTheWindow(t *testing.T) {
 	shows := a.ShowGos
 	a.handle(ShowEditor{Track: tr.ID, Slot: s.ID})
 	if a.ShowGos != shows+1 || a.ShowGo != s.ID || a.Note != "" {
-		t.Fatalf("asked to open, the trim asks the window %d times (%q)", a.ShowGos-shows, a.Note)
+		t.Fatalf("asked to open, the braid asks the window %d times (%q)", a.ShowGos-shows, a.Note)
 	}
 }
 
-// goAlbum is album's track with the trim, at gain.
+// goAlbum is album's track with the braid, at gain.
 func goAlbum(gain float64) Album {
 	a := album()
-	s := trimSlot(9)
-	s.Values = map[uint32]float64{trim.GainID: gain}
+	s := braidSlot(9)
+	s.Values = map[uint32]float64{braid.GainID: gain}
 	a.Tracks[0].Chain = []Slot{s}
 	return a
 }
@@ -226,7 +230,7 @@ func TestTheTrimsChipShowsItsGainAndFollowsIt(t *testing.T) {
 	w, r, run := stage(t, goAlbum(-3))
 	v := r.goViews[9]
 	if v == nil || v.chip == nil || !slices.Contains(r.chain.Children(), v.chip) {
-		t.Fatal("the trim's card has no chip")
+		t.Fatal("the braid's card has no chip")
 	}
 	// The chip reads as what it says.
 	text := func() string {
@@ -257,7 +261,7 @@ func TestAGoPluginsViewsSendTheirChangesAndKeepThemAsTheNewsCatchesUp(t *testing
 	}
 	run(10)
 	if !r.pane.isOpen() || r.pane.v != r.goViews[9] {
-		t.Fatal("asked to, the window shows no trim")
+		t.Fatal("asked to, the window shows no braid")
 	}
 	if b := boundsOf(t, w, run, r.pane); b.Size().W < 100 {
 		t.Fatalf("the pane is %v", b)
@@ -265,39 +269,39 @@ func TestAGoPluginsViewsSendTheirChangesAndKeepThemAsTheNewsCatchesUp(t *testing
 	// A drag in the pane: two moves, one gesture.
 	gunim.RegisterPatch(w, "album", func(r *root, _ struct{}, u *gunim.UI) {
 		h := goHost{r.goViews[9]}
-		h.Begin(trim.GainID, u)
-		h.Set(trim.GainID, -2, u)
-		h.Set(trim.GainID, -4, u)
-		h.End(trim.GainID, u)
+		h.Begin(braid.GainID, u)
+		h.Set(braid.GainID, -2, u)
+		h.Set(braid.GainID, -4, u)
+		h.End(braid.GainID, u)
 	})
 	if err := w.Client().Patch("album", struct{}{}); err != nil {
 		t.Fatal(err)
 	}
 	run(1)
 	_, sent := edits(w)
-	want := []gunim.Intent{SetGoParam{Track: 1, Slot: 9, ID: trim.GainID, Value: -2, Gesture: 1},
-		SetGoParam{Track: 1, Slot: 9, ID: trim.GainID, Value: -4, Gesture: 1}}
+	want := []gunim.Intent{SetGoParam{Track: 1, Slot: 9, ID: braid.GainID, Value: -2, Gesture: 1},
+		SetGoParam{Track: 1, Slot: 9, ID: braid.GainID, Value: -4, Gesture: 1}}
 	if !slices.Equal(sent, want) {
 		t.Fatalf("the drag sent %v, want %v", sent, want)
 	}
 	// News of the first move comes late: the views keep the last.
-	a.Tracks[0].Chain[0].Values = map[uint32]float64{trim.GainID: -2}
+	a.Tracks[0].Chain[0].Values = map[uint32]float64{braid.GainID: -2}
 	if err := w.Client().Publish(albumTopic, a); err != nil {
 		t.Fatal(err)
 	}
 	run(2)
-	if v := r.goViews[9].values[trim.GainID]; v != -4 {
+	if v := r.goViews[9].values[braid.GainID]; v != -4 {
 		t.Fatalf("news of an older move set the views to %v", v)
 	}
 	// Then the news of the last, then of an undo, which they follow.
 	for _, g := range []float64{-4, 0} {
-		a.Tracks[0].Chain[0].Values = map[uint32]float64{trim.GainID: g}
+		a.Tracks[0].Chain[0].Values = map[uint32]float64{braid.GainID: g}
 		if err := w.Client().Publish(albumTopic, a); err != nil {
 			t.Fatal(err)
 		}
 		run(2)
 	}
-	if v := r.goViews[9].values[trim.GainID]; v != 0 {
+	if v := r.goViews[9].values[braid.GainID]; v != 0 {
 		t.Fatalf("undone, the views show %v, want 0", v)
 	}
 	// Escape closes the pane.
@@ -328,14 +332,14 @@ func TestATrackMeasuresThroughTheEQ(t *testing.T) {
 }
 
 func TestAGoPluginRunsWithoutLockingOrMakingAnything(t *testing.T) {
-	lp, err := newPlugin(trimSlot(1), nil, 48000, false)
+	lp, err := newPlugin(braidSlot(1), nil, 48000, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer lp.p.Close()
 	e, ok := lp.p.(*goEngine)
 	if !ok {
-		t.Fatal("the trim loaded is no goEngine")
+		t.Fatal("the braid loaded is no goEngine")
 	}
 	frames := make([]float32, 2*1500)
 	// The gain set from another goroutine as it plays, for the race
@@ -344,7 +348,7 @@ func TestAGoPluginRunsWithoutLockingOrMakingAnything(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := range 2000 {
-			e.setParam(trim.GainID, float64(i%48-24))
+			e.setParam(braid.GainID, float64(i%48-24))
 		}
 	}()
 	for running := true; running; {
@@ -362,7 +366,7 @@ func TestAGoPluginRunsWithoutLockingOrMakingAnything(t *testing.T) {
 	// goroutines allocate as little as may be meanwhile.
 	made := allocsUnder(t, "(*goEngine).Process", func() {
 		for i := range 50 {
-			e.setParam(trim.GainID, float64(i%10))
+			e.setParam(braid.GainID, float64(i%10))
 			e.Process(frames)
 		}
 	})
@@ -370,8 +374,8 @@ func TestAGoPluginRunsWithoutLockingOrMakingAnything(t *testing.T) {
 		t.Fatalf("processing made %d things over 50 blocks", made)
 	}
 	// Sets between two blocks come as one change, of the last.
-	e.setParam(trim.GainID, -6)
-	e.setParam(trim.GainID, -12)
+	e.setParam(braid.GainID, -6)
+	e.setParam(braid.GainID, -12)
 	e.Process(frames[:2])
 	if len(e.changes) != 1 || e.changes[0].Value != -12 {
 		t.Fatalf("two sets came as %v", e.changes)
@@ -393,24 +397,24 @@ func TestThePaneAnimatesItsPluginsInOutAndAcross(t *testing.T) {
 	show(9, 1)
 	// A frame to start, and one to move.
 	run(2)
-	trimSheet := r.pane.sheets[r.goViews[9]]
-	if trimSheet == nil || trimSheet.in.Value() <= 0 || trimSheet.in.Value() >= 1 {
-		t.Fatal("the trim's sheet did not start coming in")
+	braidSheet := r.pane.sheets[r.goViews[9]]
+	if braidSheet == nil || braidSheet.in.Value() <= 0 || braidSheet.in.Value() >= 1 {
+		t.Fatal("the braid's sheet did not start coming in")
 	}
 	run(60)
-	if trimSheet.in.Value() != 1 || r.chain.cards[9].open.Target() != 1 {
-		t.Fatalf("the trim's sheet is in %v, its card open %v", trimSheet.in.Value(), r.chain.cards[9].open.Target())
+	if braidSheet.in.Value() != 1 || r.chain.cards[9].open.Target() != 1 {
+		t.Fatalf("the braid's sheet is in %v, its card open %v", braidSheet.in.Value(), r.chain.cards[9].open.Target())
 	}
-	// The EQ in the trim's place: the two cross.
+	// The EQ in the braid's place: the two cross.
 	show(10, 2)
 	run(2)
 	eqSheet := r.pane.sheets[r.goViews[10]]
-	if !trimSheet.leaving || trimSheet.in.Value() <= 0 || trimSheet.in.Value() >= 1 || eqSheet.in.Value() <= 0 || eqSheet.in.Value() >= 1 {
-		t.Fatalf("crossing, the trim's sheet is in %v (leaving %v), the EQ's %v", trimSheet.in.Value(), trimSheet.leaving, eqSheet.in.Value())
+	if !braidSheet.leaving || braidSheet.in.Value() <= 0 || braidSheet.in.Value() >= 1 || eqSheet.in.Value() <= 0 || eqSheet.in.Value() >= 1 {
+		t.Fatalf("crossing, the braid's sheet is in %v (leaving %v), the EQ's %v", braidSheet.in.Value(), braidSheet.leaving, eqSheet.in.Value())
 	}
 	run(60)
-	if trimSheet.in.Value() != 0 || eqSheet.in.Value() != 1 || r.chain.cards[9].open.Target() != 0 || r.chain.cards[10].open.Target() != 1 {
-		t.Fatal("after crossing, the trim's sheet is not gone, or the EQ's not in")
+	if braidSheet.in.Value() != 0 || eqSheet.in.Value() != 1 || r.chain.cards[9].open.Target() != 0 || r.chain.cards[10].open.Target() != 1 {
+		t.Fatal("after crossing, the braid's sheet is not gone, or the EQ's not in")
 	}
 	// Closing: the EQ's sheet goes, a moment after.
 	w.Input(input.KeyPress{Key: input.KeyEscape})
@@ -499,5 +503,60 @@ func TestAPluginsViewsSeeItsBypassAtOnce(t *testing.T) {
 		if got := a.Tracks[0].Chain[0].Values[eq.BypassID]; got != want {
 			t.Fatalf("bypassed %v, the EQ's views are shown its bypass at %v", on, got)
 		}
+	}
+}
+
+func TestAGoPluginNoLongerBuiltInIsDropped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := newApp(ctx, newDeck(audio.NewMixer()), "")
+	gone := keptSlot{Path: goPath, Class: "marrasen.trim", Name: "Trim"}
+	built := keptSlot{Path: goPath, Class: braid.Descriptor.ID, Name: "Braid"}
+	// A VST3 is no Go plugin, whatever its class.
+	vst := keptSlot{Path: "/plugins/x.vst3", Class: "marrasen.trim", Name: "Elsewhere"}
+	names := func(chain []Slot) (out []string) {
+		for _, s := range chain {
+			out = append(out, s.Name)
+		}
+		return out
+	}
+	id := a.restore(keptTrack{File: writeAlbum(t)[0], Title: "One", Chain: []keptSlot{gone, built, vst},
+		Other: []keptSlot{built, gone}}, false)
+	tr := a.track(id)
+	if got := names(tr.Chain); !slices.Equal(got, []string{"Braid", "Elsewhere"}) {
+		t.Fatalf("the album's chain is read as %v", got)
+	}
+	if len(tr.Other) != 1 || tr.Other[0].Name != "Braid" {
+		t.Fatalf("session B's chain is read as %+v", tr.Other)
+	}
+
+	dir := t.TempDir()
+	write := func(name string, v any) string {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	a.presetsFile = write("presets.json", keptPresets{Presets: []Preset{{Name: "Old", Chain: []keptSlot{gone, built}}}})
+	a.loadPresets()
+	if len(a.presets) != 1 || len(a.presets[0].Chain) != 1 || a.presets[0].Chain[0].Name != "Braid" {
+		t.Fatalf("the presets are read as %+v", a.presets)
+	}
+	a.patchesFile = write("patches.json", keptPatches{Patches: []keptPatch{
+		{Class: "marrasen.trim", Patch: plug.Patch{Name: "Quiet"}},
+		{Class: braid.Descriptor.ID, Patch: plug.Patch{Name: "Loud"}}}})
+	a.loadPatches()
+	if !slices.Equal(a.Patches, []PatchName{{Class: braid.Descriptor.ID, Name: "Loud"}}) {
+		t.Fatalf("the patches are read as %v", a.Patches)
+	}
+	st := readSettings(write("settings.json", settings{Plugins: []PluginChoice{
+		{Path: goPath, Class: "marrasen.trim", Name: "Trim"}, {Path: goPath, Class: braid.Descriptor.ID, Name: "Braid"}}}))
+	if p := st.plugins(); len(p) != 1 || p[0].Name != "Braid" {
+		t.Fatalf("the plugins added last are read as %v", p)
 	}
 }

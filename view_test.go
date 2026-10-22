@@ -1524,7 +1524,7 @@ func TestTheViewSwitchShowsAPluginOpenAndClosesIt(t *testing.T) {
 			t.Fatal(err)
 		}
 		run(60)
-		if !r.pane.isOpen() || sw.shown() != partPlugin || sw.plugIn.Value() < 0.99 || sw.plugName != "Trim" {
+		if !r.pane.isOpen() || sw.shown() != partPlugin || sw.plugIn.Value() < 0.99 || sw.plugName != "Braid" {
 			t.Fatalf("opened, the switch shows part %d, the plugin's in %v, named %q", sw.shown(), sw.plugIn.Value(), sw.plugName)
 		}
 		if r.head.followIn.Value() > 0.01 {
@@ -1561,7 +1561,7 @@ func TestTheViewSwitchShowsAPluginOpenAndClosesIt(t *testing.T) {
 
 func TestSwitchingPluginsGlidesTheirNameAndHidesWhatIsUnder(t *testing.T) {
 	a := goAlbum(0)
-	other := trimSlot(10)
+	other := braidSlot(10)
 	other.Label = "A much longer name"
 	a.Tracks[0].Chain = append(a.Tracks[0].Chain, other)
 	w, r, run := stage(t, a)
@@ -1580,7 +1580,7 @@ func TestSwitchingPluginsGlidesTheirNameAndHidesWhatIsUnder(t *testing.T) {
 	// Partway: the names crossing, the part between their widths, and
 	// a card under the two sheets as solid as they are in together.
 	mid := sw.partW(partPlugin)
-	if s := sw.swap.Value(); s <= 0.05 || s >= 0.95 || sw.wasName != "Trim" {
+	if s := sw.swap.Value(); s <= 0.05 || s >= 0.95 || sw.wasName != "Braid" {
 		t.Errorf("partway, the names have swapped %v, from %q", s, sw.wasName)
 	}
 	if mid <= short+1 || mid >= pillWidth(other.Label)+switchClose-1 {
@@ -1610,7 +1610,7 @@ func TestSwitchingPluginsGlidesTheirNameAndHidesWhatIsUnder(t *testing.T) {
 func TestCtrlClickShowsUpToFourPluginsInAGrid(t *testing.T) {
 	a := goAlbum(0)
 	for id := 10; id <= 13; id++ {
-		a.Tracks[0].Chain = append(a.Tracks[0].Chain, trimSlot(id))
+		a.Tracks[0].Chain = append(a.Tracks[0].Chain, braidSlot(id))
 	}
 	w, r, run := stage(t, a)
 	run(40)
@@ -1653,7 +1653,7 @@ func TestCtrlClickShowsUpToFourPluginsInAGrid(t *testing.T) {
 	if r.chain.cards[9].open.Target() != 1 || r.chain.cards[10].open.Target() != 1 {
 		t.Error("the two cards do not show open")
 	}
-	if r.head.view.plugName != "Trim · Trim" {
+	if r.head.view.plugName != "Braid · Braid" {
 		t.Errorf("the view switch names %q", r.head.view.plugName)
 	}
 	// Four: two by two.
@@ -1716,7 +1716,7 @@ func TestADoubleClickOnAPluginsTitleRenamesIt(t *testing.T) {
 		w.Input(input.PointerUp{Pos: at, Button: input.ButtonPrimary})
 	}
 	run(2)
-	if !sh.renaming || sh.field.Text() != "Trim" {
+	if !sh.renaming || sh.field.Text() != "Braid" {
 		t.Fatalf("double-clicked, the title is renaming %v, from %q", sh.renaming, sh.field.Text())
 	}
 	edits(w)

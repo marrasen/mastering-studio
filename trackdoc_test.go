@@ -12,7 +12,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/plug"
-	"github.com/marrasen/gunim/audio/plug/trim"
+	"github.com/marrasen/gunim/audio/plug/braid"
 	"github.com/marrasen/gunim/widget"
 )
 
@@ -109,14 +109,14 @@ func TestEachSlotIsGivenTheTrackAsItReachesIt(t *testing.T) {
 	a.handle(SetGap{})
 	a.handle(AddPlugin{Track: tr.ID, Choice: PluginChoice{Path: goPath, Class: "test.reader", Name: "Reader"}})
 	after := tr.Chain[1].ID
-	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: trim.GainID, Value: -6, Gesture: 1})
+	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: braid.GainID, Value: -6, Gesture: 1})
 	a.syncDocs()
 	first, second := docSource(t, a, s.ID), docSource(t, a, after)
 	if first.Frames() != 2*rate || second.Rate() != rate || first.Channels() != 2 {
 		t.Fatalf("the sources are %d frames at %v Hz", first.Frames(), second.Rate())
 	}
 	// Read anywhere, out of order: the second slot is fed the track
-	// through the trim, 6 dB down.
+	// through the braid, 6 dB down.
 	for _, at := range []int64{50000, 0, 70000, 3} {
 		in, out := readAt(t, first, at, 1000), readAt(t, second, at, 1000)
 		for i := range 1000 {
@@ -136,11 +136,11 @@ func TestEachSlotIsGivenTheTrackAsItReachesIt(t *testing.T) {
 	} else if rd, ok := e.p.(*trackReader); !ok || len(rd.docs) == 0 {
 		t.Error("the reader loaded for the sound was given no document")
 	}
-	// The trim changed: the second slot's track is new, the first's not.
-	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: trim.GainID, Value: -3, Gesture: 2})
+	// The braid changed: the second slot's track is new, the first's not.
+	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: braid.GainID, Value: -3, Gesture: 2})
 	a.syncDocs()
 	if docSource(t, a, s.ID) != first || docSource(t, a, after).Version() != 2 {
-		t.Fatalf("after the trim changed, the sources are versions %d and %d", docSource(t, a, s.ID).Version(),
+		t.Fatalf("after the braid changed, the sources are versions %d and %d", docSource(t, a, s.ID).Version(),
 			docSource(t, a, after).Version())
 	}
 	// The old version is let go: no more to read, and its file gone.

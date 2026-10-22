@@ -701,8 +701,8 @@ func (a *app) restore(k keptTrack, ref bool) int {
 	for _, m := range k.Marks {
 		a.markIDs = max(a.markIDs, m.ID)
 	}
-	t.OnB, t.Other, t.OtherPreset, t.OtherSet = k.OnB, k.Other, k.OtherPreset, k.OtherSet
-	for _, s := range k.Chain {
+	t.OnB, t.Other, t.OtherPreset, t.OtherSet = k.OnB, withoutGone(k.Other), k.OtherPreset, k.OtherSet
+	for _, s := range withoutGone(k.Chain) {
 		a.slots++
 		t.Chain = append(t.Chain, Slot{ID: a.slots, Path: s.Path, Class: s.Class, Name: s.Name,
 			Vendor: s.Vendor, Label: s.Label, Bypass: s.Bypass, Gain: s.Gain, Gained: s.Gained, LRA: s.LRA,
@@ -917,7 +917,8 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.saveDialog = func(o driver.SaveOptions) (string, error) { return c.SaveFile(ctx, o) }
 	a.settingsFile = o.settings
 	st := readSettings(a.settingsFile)
-	a.RecentAlbums, a.Recent, a.lame, a.window, a.zoom = st.Albums, st.Plugins, st.LAME, st.Window, st.Zoom
+	a.RecentAlbums, a.lame, a.window, a.zoom = st.Albums, st.LAME, st.Window, st.Zoom
+	a.Recent = st.plugins()
 	a.Background, a.Spectrum, a.Carry, a.Beta = st.Background, st.spectrum(), st.Carry, st.Beta
 	a.output, a.theme, a.themeEdits = st.Output, themeNamed(st.Theme), st.ThemeEdits
 	a.registerTheme = o.registerTheme

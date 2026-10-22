@@ -9,8 +9,8 @@ import (
 
 	"github.com/marrasen/gunim/audio"
 	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/braid"
 	"github.com/marrasen/gunim/audio/plug/eq"
-	"github.com/marrasen/gunim/audio/plug/trim"
 	"github.com/marrasen/gunim/input"
 )
 
@@ -55,15 +55,15 @@ func TestAPatchTheEQComesWithLoadsAsAStepToUndo(t *testing.T) {
 func TestAPatchIsSavedLoadedElsewhereAndDeleted(t *testing.T) {
 	a, tr, s := goApp(t)
 	a.patchesFile = filepath.Join(t.TempDir(), "patches.json")
-	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: trim.GainID, Value: -3, Gesture: 1})
+	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: braid.GainID, Value: -3, Gesture: 1})
 	a.handle(SavePatch{Track: tr.ID, Slot: s.ID, Name: " Quiet "})
-	if !slices.Equal(a.Patches, []PatchName{{Class: trim.Descriptor.ID, Name: "Quiet"}}) {
+	if !slices.Equal(a.Patches, []PatchName{{Class: braid.Descriptor.ID, Name: "Quiet"}}) {
 		t.Fatalf("saved, the patches are %v", a.Patches)
 	}
-	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: trim.GainID, Value: 2, Gesture: 2})
+	a.handle(SetGoParam{Track: tr.ID, Slot: s.ID, ID: braid.GainID, Value: 2, Gesture: 2})
 	a.handle(LoadPatch{Track: tr.ID, Slot: s.ID, Name: "Quiet"})
 	if kept, loaded := gainOf(t, a, tr, s); kept != -3 || loaded != -3 {
-		t.Fatalf("Quiet loaded, the trim is at %v, and plays at %v; want -3", kept, loaded)
+		t.Fatalf("Quiet loaded, the braid is at %v, and plays at %v; want -3", kept, loaded)
 	}
 	// Another run of the studio finds it.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -74,7 +74,7 @@ func TestAPatchIsSavedLoadedElsewhereAndDeleted(t *testing.T) {
 	if !slices.Equal(b.Patches, a.Patches) {
 		t.Fatalf("another run finds the patches %v", b.Patches)
 	}
-	a.handle(DeletePatch{Class: trim.Descriptor.ID, Name: "Quiet"})
+	a.handle(DeletePatch{Class: braid.Descriptor.ID, Name: "Quiet"})
 	if len(a.Patches) != 0 {
 		t.Fatalf("deleted, the patches are %v", a.Patches)
 	}
@@ -89,7 +89,7 @@ func TestThePanesPatchesMenuListsAndLoadsThePatches(t *testing.T) {
 	a := goAlbum(0)
 	a.Tracks[0].Chain = append(a.Tracks[0].Chain, Slot{ID: 10, Path: goPath, Class: eq.Descriptor.ID, Name: "EQ",
 		Values: map[uint32]float64{1: 0}})
-	a.Patches = []PatchName{{Class: eq.Descriptor.ID, Name: "Mine"}, {Class: trim.Descriptor.ID, Name: "Not the EQ's"}}
+	a.Patches = []PatchName{{Class: eq.Descriptor.ID, Name: "Mine"}, {Class: braid.Descriptor.ID, Name: "Not the EQ's"}}
 	a.ShowGo, a.ShowGos = 10, 1
 	w, r, run := stage(t, a)
 	run(60)
