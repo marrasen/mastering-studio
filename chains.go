@@ -79,6 +79,8 @@ func (a *app) closeRacks() {
 // unloaded under a plugin at work, or the process ending under one,
 // crashes it.
 func (a *app) shutdown() {
+	// The plugins' windows close their editors before the plugins go.
+	a.closePluginWindows()
 	a.stop()
 	a.d.stop()
 	a.closeDocs()
@@ -386,6 +388,9 @@ func (a *app) handleChain(in gunim.Intent) {
 		}
 		lp := a.rackOf(t).find(in.Slot)
 		if lp == nil {
+			return
+		}
+		if a.openPluginWindow(t, i, lp) {
 			return
 		}
 		if err := lp.p.OpenEditor(fmt.Sprintf("%s · %s", t.Chain[i].title(), t.Title)); err != nil {
