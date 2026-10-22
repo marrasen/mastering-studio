@@ -226,7 +226,7 @@ func goAlbum(gain float64) Album {
 	return a
 }
 
-func TestTheTrimsChipShowsItsGainAndFollowsIt(t *testing.T) {
+func TestTheBraidsChipShowsItsGainAndFollowsIt(t *testing.T) {
 	w, r, run := stage(t, goAlbum(-3))
 	v := r.goViews[9]
 	if v == nil || v.chip == nil || !slices.Contains(r.chain.Children(), v.chip) {

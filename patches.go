@@ -13,14 +13,16 @@ import (
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
-	"github.com/marrasen/gunim/widget"
+	"github.com/marrasen/gunim/audio/vst3"
 )
 
 // Patches: a Go plugin's settings kept by name, for any slot of the same
 // plugin, on any track of any album. A plugin comes with patches of its
 // own, as starting points; those the user saves are kept beside the
 // settings, apart from the presets, which are whole chains. Loading a
-// patch is a change to undo.
+// patch is a change to undo. The browser of presets beside a plugin's
+// views lists them, the user's in the bank VST3 keeps its user's in,
+// and the plugin's own in the factory's.
 
 // PatchName names a patch the user kept, of the plugin Class.
 type PatchName struct{ Class, Name string }
@@ -33,10 +35,6 @@ type (
 		Name        string
 		Own         bool
 	}
-	// NamePatch asks for the name to keep a slot's settings as.
-	NamePatch struct{ Track, Slot int }
-	// PatchClosed says the dialog that names a patch closed.
-	PatchClosed struct{}
 	// SavePatch keeps a slot's settings as the patch Name of its plugin.
 	SavePatch struct {
 		Track, Slot int
@@ -44,11 +42,6 @@ type (
 	}
 	// DeletePatch lets the patch Name of the plugin Class go.
 	DeletePatch struct{ Class, Name string }
-	// PatchNaming is what the dialog that names a patch shows.
-	PatchNaming struct {
-		Track, Slot int
-		Plugin      string
-	}
 )
 
 // keptPatch is a patch the user kept, of the plugin Class.
@@ -121,20 +114,7 @@ func (a *app) patch(class, name string) int {
 // handlePatches handles the patches' intents.
 func (a *app) handlePatches(in gunim.Intent) bool {
 	switch in := in.(type) {
-	case NamePatch:
-		t, i := a.slot(in.Track, in.Slot)
-		if i < 0 || !t.Chain[i].goPlugin() || a.c == nil {
-			return true
-		}
-		a.namingPatch = true
-		if err := a.c.Mount(gunim.Root, "patch", "patch",
-			PatchNaming{Track: in.Track, Slot: in.Slot, Plugin: t.Chain[i].title()}); err != nil {
-			log.Print(err)
-		}
-	case PatchClosed:
-		a.closePatchNaming()
 	case SavePatch:
-		a.closePatchNaming()
 		t, i := a.slot(in.Track, in.Slot)
 		name := strings.TrimSpace(in.Name)
 		if i < 0 || !t.Chain[i].goPlugin() || name == "" {
@@ -153,6 +133,8 @@ func (a *app) handlePatches(in gunim.Intent) bool {
 			a.patches = append(a.patches, p)
 		}
 		a.savePatches()
+		// It plays the patch kept.
+		a.picks(in.Slot, PresetRef{Bank: vst3.UserBank, Group: patchGroup(p.Class, ""), Name: name})
 	case LoadPatch:
 		t, i := a.slot(in.Track, in.Slot)
 		if i < 0 || !t.Chain[i].goPlugin() {
@@ -164,15 +146,21 @@ func (a *app) handlePatches(in gunim.Intent) bool {
 			return true
 		}
 		var p *plug.Patch
+		bank := vst3.UserBank
 		if in.Own {
+			bank = vst3.FactoryBank
 			if k := slices.IndexFunc(d.Patches, func(p plug.Patch) bool { return p.Name == in.Name }); k >= 0 {
 				p = &d.Patches[k]
 			}
 		} else if k := a.patch(class, in.Name); k >= 0 {
 			p = &a.patches[k].Patch
 		}
-		if p != nil {
-			a.applyPatch(t, in.Slot, &d, *p)
+		if p != nil && a.applyPatch(t, in.Slot, &d, *p) {
+			group := patchGroup(class, "")
+			if in.Own {
+				group = patchGroup(class, p.Category)
+			}
+			a.picks(in.Slot, PresetRef{Bank: bank, Group: group, Name: p.Name})
 		}
 	case DeletePatch:
 		if k := a.patch(in.Class, in.Name); k >= 0 {
@@ -185,9 +173,31 @@ func (a *app) handlePatches(in gunim.Intent) bool {
 	return true
 }
 
+// patchGroup is the group a patch of the plugin class is filed under
+// in the browser: its category, or else the plugin's name.
+func patchGroup(class, category string) string {
+	if category != "" {
+		return category
+	}
+	if d, ok := plug.Lookup(class); ok {
+		return d.Name
+	}
+	return class
+}
+
+// picks notes that slot id's plugin plays the preset ref, with its state
+// as it is now.
+func (a *app) picks(id int, ref PresetRef) {
+	if a.picked == nil {
+		a.picked = map[int]picked{}
+	}
+	a.picked[id] = picked{ref: ref, state: a.states[id]}
+}
+
 // applyPatch gives slot sid's plugin, of d, on track t, the settings
-// of p: every parameter it leaves out at its default.
-func (a *app) applyPatch(t *Track, sid int, d *plug.Descriptor, p plug.Patch) {
+// of p: every parameter it leaves out at its default. It reports
+// whether the plugin took them.
+func (a *app) applyPatch(t *Track, sid int, d *plug.Descriptor, p plug.Patch) bool {
 	s := goSettings{Params: map[uint32]float64{}, State: bytes.Clone(p.State)}
 	for _, prm := range d.Params {
 		if prm.Flags&plug.ReadOnly != 0 {
@@ -202,7 +212,7 @@ func (a *app) applyPatch(t *Track, sid int, d *plug.Descriptor, p plug.Patch) {
 	if e := a.goEngineOf(t, sid); e != nil {
 		if err := e.p.SetState(s.State); err != nil {
 			a.Note = fmt.Sprintf("%s: %v", p.Name, err)
-			return
+			return false
 		}
 		for id, v := range s.Params {
 			e.setParam(id, v)
@@ -211,35 +221,5 @@ func (a *app) applyPatch(t *Track, sid int, d *plug.Descriptor, p plug.Patch) {
 	a.states[sid] = s.pack()
 	a.dirty = true
 	a.remeasureChain(t.ID)
-}
-
-// closePatchNaming takes the dialog that names a patch down.
-func (a *app) closePatchNaming() {
-	if !a.namingPatch {
-		return
-	}
-	a.namingPatch = false
-	if a.c != nil {
-		_ = a.c.Unmount("patch")
-	}
-}
-
-// newPatchDialog makes the dialog that names a patch.
-func newPatchDialog(n PatchNaming) *widget.Dialog {
-	d := widget.NewDialog("Save " + n.Plugin + " patch")
-	name := widget.NewTextField()
-	name.Placeholder = "Vocal, airy"
-	form := widget.NewForm()
-	form.Add("Name", name)
-	d.Body = form
-	d.SetButtons("Save", "Cancel")
-	d.OnDismiss = widget.Sends(PatchClosed{})
-	d.Check = func() string {
-		if strings.TrimSpace(name.Text()) == "" {
-			return "Name the patch."
-		}
-		return ""
-	}
-	d.OnAccept = func(*gunim.UI) gunim.Intent { return SavePatch{Track: n.Track, Slot: n.Slot, Name: name.Text()} }
-	return d
+	return true
 }

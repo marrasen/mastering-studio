@@ -44,8 +44,8 @@ type (
 		Why  string
 		None bool
 	}
-	// BrowsePresets says whether the plugins' windows show the browser,
-	// for the next ones to open so.
+	// BrowsePresets says whether the browser of presets shows beside a
+	// plugin's views, for the next ones to open so.
 	BrowsePresets struct{ On bool }
 )
 
@@ -121,7 +121,7 @@ func (a *app) openPluginWindow(t *Track, i int, lp *livePlugin) bool {
 	if w, h, ok := ed.EditorSize(); ok {
 		size = geom.Sz(float32(w), float32(h)+pluginBarH)
 	}
-	if a.browse {
+	if a.Browse {
 		size.W += browseW
 	}
 	state := a.pluginWin(t, s)
@@ -162,7 +162,7 @@ func (a *app) openPluginWindow(t *Track, i int, lp *livePlugin) bool {
 // pluginWin is what the window of slot s of track t shows.
 func (a *app) pluginWin(t *Track, s Slot) PluginWin {
 	w := PluginWin{Track: t.ID, Slot: s.ID, Title: fmt.Sprintf("%s · %s", s.title(), t.Title), Kept: a.presetsKept,
-		Browse: a.browse}
+		Browse: a.Browse}
 	if p, ok := a.picked[s.ID]; ok && bytes.Equal(p.state, a.states[s.ID]) {
 		w.Current, w.Playing = p.ref, true
 	}
@@ -242,11 +242,6 @@ func (a *app) handlePluginWindow(in gunim.Intent) {
 		a.pickPreset(in)
 	case KeepPreset:
 		a.keepPreset(in)
-	case BrowsePresets:
-		if a.browse != in.On {
-			a.browse = in.On
-			a.writeSettings()
-		}
 	default:
 		a.handle(in)
 	}
@@ -276,10 +271,7 @@ func (a *app) pickPreset(in PickPreset) {
 	// The edits the state made are this step's, not the editor's.
 	lp.edits = lp.p.Edits()
 	a.readRack(t.ID)
-	if a.picked == nil {
-		a.picked = map[int]picked{}
-	}
-	a.picked[s.ID] = picked{ref: in.Preset, state: a.states[s.ID]}
+	a.picks(s.ID, in.Preset)
 	a.dirty = true
 	if !a.isRef(t.ID) {
 		a.recordSnap(was, fmt.Sprintf("the preset %s on %s", in.Preset.Name, t.Title), t.ID, "")

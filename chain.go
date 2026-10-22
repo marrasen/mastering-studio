@@ -43,9 +43,13 @@ type Slot struct {
 	Open    bool
 	Failed  string
 	// Values and GoState are a Go plugin's settings, for the window to
-	// show: its parameters' values, by ID, and its own state.
+	// show: its parameters' values, by ID, and its own state. Preset is
+	// the preset it plays, where Playing says it plays one: the one
+	// picked last, while its settings are as picked.
 	Values  map[uint32]float64
 	GoState []byte
+	Preset  PresetRef
+	Playing bool
 }
 
 // PluginChoice is an effect this computer has, to add to a chain.

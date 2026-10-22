@@ -99,6 +99,8 @@ type (
 		Update Update
 		// Beta takes pre-releases as updates too; Profiling says a CPU
 		// profile records; Told is news to show, which Tolds counts.
+		// Browse shows the browser of presets beside a plugin's views.
+		Browse    bool
 		Beta      bool
 		Profiling bool
 		Told      string
@@ -491,10 +493,9 @@ type app struct {
 	naming      bool
 	lastDeleted *Preset
 	// patches are the Go plugins' patches the user kept, in
-	// patchesFile; namingPatch says the dialog that names one is up.
+	// patchesFile.
 	patches     []keptPatch
 	patchesFile string
-	namingPatch bool
 	// scans and measures carry what the background tells; measuring
 	// holds how to stop each track's measuring, and settle when it is
 	// due once its edits have paused.
@@ -557,15 +558,13 @@ type app struct {
 	// plugins' windows open, by slot, and plugIn carries their intents.
 	// noEmbed are the plugins whose editors open in windows of their
 	// own, by slot; picked the presets the slots' plugins took last;
-	// presetsKept counts the presets kept, and browse says the plugins'
-	// windows show the browser of presets.
+	// presetsKept counts the presets kept.
 	newWindow    func(gunim.WindowOptions) (*gunim.Window, error)
 	plugWins     map[int]*plugWin
 	plugIn       chan gunim.Intent
 	noEmbed      map[int]*livePlugin
 	picked       map[int]picked
 	presetsKept  int
-	browse       bool
 	settingsOpen bool
 	settingsTick *time.Ticker
 	drivers      []string
@@ -934,7 +933,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.Recent = st.plugins()
 	a.Background, a.Spectrum, a.Carry, a.Beta = st.Background, st.spectrum(), st.Carry, st.Beta
 	a.output, a.theme, a.themeEdits = st.Output, themeNamed(st.Theme), st.ThemeEdits
-	a.browse = st.Browse
+	a.Browse = st.Browse
 	a.registerTheme = o.registerTheme
 	if o.app != nil && o.main != nil {
 		a.newWindow = func(wo gunim.WindowOptions) (*gunim.Window, error) {
@@ -1286,6 +1285,11 @@ func (a *app) handle(in gunim.Intent) {
 		a.record(label, track, key)
 	}
 	switch in := in.(type) {
+	case BrowsePresets:
+		if a.Browse != in.On {
+			a.Browse = in.On
+			a.writeSettings()
+		}
 	case ShowWhatsNew:
 		if a.gunim != nil && a.Update.From != "" {
 			if err := install.ShowWhatsNew(a.ctx, a.gunim, installer(), a.Update.From); err != nil {

@@ -408,6 +408,9 @@ func (a *app) showGoSettings() {
 				if !bytes.Equal(set.State, s.GoState) {
 					s.GoState = set.State
 				}
+				p, ok := a.picked[s.ID]
+				s.Playing = ok && bytes.Equal(p.state, a.states[s.ID])
+				s.Preset = p.ref
 			}
 		}
 	}

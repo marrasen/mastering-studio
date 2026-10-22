@@ -10,6 +10,8 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/anim"
 	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/plugui"
+	"github.com/marrasen/gunim/audio/vst3"
 	"github.com/marrasen/gunim/geom"
 	"github.com/marrasen/gunim/icon"
 	"github.com/marrasen/gunim/input"
@@ -348,11 +350,17 @@ func (r *root) showGo(t Track, s, was Album, u *gunim.UI) {
 			r.pane.leave(v, u)
 		}
 	}
-	// The sheets' titles, as the plugins are named now.
+	// The sheets' titles, as the plugins are named now, and their
+	// browsers, as the patches are.
 	for _, sl := range t.Chain {
-		if sh := r.pane.sheets[r.goViews[sl.ID]]; sh != nil && !sh.renaming {
+		sh := r.pane.sheets[r.goViews[sl.ID]]
+		if sh == nil {
+			continue
+		}
+		if !sh.renaming {
 			sh.title.Text = sl.title()
 		}
+		sh.follow(sl, u)
 	}
 	for _, v := range gone {
 		r.pane.forget(v, u)
@@ -625,16 +633,35 @@ func (p *goPane) Handle(e input.Event, u *gunim.UI) bool {
 	return true
 }
 
-// goSheet is the sheet of a plugin's views, in the pane.
+// goSheet is the sheet of a plugin's views, in the pane: its title,
+// the browser's button, steps to the presets beside the one playing and
+// a close button along the top; the browser of presets at the left
+// while it shows, with a field that keeps the plugin's settings as a
+// patch under it; and the plugin's views in the rest.
 type goSheet struct {
 	anim.Group
 	p      *goPane
 	v      *goView
 	title  *widget.Label
 	closer *widget.IconButton
-	// patches opens the menu of the plugin's patches, patchMenu.
-	patches   *pill
-	patchMenu *widget.ContextMenu
+	// browse shows the browser, and prev and next step through it.
+	browse, prev, next *widget.IconButton
+	// browser lists the presets of src: the patches the user kept, and
+	// those the plugin comes with. keep names the settings to keep as
+	// a patch, and drop deletes the patch kept that plays.
+	src     *goPresets
+	browser *plugui.PresetBrowser
+	keep    *widget.TextField
+	drop    *widget.IconButton
+	// browsing says the browser shows, and shown how far it has come
+	// in, from 0 to 1. followed is the preset playing as the browser
+	// last followed it, playing whether one played, and kept how many
+	// patches of the plugin's the user kept, as last listed.
+	browsing bool
+	shown    *anim.Float
+	followed PresetRef
+	playing  bool
+	kept     int
 	// in is how far the sheet has come in, from 0 to 1, and leaving
 	// says it goes; at is where in the pane it stands, gliding, and
 	// placed says it has stood anywhere yet.
@@ -651,7 +678,7 @@ type goSheet struct {
 }
 
 func newGoSheet(p *goPane, v *goView) *goSheet {
-	sh := &goSheet{p: p, v: v, title: widget.NewLabel(""), in: anim.NewFloat(0)}
+	sh := &goSheet{p: p, v: v, title: widget.NewLabel(""), in: anim.NewFloat(0), browsing: p.r.state.Browse}
 	for i := range sh.at {
 		sh.at[i] = anim.NewFloat(0)
 		sh.Add(sh.at[i])
@@ -677,72 +704,111 @@ func newGoSheet(p *goPane, v *goView) *goSheet {
 		u.Invalidate()
 		return true
 	}
-	sh.patches = newPill("Patches", sh.openPatches)
-	sh.patches.menu = true
-	sh.patchMenu = widget.NewContextMenu(sh.patches, nil)
-	sh.Add(sh.in, sh.patches)
+	sh.src = &goPresets{sh: sh}
+	sh.browser = plugui.NewPresetBrowser(sh.src)
+	sh.browser.BankIcon = bankIcon
+	sh.browse = widget.NewIconButton(icon.LibraryBig, "Presets")
+	sh.browse.OnClick = func(u *gunim.UI) gunim.Intent { sh.toggleBrowse(u); return nil }
+	sh.prev = widget.NewIconButton(icon.ChevronLeft, "The preset before")
+	sh.prev.OnClick = func(u *gunim.UI) gunim.Intent { sh.browser.Skip(-1, u); return nil }
+	sh.next = widget.NewIconButton(icon.ChevronRight, "The next preset")
+	sh.next.OnClick = func(u *gunim.UI) gunim.Intent { sh.browser.Skip(1, u); return nil }
+	sh.keep = widget.NewTextField()
+	sh.keep.Icon = icon.Save
+	sh.keep.Placeholder = "Keep these settings as…"
+	sh.keep.OnCommit = func(text string, u *gunim.UI) gunim.Intent {
+		sh.keep.SetText("", u)
+		if strings.TrimSpace(text) == "" {
+			return nil
+		}
+		return SavePatch{Track: v.track, Slot: v.slot, Name: text}
+	}
+	sh.drop = widget.NewIconButton(icon.Trash2, "Delete this patch")
+	sh.drop.OnClick = func(*gunim.UI) gunim.Intent {
+		if !sh.playing || sh.followed.Bank != vst3.UserBank {
+			return nil
+		}
+		return DeletePatch{Class: v.d.ID, Name: sh.followed.Name}
+	}
+	sh.drop.Disabled = true
+	sh.shown = anim.NewFloat(onOff(sh.browsing))
+	sh.Add(sh.in, sh.shown)
 	return sh
 }
 
-// openPatches opens the menu of the plugin's patches: those it comes
-// with, those kept, to load, and saving and deleting.
-func (sh *goSheet) openPatches(u *gunim.UI) {
-	v := sh.v
-	var items []widget.MenuItem
-	var picks []gunim.Intent
-	add := func(item widget.MenuItem, in gunim.Intent) {
-		items = append(items, item)
-		picks = append(picks, in)
-	}
-	if len(v.d.Patches) > 0 {
-		add(widget.MenuItem{Label: "Comes with " + v.d.Name, Caption: true}, nil)
-		for _, p := range v.d.Patches {
-			add(widget.MenuItem{Label: p.Name, Icon: icon.AudioLines}, LoadPatch{Track: v.track, Slot: v.slot, Name: p.Name, Own: true})
+// follow has the browser follow slot s as the application has it: the
+// patches kept, and the one playing.
+func (sh *goSheet) follow(s Slot, u *gunim.UI) {
+	kept := 0
+	for _, p := range sh.p.r.state.Patches {
+		if p.Class == sh.v.d.ID {
+			kept++
 		}
 	}
-	var kept []string
-	for _, p := range v.r.state.Patches {
-		if p.Class == v.d.ID {
-			kept = append(kept, p.Name)
-		}
+	if kept != sh.kept {
+		sh.kept = kept
+		sh.browser.Refresh(u)
 	}
-	if len(kept) > 0 {
-		add(widget.MenuItem{Label: "Saved", Caption: true, Break: true}, nil)
-		for _, name := range kept {
-			add(widget.MenuItem{Label: name, Icon: icon.AudioLines}, LoadPatch{Track: v.track, Slot: v.slot, Name: name})
-		}
+	if s.Playing != sh.playing || s.Preset != sh.followed {
+		sh.playing, sh.followed = s.Playing, s.Preset
+		sh.browser.Follow(u)
 	}
-	add(widget.MenuItem{Label: "Save patch…", Icon: icon.Save, Break: true}, NamePatch{Track: v.track, Slot: v.slot})
-	add(widget.MenuItem{Label: "Delete patch…", Icon: icon.Trash2, Disabled: len(kept) == 0}, nil)
-	sh.patchMenu.SetItems(items)
-	sh.patchMenu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
-		if item < 0 || item >= len(picks) {
-			return nil
-		}
-		if item == len(picks)-1 {
-			sh.openDeletes(kept, u)
-			return nil
-		}
-		return picks[item]
-	}
-	sh.patchMenu.Open(geom.Pt(0, 34), u)
+	sh.drop.Disabled = !sh.playing || sh.followed.Bank != vst3.UserBank
 }
 
-// openDeletes opens the menu of the patches kept, to delete one.
-func (sh *goSheet) openDeletes(kept []string, u *gunim.UI) {
-	items := make([]widget.MenuItem, len(kept))
-	for i, name := range kept {
-		items[i] = widget.MenuItem{Label: name, Icon: icon.Trash2}
+// toggleBrowse shows the browser, or hides it; the settings keep which,
+// for the plugins' views to open so.
+func (sh *goSheet) toggleBrowse(u *gunim.UI) {
+	sh.browsing = !sh.browsing
+	if sh.browsing {
+		sh.shown.Animate(1, browseIn)
+		sh.browser.Refresh(u)
+		sh.browser.Follow(u)
+	} else {
+		sh.shown.Animate(0, anim.Tween{Duration: browseOut, Ease: anim.EaseInOut})
 	}
-	sh.patchMenu.SetItems(items)
-	class := sh.v.d.ID
-	sh.patchMenu.OnPick = func(item int, u *gunim.UI) gunim.Intent {
-		if item < 0 || item >= len(kept) {
-			return nil
+	u.Send(sh, BrowsePresets{On: sh.browsing})
+	u.Invalidate()
+}
+
+// goPresets are the presets a Go plugin's browser lists: the patches
+// the user kept, then those the plugin comes with.
+type goPresets struct{ sh *goSheet }
+
+// Presets implements [plugui.PresetSource].
+func (s *goPresets) Presets() []plug.Preset {
+	v := s.sh.v
+	var out []plug.Preset
+	for _, p := range v.r.state.Patches {
+		if p.Class == v.d.ID {
+			out = append(out, plug.Preset{Bank: vst3.UserBank, Group: patchGroup(p.Class, ""), Name: p.Name})
 		}
-		return DeletePatch{Class: class, Name: kept[item]}
 	}
-	sh.patchMenu.Open(geom.Pt(0, 34), u)
+	for _, p := range v.d.Patches {
+		out = append(out, plug.Preset{Bank: vst3.FactoryBank, Group: patchGroup(v.d.ID, p.Category), Name: p.Name,
+			About: strings.Join(p.Tags, " ")})
+	}
+	return out
+}
+
+// Current implements [plugui.PresetSource]: the patch loaded last, while
+// the plugin's settings are as loaded.
+func (s *goPresets) Current() (plug.Preset, bool) {
+	sh := s.sh
+	if !sh.playing {
+		return plug.Preset{}, false
+	}
+	return plug.Preset{Bank: sh.followed.Bank, Group: sh.followed.Group, Name: sh.followed.Name}, true
+}
+
+// Pick implements [plugui.PresetSource]: the plugin takes the patch, as
+// one step to undo. The patch playing, picked again, stays.
+func (s *goPresets) Pick(p plug.Preset, u *gunim.UI) {
+	if cur, ok := s.Current(); ok && cur.Same(p) {
+		return
+	}
+	v := s.sh.v
+	u.Send(s.sh, LoadPatch{Track: v.track, Slot: v.slot, Name: p.Name, Own: p.Bank == vst3.FactoryBank})
 }
 
 // viewLeast is the least size a plugin's view is laid out at: in a cell
@@ -819,7 +885,8 @@ func (sh *goSheet) rect() geom.Rect {
 // Children implements [gunim.Composite].
 func (sh *goSheet) Children() []gunim.Node {
 	sh.field.Disabled = !sh.renaming
-	return []gunim.Node{sh.title, sh.closer, sh.v.paneView(), sh.patchMenu, sh.field}
+	return []gunim.Node{sh.title, sh.closer, sh.v.paneView(), sh.field, sh.browse, sh.prev, sh.next,
+		sh.browser, sh.keep, sh.drop}
 }
 
 // Transition implements [gunim.Transitioner]: in with a little spring,
@@ -837,30 +904,89 @@ func (sh *goSheet) Transition(pr gunim.Presence, _ gunim.Frame) bool {
 	return !sh.in.Active()
 }
 
-// Layout implements [gunim.Node].
+// sheetSide is the most the browser takes of a sheet's width, and
+// sheetSideShare the most of its share.
+const (
+	sheetSide      = 300
+	sheetSideShare = 0.42
+)
+
+// side is how wide the browser stands in a sheet as wide as w: while it
+// shows, or comes or goes.
+func (sh *goSheet) side(w float32) float32 {
+	if !sh.browsing && sh.shown.Value() <= 0 {
+		return 0
+	}
+	return min(sheetSide, w*sheetSideShare)
+}
+
+// Layout implements [gunim.Node]: the title and the buttons along the
+// top; under them, the browser at the left while it shows, and the
+// view in the rest.
 func (sh *goSheet) Layout(c gunim.Constraints, _ gunim.Frame, kids gunim.Children) geom.Size {
 	size := c.Max
-	kids.At(1).Layout(gunim.Tight(geom.Sz(32, 32)))
-	kids.At(1).Place(geom.Pt(size.W-40, 4))
-	pw := menuPillWidth("Patches")
-	kids.At(3).Layout(gunim.Tight(geom.Sz(pw, 32)))
-	kids.At(3).Place(geom.Pt(size.W-48-pw, 4))
-	kids.At(0).Layout(gunim.Constraints{Max: geom.Sz(max(size.W-pw-88, 0), 24)})
-	kids.At(0).Place(geom.Pt(16, 10))
-	kids.At(4).Layout(gunim.Tight(geom.Sz(min(260, max(size.W-pw-88, 0)), 30)))
-	kids.At(4).Place(geom.Pt(10, 5))
-	// The view, laid out no smaller than viewLeast, and drawn down to fit
-	// where its room is smaller, the pointer following.
-	room := geom.Sz(max(size.W-32, 0), max(size.H-goPaneBar-12, 0))
-	sh.scale = min(1, room.W/viewLeast.W, room.H/viewLeast.H)
-	sh.scale = max(sh.scale, 0.1)
-	kids.At(2).Layout(gunim.Tight(geom.Sz(room.W/sh.scale, room.H/sh.scale)))
-	kids.At(2).Place(geom.Pt(16/sh.scale, goPaneBar/sh.scale))
+	side := sh.side(size.W)
+	sh.browse.Active = sh.browsing
+	x := size.W - 40
+	for k := range kids.All {
+		switch k.Node() {
+		case sh.closer:
+			k.Layout(gunim.Tight(geom.Sz(32, 32)))
+			k.Place(geom.Pt(x, 4))
+		case sh.next, sh.prev, sh.browse:
+			// Right to left before the close button.
+			at := float32(3)
+			switch k.Node() {
+			case sh.prev:
+				at = 2
+			case sh.next:
+				at = 1
+			}
+			k.Layout(gunim.Tight(geom.Sz(barButton, 32)))
+			k.Place(geom.Pt(x-at*barButton, 4))
+		case sh.title:
+			k.Layout(gunim.Constraints{Max: geom.Sz(max(size.W-3*barButton-72, 0), 24)})
+			k.Place(geom.Pt(16, 10))
+		case sh.field:
+			k.Layout(gunim.Tight(geom.Sz(min(260, max(size.W-3*barButton-72, 0)), 30)))
+			k.Place(geom.Pt(10, 5))
+		case sh.browser:
+			bh := max(size.H-goPaneBar-fieldH-2*sideInset, 0)
+			if side == 0 {
+				bh = 0
+			}
+			k.Layout(gunim.Tight(geom.Sz(max(side-sideInset, 0), bh)))
+			k.Place(geom.Pt(sideInset, goPaneBar))
+		case sh.keep:
+			w := max(side-sideInset-barButton-4, 0)
+			if side == 0 {
+				w = 0
+			}
+			k.Layout(gunim.Tight(geom.Sz(w, fieldH)))
+			k.Place(geom.Pt(sideInset, size.H-sideInset-fieldH))
+		case sh.drop:
+			w := float32(barButton)
+			if side == 0 {
+				w = 0
+			}
+			k.Layout(gunim.Tight(geom.Sz(w, fieldH)))
+			k.Place(geom.Pt(side-barButton, size.H-sideInset-fieldH))
+		default:
+			// The view, laid out no smaller than viewLeast, and drawn
+			// down to fit where its room is smaller, the pointer
+			// following.
+			room := geom.Sz(max(size.W-side-32, 0), max(size.H-goPaneBar-12, 0))
+			sh.scale = min(1, room.W/viewLeast.W, room.H/viewLeast.H)
+			sh.scale = max(sh.scale, 0.1)
+			k.Layout(gunim.Tight(geom.Sz(room.W/sh.scale, room.H/sh.scale)))
+			k.Place(geom.Pt((side+16)/sh.scale, goPaneBar/sh.scale))
+		}
+	}
 	return size
 }
 
 // Paint implements [gunim.Node]: faded and lowered as far as the sheet
-// is out.
+// is out; the browser faded and slid as far as it is in.
 func (sh *goSheet) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids gunim.Children) {
 	in := min(max(sh.in.Value(), 0), 1)
 	if in < 0.005 {
@@ -874,19 +1000,42 @@ func (sh *goSheet) Paint(pt *paint.Painter, f gunim.Frame, box geom.Size, kids g
 	defer end()
 	pt.RRect(r, 10, paint.Solid(pal.raised))
 	pal.outline(pt, r, 10, 1)
-	for i := range kids.Len() {
-		// While renaming, the field in the title's place.
-		if i == 0 && sh.renaming || i == 4 && !sh.renaming {
+	side := sh.side(box.W)
+	for k := range kids.All {
+		switch k.Node() {
+		case sh.title:
+			// While renaming, the field in the title's place.
+			if sh.renaming {
+				continue
+			}
+		case sh.field:
+			if !sh.renaming {
+				continue
+			}
+		case sh.browser, sh.keep, sh.drop:
 			continue
+		case sh.v.paneView():
+			if sh.scale < 1 {
+				// The view, drawn down to its room.
+				pop := pt.Push(paint.Scale(sh.scale, geom.Point{}))
+				k.Paint(pt)
+				pop()
+				continue
+			}
 		}
-		if i == 2 && sh.scale < 1 {
-			// The view, drawn down to its room.
-			pop := pt.Push(paint.Scale(sh.scale, geom.Point{}))
-			kids.At(i).Paint(pt)
-			pop()
-			continue
+		k.Paint(pt)
+	}
+	shown := min(max(sh.shown.Value(), 0), 1)
+	if side <= 0 || shown <= 0 {
+		return
+	}
+	area := geom.Rc(0, goPaneBar-sideInset, side, box.H-goPaneBar+sideInset)
+	defer pt.Layer(paint.LayerOpts{Bounds: area, Opacity: shown, Clip: true})()
+	defer pt.Push(paint.Translate(geom.Pt(-(1-shown)*browseGlide, 0)))()
+	for k := range kids.All {
+		if n := k.Node(); n == sh.browser || n == sh.keep || n == sh.drop {
+			k.Paint(pt)
 		}
-		kids.At(i).Paint(pt)
 	}
 }
 
