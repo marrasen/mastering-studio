@@ -124,7 +124,8 @@ func TestAVST3EditorOpensInAWindowOfTheStudios(t *testing.T) {
 	if !o.Owned || o.Title != "Fake · "+tr.Title || o.AskToClose != (ClosePluginWindow{Slot: s.ID}) {
 		t.Fatalf("the window opens as %+v", o)
 	}
-	if o.Size.W != 400 || o.Size.H != 300+pluginBarH {
+	// The editor, the bar, and the edges the window is sized by.
+	if o.Size.W != 400+2*gunim.ResizeEdge || o.Size.H != 300+pluginBarH+gunim.ResizeEdge {
 		t.Fatalf("the window opens at %v, for an editor of 400×300", o.Size)
 	}
 	// The editor shows under the bar.
@@ -132,7 +133,8 @@ func TestAVST3EditorOpensInAWindowOfTheStudios(t *testing.T) {
 	for range 10 {
 		w.Frame(time.Second / 60)
 	}
-	if want := image.Rect(0, pluginBarH, 400, 300+pluginBarH); !f.embedded || f.placed != want {
+	e := int(gunim.ResizeEdge)
+	if want := image.Rect(e, pluginBarH, 400+e, 300+pluginBarH); !f.embedded || f.placed != want {
 		t.Fatalf("the editor shows %v at %v, want at %v", f.embedded, f.placed, want)
 	}
 	// Shown again, it comes to the front.
@@ -296,7 +298,7 @@ func TestTheBrowserShowingIsKeptForTheNextWindows(t *testing.T) {
 		t.Fatal("the browser showing is not kept")
 	}
 	a.handle(ShowEditor{Track: tr.ID, Slot: s.ID})
-	if o := (*opened)[0]; o.Size.W != 400+browseW || !a.plugWins[s.ID].shown.Browse {
+	if o := (*opened)[0]; o.Size.W != 400+browseW+gunim.ResizeEdge || !a.plugWins[s.ID].shown.Browse {
 		t.Fatalf("browsing, the window opens %v wide, showing %+v", o.Size, a.plugWins[s.ID].shown)
 	}
 }

@@ -119,10 +119,13 @@ func (a *app) openPluginWindow(t *Track, i int, lp *livePlugin) bool {
 	}
 	size := pluginWinSize
 	if w, h, ok := ed.EditorSize(); ok {
-		size = geom.Sz(float32(w), float32(h)+pluginBarH)
+		// The editor, the bar over it, and the edges round it the window
+		// is sized by.
+		size = geom.Sz(float32(w)+2*gunim.ResizeEdge, float32(h)+pluginBarH+gunim.ResizeEdge)
 	}
 	if a.Browse {
-		size.W += browseW
+		// The browser takes the place of the edge at the left.
+		size.W += browseW - gunim.ResizeEdge
 	}
 	state := a.pluginWin(t, s)
 	w, err := a.newWindow(gunim.WindowOptions{Title: state.Title, Size: size, Owned: true, Icons: icons(),

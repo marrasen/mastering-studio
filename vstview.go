@@ -135,8 +135,9 @@ func (h *pluginHost) toggleBrowse(u *gunim.UI) {
 	}
 	if h.browsing {
 		if !h.wide {
+			// The browser takes the place of the edge at the left too.
 			h.wide = true
-			h.reshape(browseW, u)
+			h.reshape(browseW-gunim.ResizeEdge, u)
 		}
 		h.shown.Animate(1, browseIn)
 		h.browser.Refresh(u)
@@ -147,7 +148,7 @@ func (h *pluginHost) toggleBrowse(u *gunim.UI) {
 			h.shrink = nil
 			if h.wide && !h.browsing {
 				h.wide = false
-				h.reshape(-h.sideWidth(), u)
+				h.reshape(gunim.ResizeEdge-h.sideWidth(), u)
 				u.Invalidate()
 			}
 		})
@@ -186,7 +187,8 @@ const (
 
 // Layout implements [gunim.Node]: the bar across the top; under it the
 // browser at the left while the window holds its room, and the editor
-// in the rest.
+// in the rest, gunim.ResizeEdge in from the window's other edges: the
+// editor takes every press over it, and the window is sized by them.
 func (h *pluginHost) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Children) geom.Size {
 	size := c.Max
 	side := float32(0)
@@ -214,7 +216,11 @@ func (h *pluginHost) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Child
 			}
 			k.Place(geom.Pt(sideInset, size.H-sideInset-fieldH))
 		default:
-			box := geom.Sz(max(size.W-side, 0), max(size.H-pluginBarH, 0))
+			left := side
+			if side == 0 {
+				left = gunim.ResizeEdge
+			}
+			box := geom.Sz(max(size.W-left-gunim.ResizeEdge, 0), max(size.H-pluginBarH-gunim.ResizeEdge, 0))
 			if h.hold != (geom.Size{}) {
 				if box == h.hold || f.Now.After(h.holdUntil) {
 					h.hold = geom.Size{}
@@ -224,7 +230,7 @@ func (h *pluginHost) Layout(c gunim.Constraints, f gunim.Frame, kids gunim.Child
 			}
 			h.box = box
 			k.Layout(gunim.Tight(box))
-			k.Place(geom.Pt(side, pluginBarH))
+			k.Place(geom.Pt(left, pluginBarH))
 		}
 	}
 	return size
