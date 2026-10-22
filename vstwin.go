@@ -67,6 +67,9 @@ type PluginWin struct {
 	Kept int
 	// Browse says the browser shows, as the window opens.
 	Browse bool
+	// Fixed says the plugin's editor keeps its own size, which the
+	// window keeps to: the user does not size the window by its edges.
+	Fixed bool
 }
 
 // embedder is a plugin whose editor can show in a window of the
@@ -75,6 +78,22 @@ type PluginWin struct {
 type embedder interface {
 	plugui.Embeddable
 	EditorSize() (w, h int, ok bool)
+}
+
+// sizer is an embedder that says whether a host may size its editor,
+// as a VST3 plugin does.
+type sizer interface {
+	EditorResizable() bool
+}
+
+// editorEdge is how far in from the window's edges, but its top, the
+// editor stands, for the window to be sized by them: none where the
+// window is fixed, as the editor keeps its own size.
+func editorEdge(fixed bool) float32 {
+	if fixed {
+		return 0
+	}
+	return gunim.ResizeEdge
 }
 
 // pluginTopic is what a plugin's window watches.
@@ -88,6 +107,8 @@ type plugWin struct {
 	track int
 	lp    *livePlugin
 	shown PluginWin
+	// fixed says the window keeps to the editor's own size.
+	fixed bool
 }
 
 // picked is the preset a slot's plugin took last, and its state as the
@@ -117,19 +138,25 @@ func (a *app) openPluginWindow(t *Track, i int, lp *livePlugin) bool {
 	if !ok || a.newWindow == nil || a.noEmbed[s.ID] == lp {
 		return false
 	}
+	// An editor that keeps its own size, or takes one by a grip of its
+	// own, as Ozone's does, would not follow the window's edges.
+	sz, ok := ed.(sizer)
+	fixed := ok && !sz.EditorResizable()
+	edge := editorEdge(fixed)
 	size := pluginWinSize
 	if w, h, ok := ed.EditorSize(); ok {
 		// The editor, the bar over it, and the edges round it the window
 		// is sized by.
-		size = geom.Sz(float32(w)+2*gunim.ResizeEdge, float32(h)+pluginBarH+gunim.ResizeEdge)
+		size = geom.Sz(float32(w)+2*edge, float32(h)+pluginBarH+edge)
 	}
 	if a.Browse {
 		// The browser takes the place of the edge at the left.
-		size.W += browseW - gunim.ResizeEdge
+		size.W += browseW - edge
 	}
 	state := a.pluginWin(t, s)
+	state.Fixed = fixed
 	w, err := a.newWindow(gunim.WindowOptions{Title: state.Title, Size: size, Owned: true, Icons: icons(),
-		AskToClose: ClosePluginWindow{Slot: s.ID}, Theme: a.themed(themeNamed(a.theme))})
+		AskToClose: ClosePluginWindow{Slot: s.ID}, Theme: a.themed(themeNamed(a.theme)), Fixed: fixed})
 	if err != nil {
 		log.Printf("mastering: a window for %s: %v", s.title(), err)
 		return false
@@ -149,7 +176,7 @@ func (a *app) openPluginWindow(t *Track, i int, lp *livePlugin) bool {
 	if a.plugWins == nil {
 		a.plugWins = map[int]*plugWin{}
 	}
-	a.plugWins[s.ID] = &plugWin{w: w, c: c, track: t.ID, lp: lp, shown: state}
+	a.plugWins[s.ID] = &plugWin{w: w, c: c, track: t.ID, lp: lp, shown: state, fixed: fixed}
 	go func() {
 		for env := range c.Intents() {
 			select {
@@ -208,7 +235,9 @@ func (a *app) syncPluginWindows() {
 			a.openPluginWindow(t, i, lp)
 			continue
 		}
-		if s := a.pluginWin(t, t.Chain[i]); s != w.shown {
+		s := a.pluginWin(t, t.Chain[i])
+		s.Fixed = w.fixed
+		if s != w.shown {
 			w.shown = s
 			_ = w.c.Publish(pluginTopic, s)
 		}

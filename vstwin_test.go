@@ -14,6 +14,7 @@ import (
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
 	"github.com/marrasen/gunim/audio/vst3"
+	"github.com/marrasen/gunim/geom"
 )
 
 // fakeVST is a VST3 plugin as the chain runs it, with an editor a
@@ -23,8 +24,10 @@ type fakeVST struct {
 	edits  uint64
 	opened int
 	closed bool
-	// embedErr is why its editor will not show in a window of the
-	// studio's; embedded and placed say where it shows there.
+	// fixed says a host may not size its editor. embedErr is why its
+	// editor will not show in a window of the studio's; embedded and
+	// placed say where it shows there.
+	fixed    bool
 	embedErr error
 	embedded bool
 	placed   image.Rectangle
@@ -45,6 +48,7 @@ func (f *fakeVST) Close()                                   { f.closed = true }
 func (f *fakeVST) PlaceEditor(r image.Rectangle) (w, h int) { f.placed = r; return 400, 300 }
 func (f *fakeVST) CloseEditor()                             { f.embedded = false }
 func (f *fakeVST) EditorSize() (w, h int, ok bool)          { return 400, 300, true }
+func (f *fakeVST) EditorResizable() bool                    { return !f.fixed }
 func (f *fakeVST) EmbedEditor(uintptr, func(w, h int)) (w, h int, err error) {
 	if f.embedErr != nil {
 		return 0, 0, f.embedErr
@@ -121,7 +125,7 @@ func TestAVST3EditorOpensInAWindowOfTheStudios(t *testing.T) {
 		t.Fatalf("shown, the editor opened %d windows of the studio's and %d of its own", len(*opened), f.opened)
 	}
 	o := (*opened)[0]
-	if !o.Owned || o.Title != "Fake · "+tr.Title || o.AskToClose != (ClosePluginWindow{Slot: s.ID}) {
+	if !o.Owned || o.Fixed || o.Title != "Fake · "+tr.Title || o.AskToClose != (ClosePluginWindow{Slot: s.ID}) {
 		t.Fatalf("the window opens as %+v", o)
 	}
 	// The editor, the bar, and the edges the window is sized by.
@@ -145,6 +149,31 @@ func TestAVST3EditorOpensInAWindowOfTheStudios(t *testing.T) {
 	a.handlePluginWindow(ClosePluginWindow{Slot: s.ID})
 	if len(a.plugWins) != 0 {
 		t.Fatal("asked to close, the window stays")
+	}
+}
+
+func TestAnEditorThatKeepsItsOwnSizeOpensInAFixedWindow(t *testing.T) {
+	a, tr, s, f, opened := vstApp(t)
+	f.fixed = true
+	a.handle(ShowEditor{Track: tr.ID, Slot: s.ID})
+	if o := (*opened)[0]; !o.Fixed || o.Size != geom.Sz(400, 300+pluginBarH) {
+		t.Fatalf("an editor a host may not size opens a window fixed %v, at %v", o.Fixed, o.Size)
+	}
+	// With no edges to size the window by, the editor fills it under
+	// the bar.
+	w := a.plugWins[s.ID].w
+	for range 10 {
+		w.Frame(time.Second / 60)
+	}
+	if want := image.Rect(0, pluginBarH, 400, 300+pluginBarH); f.placed != want {
+		t.Fatalf("the editor shows at %v, want at %v", f.placed, want)
+	}
+	if !a.plugWins[s.ID].shown.Fixed {
+		t.Fatal("the window is not told it is fixed")
+	}
+	a.syncPluginWindows()
+	if !a.plugWins[s.ID].shown.Fixed {
+		t.Fatal("followed, the window forgets it is fixed")
 	}
 }
 
