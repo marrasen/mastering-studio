@@ -70,6 +70,9 @@ func (a *app) loadPresets() {
 	}
 	var k keptPresets
 	if json.Unmarshal(b, &k) == nil {
+		for i := range k.Presets {
+			k.Presets[i].Chain = withoutGone(k.Presets[i].Chain)
+		}
 		a.presets = k.Presets
 		a.presetNames()
 	}

@@ -73,7 +73,7 @@ func (a *app) loadPatches() {
 	}
 	var k keptPatches
 	if json.Unmarshal(b, &k) == nil {
-		a.patches = k.Patches
+		a.patches = slices.DeleteFunc(k.Patches, func(p keptPatch) bool { return goneGo(goPath, p.Class) })
 		a.patchNames()
 	}
 }

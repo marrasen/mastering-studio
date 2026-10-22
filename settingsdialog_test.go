@@ -44,11 +44,11 @@ func TestTheSoundAndThemeAreKeptInTheSettings(t *testing.T) {
 
 func TestTheSoundsOptionsFollowTheSettings(t *testing.T) {
 	o := Output{Rate: 44100, Bits: 24, Dither: true}.options()
-	if o.Rate != 44100 || o.Bits != 24 || !o.Dither || o.Fixed || o.Latency != autoLatency {
+	if o.Rate != 44100 || o.Bits != 24 || !o.Dither || o.Fixed || o.Latency != autoLatency || o.Buffer != 0 {
 		t.Errorf("auto: %+v", o)
 	}
 	o = Output{Rate: 48000, Fixed: true, Buffer: 4800}.options()
-	if !o.Fixed || o.Latency != 100*time.Millisecond {
+	if !o.Fixed || o.Latency != 100*time.Millisecond || o.Buffer != 4800 {
 		t.Errorf("4800 samples at 48 kHz: %+v", o)
 	}
 }

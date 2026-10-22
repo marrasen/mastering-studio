@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/marrasen/gunim/audio/plug"
+	"github.com/marrasen/gunim/audio/plug/braid"
 	"github.com/marrasen/gunim/audio/plug/maximizer"
-	"github.com/marrasen/gunim/audio/plug/trim"
 )
 
 // A plugin of the tests' own that tells of a block processed after it
@@ -87,7 +87,7 @@ func TestTheChainChangesAsItPlaysAndLetsNoPluginGoAtWork(t *testing.T) {
 		slot++
 		class := "test.watcher"
 		if i%3 == 0 {
-			class = trim.Descriptor.ID
+			class = braid.Descriptor.ID
 		}
 		lp, err := newPlugin(Slot{ID: slot, Path: goPath, Class: class, Name: class}, nil, 48000, false)
 		if err != nil {
@@ -104,8 +104,8 @@ func TestTheChainChangesAsItPlaysAndLetsNoPluginGoAtWork(t *testing.T) {
 		if ps := r.list(); len(ps) > 3 {
 			r.order([]Slot{{ID: ps[2].slot}, {ID: ps[0].slot}, {ID: ps[1].slot}})
 			r.remove(ps[1].slot)
-			if e, ok := ps[0].p.(*goEngine); ok && e.d.ID == trim.Descriptor.ID {
-				_ = e.SetState(goSettings{Params: map[uint32]float64{trim.GainID: -6}}.pack())
+			if e, ok := ps[0].p.(*goEngine); ok && e.d.ID == braid.Descriptor.ID {
+				_ = e.SetState(goSettings{Params: map[uint32]float64{braid.GainID: -6}}.pack())
 			}
 		}
 	}
@@ -120,7 +120,7 @@ func TestTheChainMakesNothingAsItPlays(t *testing.T) {
 	r := newRackOf(nil)
 	defer r.close()
 	for i := range 4 {
-		lp, err := newPlugin(trimSlot(i+1), nil, 48000, false)
+		lp, err := newPlugin(braidSlot(i+1), nil, 48000, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,7 +186,7 @@ func (s *sineSource) Read(dst []float32) (int, error) {
 }
 
 func TestBypassFadesAPluginWithoutItsOwnAndKeepsItsLatency(t *testing.T) {
-	up, err := newPlugin(trimSlot(1), goSettings{Params: map[uint32]float64{trim.GainID: 6}}.pack(), 48000, false)
+	up, err := newPlugin(braidSlot(1), goSettings{Params: map[uint32]float64{braid.GainID: 6}}.pack(), 48000, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestBypassFadesAPluginWithoutItsOwnAndKeepsItsLatency(t *testing.T) {
 	}
 	// The quiet sine, which the maximizer leaves as it is, through a
 	// stage, as the track plays; and how far it moves at most from a
-	// frame to the next, made louder by the trim.
+	// frame to the next, made louder by the braid.
 	st := newStage(&sineSource{}, r, 0)
 	most := float32(2 * sineA * 2 * math.Pi * sineHz / 48000)
 	out := make([]float32, 0, 60*512)
@@ -254,15 +254,15 @@ func TestBypassFadesAPluginWithoutItsOwnAndKeepsItsLatency(t *testing.T) {
 }
 
 func TestASwapFadesFromOneChainToTheOtherAndLetsTheOldGo(t *testing.T) {
-	trimAt := func(id int, db float64) *livePlugin {
+	braidAt := func(id int, db float64) *livePlugin {
 		t.Helper()
-		lp, err := newPlugin(trimSlot(id), goSettings{Params: map[uint32]float64{trim.GainID: db}}.pack(), 48000, false)
+		lp, err := newPlugin(braidSlot(id), goSettings{Params: map[uint32]float64{braid.GainID: db}}.pack(), 48000, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return lp
 	}
-	up := trimAt(101, 6)
+	up := braidAt(101, 6)
 	r := newRackOf([]*livePlugin{up})
 	defer r.close()
 	st := newStage(&sineSource{}, r, 0)
@@ -271,7 +271,7 @@ func TestASwapFadesFromOneChainToTheOtherAndLetsTheOldGo(t *testing.T) {
 	dst := make([]float32, 2*512)
 	for b := range 40 {
 		if b == 10 {
-			r.swap([]*livePlugin{trimAt(102, -6)}, 48000)
+			r.swap([]*livePlugin{braidAt(102, -6)}, 48000)
 		}
 		if b == 30 {
 			r.retire()
@@ -303,14 +303,14 @@ func TestASwapFadesFromOneChainToTheOtherAndLetsTheOldGo(t *testing.T) {
 }
 
 func TestASwapWhereTheSoundDoesNotPlayLetsTheOldGoAtOnce(t *testing.T) {
-	lp, err := newPlugin(trimSlot(111), nil, 48000, false)
+	lp, err := newPlugin(braidSlot(111), nil, 48000, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := newRackOf([]*livePlugin{lp})
 	defer r.close()
 	r.setActive(false)
-	in, err := newPlugin(trimSlot(112), nil, 48000, false)
+	in, err := newPlugin(braidSlot(112), nil, 48000, false)
 	if err != nil {
 		t.Fatal(err)
 	}

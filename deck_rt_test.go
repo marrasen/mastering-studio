@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/marrasen/gunim/audio"
-	"github.com/marrasen/gunim/audio/plug/trim"
+	"github.com/marrasen/gunim/audio/plug/braid"
 )
 
 // playingDeck plays a 20-second track at 44.1 kHz through a chain of
-// trims, mixed at rate.
+// braids, mixed at rate.
 func playingDeck(t *testing.T, rate int) (*deck, *audio.Mixer, string) {
 	t.Helper()
 	path := writeTrack(t, 0, 20*time.Second, 0, 0.3)
@@ -21,7 +21,7 @@ func playingDeck(t *testing.T, rate int) (*deck, *audio.Mixer, string) {
 	d := newDeck(mix)
 	r := newRackOf(nil)
 	for i := range 3 {
-		lp, err := newPlugin(trimSlot(i+1), nil, 44100, false)
+		lp, err := newPlugin(braidSlot(i+1), nil, 44100, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -154,17 +154,17 @@ func TestPlayingChangesAsTheApplicationWorksMeanwhile(t *testing.T) {
 
 func TestAPluginsViewsHearItsSoundInAndOut(t *testing.T) {
 	d, mix, _ := playingDeck(t, 44100)
-	// The second trim, at -6 dB, played through.
+	// The second braid, at -6 dB, played through.
 	v, ok := livePlugins.Load(2)
 	lp, isLive := v.(*livePlugin)
 	if !ok || !isLive {
-		t.Fatal("the trim playing is not among the plugins live")
+		t.Fatal("the braid playing is not among the plugins live")
 	}
 	e, ok := lp.p.(*goEngine)
 	if !ok {
-		t.Fatal("the trim is no Go plugin")
+		t.Fatal("the braid is no Go plugin")
 	}
-	e.setParam(trim.GainID, -6)
+	e.setParam(braid.GainID, -6)
 	in := heardSound{slot: 2, d: d}
 	out := heardSound{slot: 2, d: d, out: true}
 	dst := make([]float32, 2*2048)
@@ -188,7 +188,7 @@ func TestAPluginsViewsHearItsSoundInAndOut(t *testing.T) {
 	}
 	ri, ro := rms(in), rms(out)
 	if ri == 0 || math.Abs(ro/ri-math.Pow(10, -6.0/20)) > 0.01 {
-		t.Fatalf("the trim at -6 dB is heard at %.4f in and %.4f out", ri, ro)
+		t.Fatalf("the braid at -6 dB is heard at %.4f in and %.4f out", ri, ro)
 	}
 	// Nothing heard of a slot that plays nowhere.
 	if n, _, _ := (heardSound{slot: 99, d: d}).Heard(dst); n != 0 {

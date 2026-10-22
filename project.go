@@ -104,6 +104,12 @@ func (s settings) spectrum() SpectrumView {
 	return *s.Spectrum
 }
 
+// plugins are the plugins added last, without the Go plugins this
+// studio no longer has.
+func (s settings) plugins() []PluginChoice {
+	return slices.DeleteFunc(s.Plugins, func(c PluginChoice) bool { return goneGo(c.Path, c.Class) })
+}
+
 func readSettings(path string) settings {
 	s := settings{Output: firstOutput}
 	if b, err := os.ReadFile(path); err == nil {

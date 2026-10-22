@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/marrasen/gunim/audio/plug/trim"
+	"github.com/marrasen/gunim/audio/plug/braid"
 
 	"github.com/marrasen/gunim/audio"
 )
@@ -148,7 +148,7 @@ func TestBothChainsAreKeptWithTheAlbum(t *testing.T) {
 	a := savedApp(t)
 	id := a.Tracks[0].ID
 	a.handle(SwitchChain{Track: id, B: true})
-	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.braid", Name: "Braid"}})
 	if err := a.saveNow(); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestBothChainsAreKeptWithTheAlbum(t *testing.T) {
 func TestSwitchingChainsWhilePlayingKeepsTheChainLoaded(t *testing.T) {
 	a := savedApp(t)
 	id := a.Tracks[0].ID
-	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.braid", Name: "Braid"}})
 	r := a.rackOf(&a.Tracks[0])
 	a.handle(SwitchChain{Track: id, B: true})
 	if a.racks[id] != r || len(r.list()) != 0 {
@@ -179,39 +179,39 @@ func TestSwitchingChainsWhilePlayingKeepsTheChainLoaded(t *testing.T) {
 func TestSwitchingChainsKeepsEachSidesLiveSettings(t *testing.T) {
 	a := savedApp(t)
 	id := a.Tracks[0].ID
-	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.braid", Name: "Braid"}})
 	a.handle(TogglePlay{})
 	r := a.rackOf(&a.Tracks[0])
-	// gain is the trim's gain as the chain plays it, as the app keeps
+	// gain is the braid's gain as the chain plays it, as the app keeps
 	// it, and as the views are shown it.
 	gain := func() (live, kept, shown float64) {
 		t.Helper()
 		s := a.Tracks[0].Chain[0]
 		lp := r.find(s.ID)
 		if lp == nil {
-			t.Fatal("the trim is not in the chain playing")
+			t.Fatal("the braid is not in the chain playing")
 		}
 		e, ok := lp.p.(*goEngine)
 		if !ok {
-			t.Fatal("the trim is not a Go plugin")
+			t.Fatal("the braid is not a Go plugin")
 		}
 		set, err := readGoSettings(a.states[s.ID])
 		if err != nil {
 			t.Fatal(err)
 		}
 		a.showGoSettings()
-		return e.param(trim.GainID).value(), set.Params[trim.GainID], a.Tracks[0].Chain[0].Values[trim.GainID]
+		return e.param(braid.GainID).value(), set.Params[braid.GainID], a.Tracks[0].Chain[0].Values[braid.GainID]
 	}
 	setGain := func(db float64) {
-		a.handle(SetGoParam{Track: id, Slot: a.Tracks[0].Chain[0].ID, ID: trim.GainID, Value: db, Gesture: 1})
+		a.handle(SetGoParam{Track: id, Slot: a.Tracks[0].Chain[0].ID, ID: braid.GainID, Value: db, Gesture: 1})
 	}
 	setGain(-4)
-	// B, empty: a trim of its own, set apart.
+	// B, empty: a braid of its own, set apart.
 	a.handle(SwitchChain{Track: id, B: true})
 	if len(a.Tracks[0].Chain) != 0 {
 		t.Fatalf("B has %d plugins, want none of A's", len(a.Tracks[0].Chain))
 	}
-	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.trim", Name: "Trim"}})
+	a.handle(AddPlugin{Track: id, Choice: PluginChoice{Path: goPath, Class: "marrasen.braid", Name: "Braid"}})
 	setGain(-8)
 	a.handle(SwitchChain{Track: id, B: false})
 	if live, kept, shown := gain(); live != -4 || kept != -4 || shown != -4 {

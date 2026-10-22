@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"slices"
 	"sync/atomic"
 
 	"github.com/marrasen/gunim"
 	"github.com/marrasen/gunim/audio/plug"
 
 	// The Go plugins built in.
+	_ "github.com/marrasen/gunim/audio/plug/braid"
 	_ "github.com/marrasen/gunim/audio/plug/dynamics"
 	_ "github.com/marrasen/gunim/audio/plug/enhancer"
 	_ "github.com/marrasen/gunim/audio/plug/eq"
@@ -20,7 +22,6 @@ import (
 	_ "github.com/marrasen/gunim/audio/plug/impact"
 	_ "github.com/marrasen/gunim/audio/plug/maximizer"
 	_ "github.com/marrasen/gunim/audio/plug/stabilizer"
-	_ "github.com/marrasen/gunim/audio/plug/trim"
 )
 
 // The chain's half of the Go plugins, in package plug: built into the
@@ -133,6 +134,23 @@ func (e *goEngine) param(id uint32) *goParam {
 		}
 	}
 	return nil
+}
+
+// goneGo says a plugin of path and class is a Go plugin this studio no
+// longer has, such as Trim, which Braid replaced. Such plugins are
+// dropped where chains, patches and the plugins added last are read.
+func goneGo(path, class string) bool {
+	if path != goPath {
+		return false
+	}
+	_, ok := plug.Lookup(class)
+	return !ok
+}
+
+// withoutGone returns kept without the Go plugins this studio no longer
+// has.
+func withoutGone(kept []keptSlot) []keptSlot {
+	return slices.DeleteFunc(kept, func(s keptSlot) bool { return goneGo(s.Path, s.Class) })
 }
 
 // newGoPlugin loads slot s's Go plugin at rate, of state, offline or
