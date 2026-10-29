@@ -130,6 +130,11 @@ draft for next time, or discard them. Undo (Ctrl+Z) and redo
 (Ctrl+Shift+Z) work across the whole project, and an undo shows the
 track it changed.
 
+**Crashes.** If the studio crashes, what it said as it died is kept in
+`crash.log` beside the settings. The next time it starts it shows that
+in a dialog: Copy copies it, and Report on GitHub opens a new issue
+here with the version, the system and the trace filled in.
+
 Press F1 or ? in the studio for every key.
 
 ## Building from source

@@ -111,8 +111,9 @@ func TestTheSheetsBrowserListsLoadsKeepsAndDeletesThePatches(t *testing.T) {
 	if !sh.browsing || boundsOfSize(t, w, run, sh.browser).W < 100 {
 		t.Fatal("asked to, the browser does not show")
 	}
-	var names []string
-	for _, p := range sh.src.Presets() {
+	presets := sh.src.Presets()
+	names := make([]string, 0, len(presets))
+	for _, p := range presets {
 		names = append(names, p.Bank+"/"+p.Group+"/"+p.Name)
 	}
 	if len(names) != 1+len(eq.Descriptor.Patches) || names[0] != "User/EQ/Mine" || names[1] != "Factory/EQ/Flat" {

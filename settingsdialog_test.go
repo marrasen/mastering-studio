@@ -68,8 +68,9 @@ func TestTheSoundsOptionsFollowTheSettings(t *testing.T) {
 
 // labels returns the names of a drop-down's items.
 func labels(d *widget.Dropdown) []string {
-	var out []string
-	for _, it := range d.Items() {
+	items := d.Items()
+	out := make([]string, 0, len(items))
+	for _, it := range items {
 		out = append(out, it.Label)
 	}
 	return out
