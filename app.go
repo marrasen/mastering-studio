@@ -531,6 +531,10 @@ type app struct {
 	// reveal shows a file in the file manager.
 	replacing chan ReplaceFile
 	reveal    func(path string) error
+	// openLink opens a web page in the browser, and crashLink is the
+	// link to report the crash shown, or "".
+	openLink  func(url string) error
+	crashLink string
 	// queued is what the deck has waiting to play next, in album play.
 	queued queuedKey
 	// output is how the studio plays its sound, and theme the theme it
@@ -926,6 +930,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	a.pluginDirs = o.plugins
 	a.choose = func(o driver.ChooseOptions) ([]string, error) { return c.ChooseFiles(ctx, o) }
 	a.reveal = c.Reveal
+	a.openLink = c.OpenLink
 	a.c = &c
 	a.saveDialog = func(o driver.SaveOptions) (string, error) { return c.SaveFile(ctx, o) }
 	a.settingsFile = o.settings
@@ -984,6 +989,7 @@ func serve(ctx context.Context, c gunim.Client, d *deck, o options) error {
 	defer watch.Stop()
 	_ = c.Focus("album")
 	_ = c.SetTheme(a.theme)
+	a.sayCrashed()
 	if o.play {
 		a.play(0, 10*time.Millisecond)
 	}
@@ -1461,6 +1467,10 @@ func (a *app) handle(in gunim.Intent) {
 		a.showHelp(true)
 	case HelpClosed:
 		a.showHelp(false)
+	case ReportCrash:
+		a.reportCrash()
+	case CrashClosed:
+		a.crashClosed()
 	case EditRelease:
 		a.editRelease(true)
 	case ReleaseClosed:

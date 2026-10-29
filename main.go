@@ -84,6 +84,11 @@ func main() {
 		return
 	}
 	moveSettings()
+	// After the settings have moved, which the log's folder would stop.
+	// A shot leaves the last crash for the next window to show.
+	if *shot == "" {
+		keepCrashes()
+	}
 	w, h := float32(1680), float32(1040)
 	if *size != "" {
 		if _, err := fmt.Sscanf(*size, "%gx%g", &w, &h); err != nil || w <= 0 || h <= 0 {
